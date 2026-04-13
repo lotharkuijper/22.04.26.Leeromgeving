@@ -113,7 +113,10 @@ export function RAGDocumentStatusPanel() {
 
   const handleRetryAll = async () => {
     const failedDocs = documents.filter(
-      (d) => d.processing_status === 'failed' || d.processing_status === 'processing'
+      (d) =>
+        d.processing_status === 'failed' ||
+        d.processing_status === 'processing' ||
+        (d.processing_status === 'completed' && d.chunkCount === 0)
     );
     if (failedDocs.length === 0) return;
 
