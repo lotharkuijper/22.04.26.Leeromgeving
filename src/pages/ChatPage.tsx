@@ -22,7 +22,7 @@ interface Conversation {
 
 export function ChatPage() {
   const { profile, signOut } = useAuth();
-  const { activeCourseRagFolderIds } = useActiveCourse();
+  const { activeCourseId: activeCourse } = useActiveCourse();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -182,7 +182,7 @@ try {
     5,
     'general',
     profile?.role || 'student',
-    activeCourseRagFolderIds.length > 0 ? activeCourseRagFolderIds : undefined
+    activeCourse
   );
 
   if (chunks.length === 0) {

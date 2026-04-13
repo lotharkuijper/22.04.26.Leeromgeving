@@ -12,7 +12,7 @@ type Concept = Database['public']['Tables']['concepts']['Row'];
 
 export function ExplainPage() {
   const { profile, signOut } = useAuth();
-  const { activeCourseRagFolderIds } = useActiveCourse();
+  const { activeCourseId: activeCourse } = useActiveCourse();
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [filteredConcepts, setFilteredConcepts] = useState<Concept[]>([]);
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null);
@@ -99,7 +99,7 @@ export function ExplainPage() {
         5,
         'explain',
         profile?.role || 'student',
-        activeCourseRagFolderIds.length > 0 ? activeCourseRagFolderIds : undefined
+        activeCourse
       );
 
       const sources = chunks.map(chunk => ({

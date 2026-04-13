@@ -28,7 +28,7 @@ interface QuizAttempt {
 
 export function QuizPage() {
   const { profile } = useAuth();
-  const { activeCourseRagFolderIds } = useActiveCourse();
+  const { activeCourseId: activeCourse } = useActiveCourse();
   const [state, setState] = useState<QuizState>('setup');
   const [topic, setTopic] = useState('');
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
@@ -68,7 +68,7 @@ export function QuizPage() {
     setLoading(true);
     try {
       let ragContext: string | undefined;
-      if (activeCourseRagFolderIds.length > 0) {
+      if (activeCourse !== null) {
         try {
           const chunks = await searchRelevantChunks(
             topic,
@@ -76,7 +76,7 @@ export function QuizPage() {
             5,
             'quiz',
             profile?.role || 'student',
-            activeCourseRagFolderIds
+            activeCourse
           );
           if (chunks.length > 0) {
             ragContext = formatContextFromChunks(chunks);

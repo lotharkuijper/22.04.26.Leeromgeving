@@ -52,7 +52,7 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
           .single(),
         supabase
           .from("course_folder_assignments")
-          .select("folder_id, document_folders(id, folder_type)")
+          .select("folder_id")
           .eq("course_id", courseId),
       ]);
 
@@ -64,11 +64,16 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      if (foldersRes.data) {
-        const ragFolderIds = foldersRes.data
-          .filter((a: any) => a.document_folders?.folder_type === "rag_sources")
-          .map((a: any) => a.folder_id);
-        setActiveCourseRagFolderIds(ragFolderIds);
+      if (foldersRes.data && foldersRes.data.length > 0) {
+        const folderIds = foldersRes.data.map((a) => a.folder_id);
+        const { data: ragFolders } = await supabase
+          .from("document_folders")
+          .select("id")
+          .in("id", folderIds)
+          .eq("folder_type", "rag_sources");
+        setActiveCourseRagFolderIds(ragFolders?.map((f) => f.id) ?? []);
+      } else {
+        setActiveCourseRagFolderIds([]);
       }
     } catch (err) {
       console.error("[ACTIVE COURSE] Failed to load course data:", err);
