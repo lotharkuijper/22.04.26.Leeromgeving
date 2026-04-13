@@ -16,7 +16,7 @@ import {
   Award
 } from 'lucide-react';
 
-type QuizState = 'setup' | 'active' | 'completed';
+type QuizState = 'setup' | 'ready' | 'active' | 'completed';
 
 interface QuizAttempt {
   id: string;
@@ -95,7 +95,7 @@ export function QuizPage() {
       setQuestions(generatedQuestions);
       setSelectedAnswers(new Array(generatedQuestions.length).fill(-1));
       setCurrentQuestion(0);
-      setState('active');
+      setState('ready');
       setShowExplanation(false);
     } catch (error) {
       console.error('Error generating quiz:', error);
@@ -287,6 +287,38 @@ export function QuizPage() {
               )}
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'ready') {
+    const difficultyLabel = difficulty === 'easy' ? 'Makkelijk' : difficulty === 'medium' ? 'Gemiddeld' : 'Moeilijk';
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <div className="bg-white rounded-2xl border border-gray-200 p-8 space-y-6 text-center">
+          <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center">
+            <Play className="w-8 h-8 text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">Quiz klaar!</h1>
+            <p className="text-gray-600">
+              {questions.length} vragen over <strong>{topic}</strong> — {difficultyLabel} niveau
+            </p>
+          </div>
+          {ragSources.length > 0 && (
+            <div className="text-left bg-purple-50 border border-purple-200 rounded-xl p-4">
+              <SourceList sources={ragSources} label="Gebaseerd op cursusmateriaal" />
+            </div>
+          )}
+          <button
+            onClick={() => setState('active')}
+            data-testid="button-start-quiz"
+            className="inline-flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg"
+          >
+            <Play className="w-5 h-5" />
+            Quiz starten
+          </button>
         </div>
       </div>
     );

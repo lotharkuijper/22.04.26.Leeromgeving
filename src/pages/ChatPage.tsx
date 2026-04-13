@@ -4,7 +4,8 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { sendChatMessage, type Message } from '../services/llm.service';
 import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
-import { Send, MessageSquare, Plus, FileText, AlertCircle, RefreshCw, LogOut } from 'lucide-react';
+import { SourceList } from '../components/SourceList';
+import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
 
@@ -358,18 +359,10 @@ try {
                   >
                     <p className="whitespace-pre-wrap">{msg.content}</p>
                     {msg.retrievedContext?.chunks && msg.retrievedContext.chunks.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-gray-300">
-                        <p className="text-xs text-gray-600 font-semibold mb-2">Bronnen:</p>
-                        <div className="space-y-1">
-                          {msg.retrievedContext.chunks.map((chunk: any, index: number) => (
-                            <div key={index} className="text-xs text-gray-700 flex items-start gap-1">
-                              <span className="font-medium">[{index + 1}]</span>
-                              <span className="italic">{chunk.documentTitle}</span>
-                              <span className="text-gray-500">({(chunk.similarity * 100).toFixed(0)}%)</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      <SourceList
+                        sources={msg.retrievedContext.chunks.map((c: any) => ({ title: c.documentTitle, similarity: c.similarity }))}
+                        label="Bronnen uit cursusmateriaal"
+                      />
                     )}
                   </div>
                 </div>
