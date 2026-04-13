@@ -192,7 +192,7 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
     }
 
     const { data: fileData, error: downloadError } = await supabase.storage
-      .from('documents')
+      .from(doc.bucket || 'rag_sources')
       .download(doc.file_path);
 
     if (downloadError || !fileData) {

@@ -1,25 +1,34 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 
-interface RAGStatus {
+export interface RAGStatus {
   isAvailable: boolean;
   documentCount: number;
   chunkCount: number;
   loading: boolean;
+  noCourse: boolean;
+  noRagFolders: boolean;
 }
 
 const DEBOUNCE_MS = 1500;
 
-export function useRAGStatus() {
+export function useRAGStatus(): RAGStatus {
+  const { activeCourseId, activeCourseRagFolderIds, loading: courseLoading } = useActiveCourse();
+
   const [status, setStatus] = useState<RAGStatus>({
     isAvailable: false,
     documentCount: 0,
     chunkCount: 0,
     loading: true,
+    noCourse: false,
+    noRagFolders: false,
   });
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (courseLoading) return;
+
     let mounted = true;
 
     const checkStatusIfMounted = async () => {
@@ -55,31 +64,38 @@ export function useRAGStatus() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [activeCourseId, activeCourseRagFolderIds.join(','), courseLoading]);
 
   async function checkRAGStatus() {
+    if (!activeCourseId) {
+      setStatus({
+        isAvailable: false,
+        documentCount: 0,
+        chunkCount: 0,
+        loading: false,
+        noCourse: true,
+        noRagFolders: false,
+      });
+      return;
+    }
+
+    if (activeCourseRagFolderIds.length === 0) {
+      setStatus({
+        isAvailable: false,
+        documentCount: 0,
+        chunkCount: 0,
+        loading: false,
+        noCourse: false,
+        noRagFolders: true,
+      });
+      return;
+    }
+
     try {
-      const { data: ragFolder } = await supabase
-        .from('document_folders')
-        .select('id')
-        .eq('name', 'RAG')
-        .is('parent_folder_id', null)
-        .maybeSingle();
-
-      if (!ragFolder) {
-        setStatus({
-          isAvailable: false,
-          documentCount: 0,
-          chunkCount: 0,
-          loading: false,
-        });
-        return;
-      }
-
       const { data: documents, error: docsError } = await supabase
         .from('documents')
         .select('id')
-        .eq('folder_id', ragFolder.id)
+        .in('folder_id', activeCourseRagFolderIds)
         .eq('processing_status', 'completed');
 
       if (docsError || !documents || documents.length === 0) {
@@ -88,11 +104,13 @@ export function useRAGStatus() {
           documentCount: 0,
           chunkCount: 0,
           loading: false,
+          noCourse: false,
+          noRagFolders: false,
         });
         return;
       }
 
-      const documentIds = documents.map(d => d.id);
+      const documentIds = documents.map((d) => d.id);
 
       const { count: chunkCount, error: chunksError } = await supabase
         .from('document_chunks')
@@ -100,7 +118,7 @@ export function useRAGStatus() {
         .in('document_id', documentIds);
 
       if (chunksError) {
-        console.error('Error counting chunks:', chunksError);
+        console.error('[RAG STATUS] Error counting chunks:', chunksError);
       }
 
       setStatus({
@@ -108,14 +126,18 @@ export function useRAGStatus() {
         documentCount: documents.length,
         chunkCount: chunkCount || 0,
         loading: false,
+        noCourse: false,
+        noRagFolders: false,
       });
     } catch (error) {
-      console.error('Error checking RAG status:', error);
+      console.error('[RAG STATUS] Error checking RAG status:', error);
       setStatus({
         isAvailable: false,
         documentCount: 0,
         chunkCount: 0,
         loading: false,
+        noCourse: false,
+        noRagFolders: false,
       });
     }
   }

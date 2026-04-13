@@ -97,14 +97,20 @@ app.post('/api/embeddings', async (req, res) => {
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        return res.status(response.status).json(errData);
+        console.error('[/api/embeddings] OpenAI error response:', response.status, JSON.stringify(errData));
+        return res.status(response.status).json({ error: errData.error?.message || errData.error || `OpenAI error ${response.status}` });
       }
 
       const data = await response.json();
+      if (!data.data || !Array.isArray(data.data)) {
+        console.error('[/api/embeddings] Unexpected OpenAI response shape:', JSON.stringify(data));
+        return res.status(500).json({ error: 'Unexpected response from OpenAI embeddings API' });
+      }
       const embeddings = data.data.map((item) => item.embedding);
+      console.log(`[/api/embeddings] Generated ${embeddings.length} embeddings via OpenAI (dim=${embeddings[0]?.length})`);
       return res.json({ embeddings, provider: 'openai' });
     } catch (err) {
-      console.error('[/api/embeddings] OpenAI error:', err);
+      console.error('[/api/embeddings] OpenAI request failed:', err.message);
       return res.status(500).json({ error: err.message });
     }
   }

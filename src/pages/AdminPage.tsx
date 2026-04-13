@@ -10,6 +10,7 @@ import { retryFailedDocument, UploadProgress } from '../services/document-upload
 import { ConceptReviewPanel } from '../components/ConceptReviewPanel';
 import { QuizValidationPanel } from '../components/QuizValidationPanel';
 import { DocumentRetryPanel } from '../components/DocumentRetryPanel';
+import { RAGDocumentStatusPanel } from '../components/RAGDocumentStatusPanel';
 import { ShareStatsImportPanel } from '../components/ShareStatsImportPanel';
 
 import FileManager from '../pages/FileManager';
@@ -27,7 +28,7 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'documents' | 'concepts' | 'concept_review' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'settings';
+type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'concept_review' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'settings';
 
 export function AdminPage() {
   const { profile, isAdmin, isDocent } = useAuth();
@@ -286,10 +287,8 @@ export function AdminPage() {
 
 const tabs = [
   { id: 'users' as TabType, label: 'Gebruikers', icon: Users, show: isAdmin },
-
-  // Nieuw tabblad voor jouw FileManager
   { id: 'documents' as TabType, label: 'Documenten', icon: FolderTree, show: true },
-
+  { id: 'rag_beheer' as TabType, label: 'RAG Beheer', icon: RefreshCw, show: true },
   { id: 'concepts' as TabType, label: 'Begrippen', icon: BookOpen, show: true },
   { id: 'concept_review' as TabType, label: 'Begrippen Review', icon: Eye, show: true },
   { id: 'quiz_validation' as TabType, label: 'Quiz Validatie', icon: ClipboardCheck, show: true },
@@ -440,6 +439,24 @@ const tabs = [
 {activeTab === 'documents' && (
   <div>
     <FileManager />
+  </div>
+)}
+
+{activeTab === 'rag_beheer' && (
+  <div className="space-y-4">
+    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+      <p className="text-sm text-gray-700">
+        <strong>RAG Beheer</strong> toont de verwerkingsstatus van documenten in de RAG-mappen van de actieve cursus.
+        Documenten moeten verwerkt worden (tekst extraheren + embeddings genereren) voordat ze doorzoekbaar zijn.
+        Documenten met status <em>mislukt</em> of <em>geen chunks</em> kun je hier opnieuw verwerken.
+      </p>
+    </div>
+    <RAGDocumentStatusPanel />
+    <div className="mt-6 pt-4 border-t border-gray-200">
+      <h4 className="font-semibold text-gray-800 mb-2">Alle vastgelopen documenten (globaal)</h4>
+      <p className="text-sm text-gray-600 mb-3">Documenten in alle mappen met status mislukt of vastgelopen:</p>
+      <DocumentRetryPanel />
+    </div>
   </div>
 )}
 

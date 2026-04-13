@@ -257,7 +257,8 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
     const data = await response.json();
     return data.embeddings;
   } catch (error: any) {
-    console.error('Error generating embeddings:', error);
-    throw new Error(`Failed to generate embeddings: ${error.message}`);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error('Error generating embeddings:', msg);
+    throw new Error(`Failed to generate embeddings: ${msg}`);
   }
 }
