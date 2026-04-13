@@ -10,19 +10,14 @@ export interface ShareStatsRepositoryStructure {
   itemsByTopic: Map<string, GitHubFileInfo[]>;
 }
 
-const GITHUB_API_BASE = 'https://api.github.com';
 const REPO_OWNER = 'ShareStats';
 const REPO_NAME = 'itembank';
 
 export async function fetchGitHubDirectory(path: string = ''): Promise<GitHubFileInfo[]> {
-  const url = `${GITHUB_API_BASE}/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}`;
+  const apiPath = `repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}`;
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        'Accept': 'application/vnd.github.v3+json',
-      },
-    });
+    const response = await fetch(`/api/github/${apiPath}`);
 
     if (!response.ok) {
       throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);

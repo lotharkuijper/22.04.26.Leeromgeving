@@ -13,20 +13,14 @@ export interface ShareStatsFile {
   type: "file";
 }
 
-const BASE_URL =
-  "https://api.github.com/repos/ShareStats/itembank/contents";
+const GITHUB_API_BASE = "repos/ShareStats/itembank/contents";
 
-// -----------------------------
-// AUTH HEADERS
-// -----------------------------
-const headers: Record<string, string> = {};
-
-const token = import.meta.env.VITE_GITHUB_TOKEN;
-
-// Fine-grained GitHub tokens vereisen: "token <TOKEN>"
-if (token) {
-  headers["Authorization"] = `token ${token}`;
-  headers["Accept"] = "application/vnd.github+json";
+async function githubFetch(path: string): Promise<any> {
+  const res = await fetch(`/api/github/${path}`);
+  if (!res.ok) {
+    throw new Error(`GitHub API error: ${res.status}`);
+  }
+  return res.json();
 }
 
 // -----------------------------
@@ -34,15 +28,7 @@ if (token) {
 // -----------------------------
 export async function fetchShareStatsTopics(): Promise<ShareStatsTopic[]> {
   try {
-    const res = await fetch(BASE_URL, { headers });
-
-    if (!res.ok) {
-      console.error("[SHARESTATS] GitHub API error:", res.status);
-      return [];
-    }
-
-    const data = await res.json();
-
+    const data = await githubFetch(GITHUB_API_BASE);
     return data.filter((item: any) => item.type === "dir");
   } catch (error) {
     console.error("[SHARESTATS] Failed to fetch topics:", error);
@@ -54,16 +40,13 @@ export async function fetchShareStatsTopics(): Promise<ShareStatsTopic[]> {
 // RECURSIVE DIRECTORY FETCH
 // -----------------------------
 async function fetchDirectoryRecursive(
-  url: string,
+  apiPath: string,
   depth = 0
 ): Promise<ShareStatsFile[]> {
-  if (depth > 5) return []; // veiligheid
+  if (depth > 5) return [];
 
   try {
-    const res = await fetch(url, { headers });
-    if (!res.ok) return [];
-
-    const items = await res.json();
+    const items = await githubFetch(apiPath);
     let files: ShareStatsFile[] = [];
 
     for (const item of items) {
@@ -72,7 +55,8 @@ async function fetchDirectoryRecursive(
       }
 
       if (item.type === "dir") {
-        const deeper = await fetchDirectoryRecursive(item.url, depth + 1);
+        const subPath = item.url.replace('https://api.github.com/', '');
+        const deeper = await fetchDirectoryRecursive(subPath, depth + 1);
         files = [...files, ...deeper];
       }
     }
@@ -91,8 +75,7 @@ export async function fetchShareStatsFiles(
   topicPath: string
 ): Promise<ShareStatsFile[]> {
   try {
-    const topicUrl = `${BASE_URL}/${topicPath}`;
-    return await fetchDirectoryRecursive(topicUrl, 0);
+    return await fetchDirectoryRecursive(`${GITHUB_API_BASE}/${topicPath}`, 0);
   } catch (error) {
     console.error("[SHARESTATS] Failed to fetch files:", error);
     return [];
@@ -106,12 +89,11 @@ export async function fetchShareStatsFileContent(
   downloadUrl: string
 ): Promise<string> {
   try {
-    const res = await fetch(downloadUrl, { headers });
+    const res = await fetch(downloadUrl);
     if (!res.ok) {
       console.error("[SHARESTATS] File fetch error:", res.status);
       return "";
     }
-
     return await res.text();
   } catch (error) {
     console.error("[SHARESTATS] Failed to fetch file content:", error);

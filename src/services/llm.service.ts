@@ -1,12 +1,5 @@
 import { supabase } from '../lib/supabase';
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
-const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
-const HUGGINGFACE_API_KEY = import.meta.env.VITE_HUGGINGFACE_API_KEY;
-const HUGGINGFACE_EMBEDDINGS_URL = 'https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2';
-
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -76,17 +69,26 @@ async function getActiveSystemPrompt(): Promise<string> {
   }
 }
 
+async function callChatAPI(body: object): Promise<any> {
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMsg = errorData.error?.message || errorData.error || `API Error: ${response.status}`;
+    throw new Error(errorMsg);
+  }
+
+  return response.json();
+}
+
 export async function sendChatMessage(
   messages: Message[],
   context?: string
 ): Promise<LLMResponse> {
-  if (!GROQ_API_KEY || GROQ_API_KEY === 'your_groq_api_key_here') {
-    return {
-      content: 'Groq API key is niet geconfigureerd. Voeg je API key toe aan de .env file.',
-      error: 'API key not configured'
-    };
-  }
-
   try {
     const activePrompt = await getActiveSystemPrompt();
 
@@ -97,30 +99,15 @@ export async function sendChatMessage(
         : activePrompt
     };
 
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [systemMessage, ...messages],
-        temperature: 0.7,
-        max_tokens: 1024,
-        top_p: 1,
-        stream: false,
-      }),
+    const data = await callChatAPI({
+      model: 'llama-3.3-70b-versatile',
+      messages: [systemMessage, ...messages],
+      temperature: 0.7,
+      max_tokens: 1024,
+      top_p: 1,
+      stream: false,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const errorMsg = errorData.error?.message || `Groq API Error: ${response.status}`;
-      console.error('[LLM] Groq API error:', errorMsg);
-      throw new Error(errorMsg);
-    }
-
-    const data = await response.json();
     const content = data.choices[0]?.message?.content;
 
     if (!content) {
@@ -129,7 +116,13 @@ export async function sendChatMessage(
 
     return { content };
   } catch (error: any) {
-    console.error('[LLM] Error calling Groq API:', error);
+    console.error('[LLM] Error calling chat API:', error);
+    if (error.message?.includes('503') || error.message?.includes('not configured')) {
+      return {
+        content: 'De chatbot is nog niet geconfigureerd. Voeg een GROQ_API_KEY toe in de Replit Secrets.',
+        error: 'API key not configured'
+      };
+    }
     throw new Error(`LLM fout: ${error.message}`);
   }
 }
@@ -142,13 +135,6 @@ export async function evaluateExplanation(
   ragContext?: string,
   retrievedSources?: Array<{ title: string; similarity: number }>
 ): Promise<LLMResponse> {
-  if (!GROQ_API_KEY || GROQ_API_KEY === 'your_groq_api_key_here') {
-    return {
-      content: 'Groq API key is niet geconfigureerd.',
-      error: 'API key not configured'
-    };
-  }
-
   let evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
 
 Officiële definitie:
@@ -177,25 +163,13 @@ Geef gestructureerde feedback met:
   evaluationPrompt += `\n\nWees constructief en moedigend, maar ook specifiek en nuttig.`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: evaluationPrompt }],
-        temperature: 0.3,
-        max_tokens: 1500,
-      }),
+    const data = await callChatAPI({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: evaluationPrompt }],
+      temperature: 0.3,
+      max_tokens: 1500,
     });
 
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status}`);
-    }
-
-    const data = await response.json();
     return {
       content: data.choices[0]?.message?.content || 'Geen feedback gegenereerd',
     };
@@ -220,10 +194,6 @@ export async function generateQuiz(
   difficulty: 'easy' | 'medium' | 'hard',
   numQuestions: number = 5
 ): Promise<QuizQuestion[]> {
-  if (!GROQ_API_KEY || GROQ_API_KEY === 'your_groq_api_key_here') {
-    throw new Error('Groq API key is niet geconfigureerd.');
-  }
-
   const quizPrompt = `Genereer ${numQuestions} ${difficulty === 'easy' ? 'makkelijke' : difficulty === 'medium' ? 'gemiddelde' : 'moeilijke'} meerkeuzevragen over ${topic} in het domein van epidemiologie en biostatistiek.
 
 Voor elke vraag:
@@ -245,25 +215,13 @@ Formatteer je antwoord als een JSON array met deze structuur:
 BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst.`;
 
   try {
-    const response = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: quizPrompt }],
-        temperature: 0.7,
-        max_tokens: 2048,
-      }),
+    const data = await callChatAPI({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: quizPrompt }],
+      temperature: 0.7,
+      max_tokens: 2048,
     });
 
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status}`);
-    }
-
-    const data = await response.json();
     const content = data.choices[0]?.message?.content || '';
 
     const jsonMatch = content.match(/\[[\s\S]*\]/);
@@ -278,99 +236,23 @@ BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst.`;
   }
 }
 
-async function generateEmbeddingsWithHuggingFace(texts: string[]): Promise<number[][]> {
-  if (!HUGGINGFACE_API_KEY || HUGGINGFACE_API_KEY === 'your_huggingface_api_key_here') {
-    throw new Error('Hugging Face API key is not configured');
-  }
-
-  const embeddings: number[][] = [];
-
-  for (const text of texts) {
-    try {
-      const response = await fetch(HUGGINGFACE_EMBEDDINGS_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          inputs: text,
-          options: {
-            wait_for_model: true,
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `API Error: ${response.status}`);
-      }
-
-      const embedding = await response.json();
-
-      if (Array.isArray(embedding) && embedding.length === 384) {
-        embeddings.push(embedding);
-      } else {
-        throw new Error('Invalid embedding format from Hugging Face API');
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-    } catch (error: any) {
-      console.error('Error generating embedding with Hugging Face:', error);
-      throw error;
-    }
-  }
-
-  return embeddings;
-}
-
-async function generateEmbeddingsWithOpenAI(texts: string[]): Promise<number[][]> {
-  if (!OPENAI_API_KEY || OPENAI_API_KEY === 'your_openai_api_key_here') {
-    throw new Error('OpenAI API key is not configured');
-  }
-
+export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   try {
-    const response = await fetch(OPENAI_EMBEDDINGS_URL, {
+    const response = await fetch('/api/embeddings', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'text-embedding-3-small',
-        input: texts,
-        dimensions: 384,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts }),
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `API Error: ${response.status}`);
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `Embeddings API error: ${response.status}`);
     }
 
     const data = await response.json();
-    return data.data.map((item: any) => item.embedding);
+    return data.embeddings;
   } catch (error: any) {
-    console.error('Error generating embeddings with OpenAI:', error);
-    throw error;
-  }
-}
-
-export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
-  try {
-    console.log('Attempting to generate embeddings with Hugging Face (free)...');
-    return await generateEmbeddingsWithHuggingFace(texts);
-  } catch (hfError: any) {
-    console.warn('Hugging Face embeddings failed, falling back to OpenAI:', hfError.message);
-
-    try {
-      return await generateEmbeddingsWithOpenAI(texts);
-    } catch (openaiError: any) {
-      console.error('Both embedding services failed');
-      throw new Error(
-        `Failed to generate embeddings. Hugging Face: ${hfError.message}. OpenAI: ${openaiError.message}. ` +
-        'Configureer minimaal één API key in de .env file.'
-      );
-    }
+    console.error('Error generating embeddings:', error);
+    throw new Error(`Failed to generate embeddings: ${error.message}`);
   }
 }

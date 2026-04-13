@@ -1,0 +1,152 @@
+import express from 'express';
+import cors from 'cors';
+
+const app = express();
+const PORT = process.env.API_PORT || 3001;
+
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
+const HUGGINGFACE_EMBEDDINGS_URL = 'https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2';
+
+app.post('/api/chat', async (req, res) => {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    return res.status(503).json({ error: 'GROQ_API_KEY not configured on server' });
+  }
+
+  try {
+    const response = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req.body),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+    return res.json(data);
+  } catch (err) {
+    console.error('[/api/chat] Error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/embeddings', async (req, res) => {
+  const openaiKey = process.env.OPENAI_API_KEY;
+  const hfKey = process.env.HUGGINGFACE_API_KEY;
+
+  if (!openaiKey && !hfKey) {
+    return res.status(503).json({ error: 'No embedding API key configured on server' });
+  }
+
+  const { texts, provider } = req.body;
+  if (!texts || !Array.isArray(texts)) {
+    return res.status(400).json({ error: 'texts array required' });
+  }
+
+  if (hfKey && provider !== 'openai') {
+    try {
+      const results = [];
+      for (const text of texts) {
+        const response = await fetch(HUGGINGFACE_EMBEDDINGS_URL, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${hfKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ inputs: text }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HuggingFace error: ${response.status}`);
+        }
+
+        const embedding = await response.json();
+        results.push(Array.isArray(embedding[0]) ? embedding[0] : embedding);
+      }
+      return res.json({ embeddings: results, provider: 'huggingface' });
+    } catch (hfErr) {
+      console.warn('[/api/embeddings] HuggingFace failed, trying OpenAI:', hfErr.message);
+      if (!openaiKey) {
+        return res.status(503).json({ error: hfErr.message });
+      }
+    }
+  }
+
+  if (openaiKey) {
+    try {
+      const response = await fetch(OPENAI_EMBEDDINGS_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'text-embedding-3-small',
+          input: texts,
+          dimensions: 384,
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        return res.status(response.status).json(errData);
+      }
+
+      const data = await response.json();
+      const embeddings = data.data.map((item) => item.embedding);
+      return res.json({ embeddings, provider: 'openai' });
+    } catch (err) {
+      console.error('[/api/embeddings] OpenAI error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  return res.status(503).json({ error: 'No embedding provider available' });
+});
+
+app.get('/api/github/*path', async (req, res) => {
+  const token = process.env.GITHUB_TOKEN;
+  const path = req.params.path;
+  const query = req.url.split('?')[1] ? '?' + req.url.split('?')[1] : '';
+  const url = `https://api.github.com/${path}${query}`;
+
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'EpiLearning-App',
+  };
+  if (token) {
+    headers['Authorization'] = `token ${token}`;
+  }
+
+  try {
+    const response = await fetch(url, { headers });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err) {
+    console.error('[/api/github] Error:', err);
+    res.status(500).json({ error: 'GitHub proxy error' });
+  }
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    groq: !!process.env.GROQ_API_KEY,
+    openai: !!process.env.OPENAI_API_KEY,
+    huggingface: !!process.env.HUGGINGFACE_API_KEY,
+    github: !!process.env.GITHUB_TOKEN,
+    supabase: !!process.env.SUPABASE_URL,
+  });
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[API Server] Running on port ${PORT}`);
+});

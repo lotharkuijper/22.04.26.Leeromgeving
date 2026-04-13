@@ -3,9 +3,6 @@ import { getActiveFoldersForModule, getAccessibleFolders } from './permissions.s
 import { generateEmbeddings } from './llm.service';
 import { STORAGE_CONFIG } from '../config/storage.config';
 
-const HUGGINGFACE_API_KEY = import.meta.env.VITE_HUGGINGFACE_API_KEY;
-const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
-
 export interface DocumentChunk {
   id: string;
   content: string;
@@ -15,16 +12,11 @@ export interface DocumentChunk {
 }
 
 export async function generateEmbedding(text: string): Promise<number[] | null> {
-  if (!HUGGINGFACE_API_KEY && !OPENAI_API_KEY) {
-    console.warn('No embedding API key configured (Hugging Face or OpenAI), RAG functionality will be limited');
-    return null;
-  }
-
   try {
     const embeddings = await generateEmbeddings([text]);
     return embeddings[0] || null;
   } catch (error) {
-    console.error('Error generating embedding:', error);
+    console.warn('No embedding generated, RAG functionality will be limited:', error);
     return null;
   }
 }
@@ -173,10 +165,16 @@ export async function checkRAGAvailability(): Promise<{
       .select('*', { count: 'exact', head: true })
       .eq('bucket_type', 'rag_sources');
 
-    const embeddingsConfigured = !!(
-      (HUGGINGFACE_API_KEY && HUGGINGFACE_API_KEY !== 'your_huggingface_api_key_here') ||
-      (OPENAI_API_KEY && OPENAI_API_KEY !== 'your_openai_api_key_here')
-    );
+    let embeddingsConfigured = false;
+    try {
+      const healthRes = await fetch('/api/health');
+      if (healthRes.ok) {
+        const health = await healthRes.json();
+        embeddingsConfigured = !!(health.huggingface || health.openai);
+      }
+    } catch {
+      embeddingsConfigured = false;
+    }
 
     return {
       documentsAvailable: (docCount || 0) > 0,
