@@ -71,6 +71,7 @@ app.post('/api/embeddings', async (req, res) => {
         const embedding = await response.json();
         results.push(Array.isArray(embedding[0]) ? embedding[0] : embedding);
       }
+      console.log(`[/api/embeddings] Generated ${results.length} embeddings via HuggingFace (dim=${results[0]?.length})`);
       return res.json({ embeddings: results, provider: 'huggingface' });
     } catch (hfErr) {
       console.warn('[/api/embeddings] HuggingFace failed, trying OpenAI:', hfErr.message);
