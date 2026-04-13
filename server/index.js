@@ -296,6 +296,147 @@ app.post('/api/admin/create-rag-folder', async (req, res) => {
   }
 });
 
+app.get('/api/rag-enabled-folders', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+
+  const { courseId, moduleType } = req.query;
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    let ragFolderIds = [];
+
+    if (courseId) {
+      const { data: assignments, error: assignError } = await supabaseAdmin
+        .from('course_folder_assignments')
+        .select('folder_id')
+        .eq('course_id', courseId);
+
+      if (assignError) {
+        console.error('[rag-enabled-folders] assignment query error:', assignError);
+        return res.status(500).json({ error: assignError.message });
+      }
+
+      if (!assignments || assignments.length === 0) {
+        return res.json({ folderIds: [] });
+      }
+
+      const assignedFolderIds = assignments.map((a) => a.folder_id);
+
+      const { data: ragFolders, error: folderError } = await supabaseAdmin
+        .from('document_folders')
+        .select('id')
+        .in('id', assignedFolderIds)
+        .eq('folder_type', 'rag_sources');
+
+      if (folderError) {
+        console.error('[rag-enabled-folders] folder query error:', folderError);
+        return res.status(500).json({ error: folderError.message });
+      }
+
+      ragFolderIds = ragFolders?.map((f) => f.id) ?? [];
+    } else {
+      const { data: allRagFolders, error: allFolderError } = await supabaseAdmin
+        .from('document_folders')
+        .select('id')
+        .eq('folder_type', 'rag_sources');
+
+      if (allFolderError) {
+        console.error('[rag-enabled-folders] all-folders query error:', allFolderError);
+        return res.status(500).json({ error: allFolderError.message });
+      }
+
+      ragFolderIds = allRagFolders?.map((f) => f.id) ?? [];
+    }
+
+    if (ragFolderIds.length === 0) {
+      return res.json({ folderIds: [] });
+    }
+
+    if (moduleType) {
+      const { data: ragAssignments, error: ragAssignError } = await supabaseAdmin
+        .from('folder_rag_assignments')
+        .select('folder_id')
+        .in('folder_id', ragFolderIds)
+        .eq('module_type', moduleType)
+        .eq('is_active', true);
+
+      if (ragAssignError) {
+        console.error('[rag-enabled-folders] rag_assignments query error:', ragAssignError);
+        return res.status(500).json({ error: ragAssignError.message });
+      }
+
+      if (ragAssignments && ragAssignments.length > 0) {
+        return res.json({ folderIds: ragAssignments.map((a) => a.folder_id) });
+      }
+    }
+
+    return res.json({ folderIds: ragFolderIds });
+  } catch (err) {
+    console.error('[rag-enabled-folders] Unexpected error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+app.get('/api/folder-type', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+
+  const { folderId } = req.query;
+  if (!folderId) {
+    return res.status(400).json({ error: 'folderId query parameter is required' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { data: folder, error: folderError } = await supabaseAdmin
+      .from('document_folders')
+      .select('folder_type')
+      .eq('id', folderId)
+      .maybeSingle();
+
+    if (folderError) {
+      console.error('[folder-type] query error:', folderError);
+      return res.status(500).json({ error: folderError.message });
+    }
+
+    return res.json({ folderType: folder?.folder_type ?? null });
+  } catch (err) {
+    console.error('[folder-type] Unexpected error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',

@@ -25,75 +25,33 @@ export async function getRAGEnabledFolders(
   moduleType?: 'general' | 'explain' | 'project' | 'quiz',
   courseId?: string | null
 ): Promise<string[]> {
+  if (courseId === null) {
+    return [];
+  }
+
   try {
-    if (courseId === null) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+      console.warn('[RAG] No session token — cannot fetch RAG folders');
       return [];
     }
 
-    if (courseId !== undefined) {
-      const { data: assignments } = await supabase
-        .from('course_folder_assignments')
-        .select('folder_id')
-        .eq('course_id', courseId);
+    const params = new URLSearchParams();
+    if (courseId !== undefined) params.set('courseId', courseId);
+    if (moduleType) params.set('moduleType', moduleType);
 
-      if (!assignments || assignments.length === 0) {
-        return [];
-      }
+    const response = await fetch(`/api/rag-enabled-folders?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-      const assignedFolderIds = assignments.map((a) => a.folder_id);
-
-      const { data: ragFolders } = await supabase
-        .from('document_folders')
-        .select('id')
-        .in('id', assignedFolderIds)
-        .eq('folder_type', 'rag_sources');
-
-      const courseRagFolderIds = ragFolders?.map((f) => f.id) ?? [];
-
-      if (courseRagFolderIds.length === 0) {
-        return [];
-      }
-
-      if (moduleType) {
-        const { data: ragAssignments } = await supabase
-          .from('folder_rag_assignments')
-          .select('folder_id')
-          .in('folder_id', courseRagFolderIds)
-          .eq('module_type', moduleType)
-          .eq('is_active', true);
-
-        if (ragAssignments && ragAssignments.length > 0) {
-          return ragAssignments.map((a) => a.folder_id);
-        }
-        return courseRagFolderIds;
-      }
-
-      return courseRagFolderIds;
-    }
-
-    const { data: folders } = await supabase
-      .from('document_folders')
-      .select('id')
-      .eq('folder_type', 'rag_sources');
-
-    if (!folders || folders.length === 0) {
+    if (!response.ok) {
+      console.error('[RAG] rag-enabled-folders error:', response.status);
       return [];
     }
 
-    const folderIds = folders.map((f) => f.id);
-
-    if (moduleType) {
-      const { data: ragAssignments } = await supabase
-        .from('folder_rag_assignments')
-        .select('folder_id')
-        .in('folder_id', folderIds)
-        .eq('module_type', moduleType)
-        .eq('is_active', true);
-
-      return ragAssignments?.map((a) => a.folder_id) || [];
-    }
-
-    return folderIds;
+    const data = await response.json();
+    return data.folderIds ?? [];
   } catch (error) {
     console.error('[RAG] Error fetching RAG-enabled folders:', error);
     return [];

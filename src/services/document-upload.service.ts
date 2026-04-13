@@ -329,24 +329,25 @@ export async function uploadMultipleDocuments(
   let skipEmbeddings = false;
 
   if (folderId) {
-    const { data: folder } = await supabase
-      .from('document_folders')
-      .select('folder_type')
-      .eq('id', folderId)
-      .single();
-
-    if (folder) {
-      const folderType = folder.folder_type;
-      if (folderType === 'rag_sources') {
-        bucketType = 'rag_sources';
-        skipEmbeddings = false;
-      } else if (folderType === 'data') {
-        bucketType = 'datasets';
-        skipEmbeddings = true;
-      } else {
-        bucketType = 'general';
-        skipEmbeddings = true;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (token) {
+        const res = await fetch(`/api/folder-type?folderId=${encodeURIComponent(folderId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const { folderType } = await res.json();
+          if (folderType === 'data') {
+            bucketType = 'datasets';
+            skipEmbeddings = true;
+          } else if (folderType !== 'rag_sources') {
+            bucketType = 'general';
+            skipEmbeddings = true;
+          }
+        }
       }
+    } catch {
     }
   }
 
