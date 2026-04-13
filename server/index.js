@@ -9,7 +9,7 @@ app.use(express.json({ limit: '10mb' }));
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
-const HUGGINGFACE_EMBEDDINGS_URL = 'https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2';
+const HUGGINGFACE_EMBEDDINGS_URL = 'https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction';
 
 app.post('/api/chat', async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;

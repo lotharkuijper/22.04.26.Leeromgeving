@@ -100,6 +100,7 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
 
     await refreshProfile();
     setActiveCourseId(courseId);
+    await loadCourseData(courseId);
   };
 
   return (
