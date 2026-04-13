@@ -1,11 +1,28 @@
 import express from 'express';
 import cors from 'cors';
+import { createClient } from '@supabase/supabase-js';
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+const SUPABASE_URL = process.env.VITE_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.VITE_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const SUPERUSER_EMAIL = 'l.d.j.kuijper@vu.nl';
+
+let supabaseAdmin = null;
+if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+  supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  console.log('[API Server] Supabase admin client initialized (service role)');
+} else {
+  console.warn('[API Server] SUPABASE_SERVICE_ROLE_KEY or SUPABASE_URL missing — admin routes disabled');
+}
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
@@ -140,6 +157,119 @@ app.get('/api/github/*path', async (req, res) => {
   } catch (err) {
     console.error('[/api/github] Error:', err);
     res.status(500).json({ error: 'GitHub proxy error' });
+  }
+});
+
+app.post('/api/admin/create-rag-folder', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+
+  const { courseId, courseName, userId } = req.body;
+  if (!courseId || !courseName || !userId) {
+    return res.status(400).json({ error: 'courseId, courseName, and userId are required' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('role, email')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      return res.status(403).json({ error: 'Could not verify user role' });
+    }
+
+    const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Admin role required' });
+    }
+
+    const { data: existingFolder } = await supabaseAdmin
+      .from('document_folders')
+      .select('id')
+      .eq('name', `RAG - ${courseName}`)
+      .maybeSingle();
+
+    let folderId;
+    if (existingFolder) {
+      folderId = existingFolder.id;
+      console.log(`[create-rag-folder] Reusing existing folder ${folderId} for course ${courseName}`);
+    } else {
+      const { data: newFolder, error: folderError } = await supabaseAdmin
+        .from('document_folders')
+        .insert({
+          name: `RAG - ${courseName}`,
+          description: `RAG-bronnen voor cursus ${courseName}`,
+          parent_folder_id: null,
+          created_by: userId,
+          folder_type: 'rag_sources',
+          is_root: false,
+        })
+        .select()
+        .single();
+
+      if (folderError || !newFolder) {
+        console.error('[create-rag-folder] folder insert error:', folderError);
+        return res.status(500).json({ error: `Kon RAG-map niet aanmaken: ${folderError?.message}` });
+      }
+
+      folderId = newFolder.id;
+
+      const { error: permError } = await supabaseAdmin
+        .from('folder_permissions')
+        .insert([
+          { folder_id: folderId, role: 'admin', can_view: true, can_edit: true },
+          { folder_id: folderId, role: 'docent', can_view: true, can_edit: true },
+          { folder_id: folderId, role: 'student', can_view: true, can_edit: false },
+        ]);
+
+      if (permError) {
+        console.warn('[create-rag-folder] permissions insert error (non-fatal):', permError.message);
+      }
+
+      console.log(`[create-rag-folder] Created folder ${folderId} for course ${courseName}`);
+    }
+
+    const { data: existingAssignment } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .select('id')
+      .eq('course_id', courseId)
+      .eq('folder_id', folderId)
+      .maybeSingle();
+
+    if (!existingAssignment) {
+      const { error: assignError } = await supabaseAdmin
+        .from('course_folder_assignments')
+        .insert({ course_id: courseId, folder_id: folderId });
+
+      if (assignError) {
+        console.error('[create-rag-folder] assignment insert error:', assignError);
+        return res.status(500).json({ error: `Kon map niet koppelen aan cursus: ${assignError.message}` });
+      }
+      console.log(`[create-rag-folder] Linked folder ${folderId} to course ${courseId}`);
+    }
+
+    return res.json({ folderId, created: !existingFolder });
+  } catch (err) {
+    console.error('[create-rag-folder] Unexpected error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 

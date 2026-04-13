@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FolderPlus, Upload, Download, CheckCircle2, AlertTriangle,
-  Loader2, FileText, RefreshCw, X, FolderOpen, Info,
+  Loader2, FileText, RefreshCw, X, FolderOpen, Info, Database,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -72,10 +72,11 @@ function formatBytes(bytes: number): string {
 }
 
 export function RAGSetupPanel() {
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
   const { activeCourseId, activeCourse, activeCourseRagFolderIds, refreshActiveCourse, loading: courseLoading } = useActiveCourse();
 
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<ActiveSection>('upload');
 
   const ragFolderId = activeCourseRagFolderIds[0] ?? null;
@@ -100,65 +101,31 @@ export function RAGSetupPanel() {
   }
 
   const handleCreateRagFolder = async () => {
-    if (!activeCourseId || !profile?.id) return;
+    if (!activeCourseId || !profile?.id || !session?.access_token) return;
     setCreatingFolder(true);
+    setCreateError(null);
     try {
-      const { data: existingFolder } = await supabase
-        .from('document_folders')
-        .select('id')
-        .eq('name', `RAG - ${activeCourse.name}`)
-        .maybeSingle();
+      const response = await fetch('/api/admin/create-rag-folder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          courseId: activeCourseId,
+          courseName: activeCourse.name,
+          userId: profile.id,
+        }),
+      });
 
-      let folderId: string;
-
-      if (existingFolder) {
-        folderId = existingFolder.id;
-      } else {
-        const { data: newFolder, error: folderError } = await supabase
-          .from('document_folders')
-          .insert({
-            name: `RAG - ${activeCourse.name}`,
-            description: `RAG-bronnen voor cursus ${activeCourse.name}`,
-            parent_folder_id: null,
-            created_by: profile.id,
-            folder_type: 'rag_sources',
-            is_root: false,
-          } as any)
-          .select()
-          .single();
-
-        if (folderError || !newFolder) {
-          throw new Error(`Kon RAG-map niet aanmaken: ${folderError?.message}`);
-        }
-        folderId = newFolder.id;
-
-        await supabase.from('folder_permissions').insert([
-          { folder_id: folderId, role: 'admin', can_view: true, can_edit: true },
-          { folder_id: folderId, role: 'docent', can_view: true, can_edit: true },
-          { folder_id: folderId, role: 'student', can_view: true, can_edit: false },
-        ]);
-      }
-
-      const { data: existingAssignment } = await supabase
-        .from('course_folder_assignments')
-        .select('id')
-        .eq('course_id', activeCourseId)
-        .eq('folder_id', folderId)
-        .maybeSingle();
-
-      if (!existingAssignment) {
-        const { error: assignError } = await supabase
-          .from('course_folder_assignments')
-          .insert({ course_id: activeCourseId, folder_id: folderId });
-
-        if (assignError) {
-          throw new Error(`Kon RAG-map niet koppelen aan cursus: ${assignError.message}`);
-        }
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Server error ${response.status}`);
       }
 
       await refreshActiveCourse();
     } catch (err) {
-      alert('Fout: ' + (err instanceof Error ? err.message : 'Onbekende fout'));
+      setCreateError(err instanceof Error ? err.message : 'Onbekende fout');
     } finally {
       setCreatingFolder(false);
     }
@@ -170,13 +137,25 @@ export function RAGSetupPanel() {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 flex gap-4">
           <FolderPlus className="w-8 h-8 text-amber-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 mb-1">
-              Cursus <strong>{activeCourse.name}</strong> heeft nog geen RAG-map
+            <h3 className="font-semibold text-gray-900 mb-2">
+              Cursus <strong>{activeCourse.name}</strong> heeft nog geen RAG-configuratie
             </h3>
-            <p className="text-sm text-gray-700 mb-4">
-              Om documenten doorzoekbaar te maken voor de chatbot, moet er eerst een RAG-map worden
-              aangemaakt en gekoppeld aan deze cursus. Dit is een eenmalige instelling.
+            <p className="text-sm text-gray-700 mb-2">
+              Let op: dit gaat <em>niet</em> over een map in het bestandsbeheer. In het bestandsbeheer
+              kunnen al bestanden staan (bijv. <code className="bg-amber-100 px-1 rounded text-xs">{activeCourse.name}/RAG/</code>),
+              maar die zijn nog <strong>niet</strong> doorzoekbaar voor de chatbot.
             </p>
+            <p className="text-sm text-gray-700 mb-4">
+              Met de knop hieronder wordt een <strong>database-configuratie</strong> aangemaakt die de chatbot
+              vertelt welke documenten hij mag gebruiken. Daarna kun je via de <em>Importeren</em>-tab bestaande
+              bestanden uit het bestandsbeheer inladen, of via <em>Uploaden</em> nieuwe bestanden toevoegen.
+            </p>
+            {createError && (
+              <div className="mb-3 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{createError}</span>
+              </div>
+            )}
             <button
               onClick={handleCreateRagFolder}
               disabled={creatingFolder}
@@ -186,7 +165,7 @@ export function RAGSetupPanel() {
               {creatingFolder ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /> Aanmaken...</>
               ) : (
-                <><FolderPlus className="w-4 h-4" /> RAG-map aanmaken voor {activeCourse.name}</>
+                <><Database className="w-4 h-4" /> RAG-configuratie instellen voor {activeCourse.name}</>
               )}
             </button>
           </div>
