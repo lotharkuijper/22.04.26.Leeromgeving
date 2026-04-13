@@ -9,8 +9,7 @@ import { DocumentUploadModal } from '../components/DocumentUploadModal';
 import { retryFailedDocument, UploadProgress } from '../services/document-upload.service';
 import { ConceptReviewPanel } from '../components/ConceptReviewPanel';
 import { QuizValidationPanel } from '../components/QuizValidationPanel';
-import { DocumentRetryPanel } from '../components/DocumentRetryPanel';
-import { RAGDocumentStatusPanel } from '../components/RAGDocumentStatusPanel';
+import { RAGSetupPanel } from '../components/RAGSetupPanel';
 import { ShareStatsImportPanel } from '../components/ShareStatsImportPanel';
 
 import FileManager from '../pages/FileManager';
@@ -444,19 +443,7 @@ const tabs = [
 
 {activeTab === 'rag_beheer' && (
   <div className="space-y-4">
-    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-      <p className="text-sm text-gray-700">
-        <strong>RAG Beheer</strong> toont de verwerkingsstatus van documenten in de RAG-mappen van de actieve cursus.
-        Documenten moeten verwerkt worden (tekst extraheren + embeddings genereren) voordat ze doorzoekbaar zijn.
-        Documenten met status <em>mislukt</em> of <em>geen chunks</em> kun je hier opnieuw verwerken.
-      </p>
-    </div>
-    <RAGDocumentStatusPanel />
-    <div className="mt-6 pt-4 border-t border-gray-200">
-      <h4 className="font-semibold text-gray-800 mb-2">Alle vastgelopen documenten (globaal)</h4>
-      <p className="text-sm text-gray-600 mb-3">Documenten in alle mappen met status mislukt of vastgelopen:</p>
-      <DocumentRetryPanel />
-    </div>
+    <RAGSetupPanel />
   </div>
 )}
 

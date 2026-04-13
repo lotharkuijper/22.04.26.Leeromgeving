@@ -13,6 +13,7 @@ interface ActiveCourseContextType {
   activeCourse: ActiveCourseInfo | null;
   activeCourseRagFolderIds: string[];
   setActiveCourse: (courseId: string) => Promise<void>;
+  refreshActiveCourse: () => Promise<void>;
   loading: boolean;
 }
 
@@ -82,6 +83,12 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const refreshActiveCourse = async () => {
+    if (activeCourseId) {
+      await loadCourseData(activeCourseId);
+    }
+  };
+
   const setActiveCourse = async (courseId: string) => {
     if (!user) return;
 
@@ -110,6 +117,7 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
         activeCourse,
         activeCourseRagFolderIds,
         setActiveCourse,
+        refreshActiveCourse,
         loading,
       }}
     >
