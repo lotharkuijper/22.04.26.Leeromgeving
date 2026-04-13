@@ -588,9 +588,11 @@ const tabs = [
                 <div className="p-4 border border-gray-200 rounded-lg">
                   <h3 className="font-semibold text-gray-900 mb-2">API Configuratie</h3>
                   <p className="text-sm text-gray-600">
-                    Voeg je API keys toe aan de .env file:<br />
-                    - VITE_GROQ_API_KEY voor LLM functionaliteit<br />
-                    - VITE_OPENAI_API_KEY voor embeddings/RAG
+                    Voeg je API keys toe als Replit Secrets:<br />
+                    - GROQ_API_KEY voor LLM functionaliteit<br />
+                    - OPENAI_API_KEY voor embeddings/RAG<br />
+                    - HUGGINGFACE_API_KEY voor alternatieve embeddings<br />
+                    - GITHUB_TOKEN voor hogere GitHub API limieten
                   </p>
                 </div>
               </div>

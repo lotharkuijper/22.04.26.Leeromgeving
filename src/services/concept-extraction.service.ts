@@ -1,10 +1,26 @@
 import { supabase } from '../lib/supabase';
-import Groq from 'groq-sdk';
 
-const groq = new Groq({
-  apiKey: import.meta.env.VITE_GROQ_API_KEY,
-  dangerouslyAllowBrowser: true,
-});
+async function callChatAPI(messages: { role: string; content: string }[], options: Record<string, any> = {}): Promise<string> {
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages,
+      ...options,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error?.message || err.error || `API Error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices[0]?.message?.content;
+  if (!content) throw new Error('Geen response van AI');
+  return content;
+}
 
 export interface ExtractedConcept {
   name: string;
@@ -108,23 +124,13 @@ Voorbeeld output:
   }
 ]`;
 
-    const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `Analyseer deze tekst en extraheer alle begrippen:\n\n${combinedText}`,
-        },
-      ],
-      temperature: 0.3,
-      max_tokens: 4000,
-    });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error('Geen response van AI');
-    }
+    const content = await callChatAPI([
+      { role: 'system', content: systemPrompt },
+      {
+        role: 'user',
+        content: `Analyseer deze tekst en extraheer alle begrippen:\n\n${combinedText}`,
+      },
+    ], { temperature: 0.3, max_tokens: 4000 });
 
     let extractedConcepts: ExtractedConcept[];
     try {
