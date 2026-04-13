@@ -45,17 +45,11 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
 
   const loadCourseData = async (courseId: string) => {
     try {
-      const [courseRes, foldersRes] = await Promise.all([
-        supabase
-          .from("courses")
-          .select("id, name, description")
-          .eq("id", courseId)
-          .single(),
-        supabase
-          .from("course_folder_assignments")
-          .select("folder_id")
-          .eq("course_id", courseId),
-      ]);
+      const courseRes = await supabase
+        .from("courses")
+        .select("id, name, description")
+        .eq("id", courseId)
+        .single();
 
       if (courseRes.data) {
         setActiveCourseData({
@@ -65,14 +59,25 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
         });
       }
 
-      if (foldersRes.data && foldersRes.data.length > 0) {
-        const folderIds = foldersRes.data.map((a) => a.folder_id);
-        const { data: ragFolders } = await supabase
-          .from("document_folders")
-          .select("id")
-          .in("id", folderIds)
-          .eq("folder_type", "rag_sources");
-        setActiveCourseRagFolderIds(ragFolders?.map((f) => f.id) ?? []);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (token) {
+        try {
+          const response = await fetch(
+            `/api/course-rag-folder-ids?courseId=${encodeURIComponent(courseId)}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (response.ok) {
+            const json = await response.json();
+            setActiveCourseRagFolderIds(json.ragFolderIds ?? []);
+          } else {
+            console.error("[ACTIVE COURSE] course-rag-folder-ids error:", response.status);
+            setActiveCourseRagFolderIds([]);
+          }
+        } catch (fetchErr) {
+          console.error("[ACTIVE COURSE] course-rag-folder-ids fetch failed:", fetchErr);
+          setActiveCourseRagFolderIds([]);
+        }
       } else {
         setActiveCourseRagFolderIds([]);
       }

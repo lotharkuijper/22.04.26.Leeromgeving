@@ -160,6 +160,66 @@ app.get('/api/github/*path', async (req, res) => {
   }
 });
 
+app.get('/api/course-rag-folder-ids', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+
+  const { courseId } = req.query;
+  if (!courseId) {
+    return res.status(400).json({ error: 'courseId query parameter is required' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { data: assignments, error: assignError } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .select('folder_id')
+      .eq('course_id', courseId);
+
+    if (assignError) {
+      console.error('[course-rag-folder-ids] assignment query error:', assignError);
+      return res.status(500).json({ error: assignError.message });
+    }
+
+    if (!assignments || assignments.length === 0) {
+      return res.json({ ragFolderIds: [] });
+    }
+
+    const folderIds = assignments.map((a) => a.folder_id);
+
+    const { data: ragFolders, error: folderError } = await supabaseAdmin
+      .from('document_folders')
+      .select('id')
+      .in('id', folderIds)
+      .eq('folder_type', 'rag_sources');
+
+    if (folderError) {
+      console.error('[course-rag-folder-ids] folder query error:', folderError);
+      return res.status(500).json({ error: folderError.message });
+    }
+
+    return res.json({ ragFolderIds: ragFolders?.map((f) => f.id) ?? [] });
+  } catch (err) {
+    console.error('[course-rag-folder-ids] Unexpected error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.post('/api/admin/create-rag-folder', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
