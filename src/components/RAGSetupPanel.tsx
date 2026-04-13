@@ -101,7 +101,7 @@ export function RAGSetupPanel() {
   }
 
   const handleCreateRagFolder = async () => {
-    if (!activeCourseId || !profile?.id || !session?.access_token) return;
+    if (!activeCourseId || !session?.access_token) return;
     setCreatingFolder(true);
     setCreateError(null);
     try {
@@ -114,7 +114,6 @@ export function RAGSetupPanel() {
         body: JSON.stringify({
           courseId: activeCourseId,
           courseName: activeCourse.name,
-          userId: profile.id,
         }),
       });
 

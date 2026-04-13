@@ -170,9 +170,9 @@ app.post('/api/admin/create-rag-folder', async (req, res) => {
     return res.status(401).json({ error: 'Authorization header required' });
   }
 
-  const { courseId, courseName, userId } = req.body;
-  if (!courseId || !courseName || !userId) {
-    return res.status(400).json({ error: 'courseId, courseName, and userId are required' });
+  const { courseId, courseName } = req.body;
+  if (!courseId || !courseName) {
+    return res.status(400).json({ error: 'courseId and courseName are required' });
   }
 
   try {
@@ -218,7 +218,7 @@ app.post('/api/admin/create-rag-folder', async (req, res) => {
           name: `RAG - ${courseName}`,
           description: `RAG-bronnen voor cursus ${courseName}`,
           parent_folder_id: null,
-          created_by: userId,
+          created_by: user.id,
           folder_type: 'rag_sources',
           is_root: false,
         })
