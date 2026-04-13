@@ -518,11 +518,16 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
 
     const ragFolderIds = ragFolders.map((f) => f.id);
 
-    const { data: docs } = await supabaseAdmin
+    const { data: docs, error: docsError } = await supabaseAdmin
       .from('documents')
       .select('id')
       .in('folder_id', ragFolderIds)
       .eq('processing_status', 'completed');
+
+    if (docsError) {
+      console.error('[extract-concepts] docs query error:', docsError);
+      return res.status(500).json({ error: `Documenten ophalen mislukt: ${docsError.message}` });
+    }
 
     if (!docs || docs.length === 0) {
       return res.json({ concepts: [], message: 'Geen verwerkte documenten gevonden in RAG-mappen' });
@@ -530,11 +535,16 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
 
     const docIds = docs.map((d) => d.id);
 
-    const { data: chunks } = await supabaseAdmin
+    const { data: chunks, error: chunksError } = await supabaseAdmin
       .from('document_chunks')
       .select('content, document_id')
       .in('document_id', docIds)
       .limit(60);
+
+    if (chunksError) {
+      console.error('[extract-concepts] chunks query error:', chunksError);
+      return res.status(500).json({ error: `Chunks ophalen mislukt: ${chunksError.message}` });
+    }
 
     if (!chunks || chunks.length === 0) {
       return res.json({ concepts: [], message: 'Geen document-chunks gevonden' });

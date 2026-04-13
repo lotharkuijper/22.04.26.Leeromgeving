@@ -80,6 +80,20 @@ export function RAGSetupPanel() {
   const [activeSection, setActiveSection] = useState<ActiveSection>('upload');
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
+  const [processedDocCount, setProcessedDocCount] = useState(0);
+
+  useEffect(() => {
+    if (activeCourseRagFolderIds.length === 0) {
+      setProcessedDocCount(0);
+      return;
+    }
+    supabase
+      .from('documents')
+      .select('id', { count: 'exact', head: true })
+      .in('folder_id', activeCourseRagFolderIds)
+      .eq('processing_status', 'completed')
+      .then(({ count }) => setProcessedDocCount(count ?? 0));
+  }, [activeCourseRagFolderIds]);
 
   const ragFolderId = activeCourseRagFolderIds[0] ?? null;
 
@@ -267,6 +281,9 @@ export function RAGSetupPanel() {
             <h3 className="font-semibold text-gray-900 text-sm">Onderwerpen extraheren uit cursusmateriaal</h3>
             <p className="text-xs text-gray-600 mt-0.5 mb-3">
               Laat de AI automatisch sleutelbegrippen identificeren uit de geïmporteerde documenten en voeg ze toe aan de lijst in &quot;Ik leg uit&quot;.
+              {processedDocCount > 0
+                ? ` (${processedDocCount} verwerkt document${processedDocCount !== 1 ? 'en' : ''} beschikbaar)`
+                : ' — upload en verwerk eerst documenten.'}
             </p>
             {extractResult && (
               <div className={`mb-3 text-sm px-3 py-2 rounded-lg ${
@@ -282,9 +299,9 @@ export function RAGSetupPanel() {
             )}
             <button
               onClick={handleExtractConcepts}
-              disabled={extracting}
+              disabled={extracting || processedDocCount === 0}
               data-testid="button-extract-concepts"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
               {extracting ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /> Extraheren...</>
