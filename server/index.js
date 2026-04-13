@@ -319,6 +319,18 @@ app.get('/api/rag-enabled-folders', async (req, res) => {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
+    const { data: callerProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('role, email')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const isAdmin = callerProfile?.role === 'admin' || callerProfile?.email === SUPERUSER_EMAIL;
+
+    if (!isAdmin && !courseId) {
+      return res.status(403).json({ error: 'courseId is required for non-admin users' });
+    }
+
     let ragFolderIds = [];
 
     if (courseId) {
