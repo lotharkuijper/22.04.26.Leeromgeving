@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { getActiveFoldersForModule, getAccessibleFolders } from './permissions.service';
+import { getAccessibleFolders } from './permissions.service';
 import { generateEmbeddings } from './llm.service';
 import { STORAGE_CONFIG } from '../config/storage.config';
 

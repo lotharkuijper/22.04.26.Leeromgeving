@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   FolderPlus, Upload, Download, CheckCircle2, AlertTriangle,
-  Loader2, FileText, RefreshCw, X, FolderOpen, Info, Database,
+  Loader2, FileText, RefreshCw, X, FolderOpen, Info, Database, Sparkles,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -78,6 +78,8 @@ export function RAGSetupPanel() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<ActiveSection>('upload');
+  const [extracting, setExtracting] = useState(false);
+  const [extractResult, setExtractResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
 
   const ragFolderId = activeCourseRagFolderIds[0] ?? null;
 
@@ -127,6 +129,39 @@ export function RAGSetupPanel() {
       setCreateError(err instanceof Error ? err.message : 'Onbekende fout');
     } finally {
       setCreatingFolder(false);
+    }
+  };
+
+  const handleExtractConcepts = async () => {
+    if (!activeCourseId || !session?.access_token) return;
+    setExtracting(true);
+    setExtractResult(null);
+    try {
+      const response = await fetch('/api/admin/extract-concepts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: activeCourseId }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Server error ${response.status}`);
+      }
+      setExtractResult({
+        count: data.concepts?.length ?? 0,
+        skipped: data.skipped ?? 0,
+        message: data.message || '',
+      });
+    } catch (err) {
+      setExtractResult({
+        count: 0,
+        skipped: 0,
+        message: err instanceof Error ? err.message : 'Onbekende fout',
+      });
+    } finally {
+      setExtracting(false);
     }
   };
 
@@ -222,6 +257,42 @@ export function RAGSetupPanel() {
               courseName={activeCourse.name}
             />
           )}
+        </div>
+      </div>
+
+      <div className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+        <div className="flex items-start gap-3">
+          <Sparkles className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-semibold text-gray-900 text-sm">Onderwerpen extraheren uit cursusmateriaal</h3>
+            <p className="text-xs text-gray-600 mt-0.5 mb-3">
+              Laat de AI automatisch sleutelbegrippen identificeren uit de geïmporteerde documenten en voeg ze toe aan de lijst in &quot;Ik leg uit&quot;.
+            </p>
+            {extractResult && (
+              <div className={`mb-3 text-sm px-3 py-2 rounded-lg ${
+                extractResult.count > 0
+                  ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                  : 'bg-gray-100 border border-gray-200 text-gray-700'
+              }`}>
+                {extractResult.message}
+                {extractResult.skipped > 0 && (
+                  <span className="ml-1 text-gray-500">({extractResult.skipped} al aanwezig)</span>
+                )}
+              </div>
+            )}
+            <button
+              onClick={handleExtractConcepts}
+              disabled={extracting}
+              data-testid="button-extract-concepts"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 transition-colors"
+            >
+              {extracting ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Extraheren...</>
+              ) : (
+                <><Sparkles className="w-4 h-4" /> Onderwerpen extraheren</>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 

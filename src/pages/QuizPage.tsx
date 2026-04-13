@@ -4,6 +4,7 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { generateQuiz, type QuizQuestion } from '../services/llm.service';
 import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
+import { SourceList, type SourceItem } from '../components/SourceList';
 import {
   BookOpen,
   Play,
@@ -39,6 +40,7 @@ export function QuizPage() {
   const [showExplanation, setShowExplanation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
+  const [ragSources, setRagSources] = useState<SourceItem[]>([]);
 
   useEffect(() => {
     loadAttempts();
@@ -66,6 +68,7 @@ export function QuizPage() {
     }
 
     setLoading(true);
+    setRagSources([]);
     try {
       let ragContext: string | undefined;
       if (activeCourse !== null) {
@@ -80,6 +83,7 @@ export function QuizPage() {
           );
           if (chunks.length > 0) {
             ragContext = formatContextFromChunks(chunks);
+            setRagSources(chunks.map(c => ({ title: c.documentTitle, similarity: c.similarity })));
             console.log(`[QUIZ] Using RAG context: ${chunks.length} chunks from active course`);
           }
         } catch (ragErr) {
@@ -152,6 +156,7 @@ export function QuizPage() {
     setSelectedAnswers([]);
     setQuestions([]);
     setShowExplanation(false);
+    setRagSources([]);
   };
 
   const currentQ = questions[currentQuestion];
@@ -296,6 +301,12 @@ export function QuizPage() {
             <p className="text-gray-600 text-sm">
               {difficulty === 'easy' ? 'Makkelijk' : difficulty === 'medium' ? 'Gemiddeld' : 'Moeilijk'} niveau
             </p>
+            {ragSources.length > 0 && (
+              <p className="text-xs text-purple-700 mt-1 flex items-center gap-1">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500" />
+                Gebaseerd op {ragSources.length} bron{ragSources.length !== 1 ? 'nen' : ''} uit cursusmateriaal
+              </p>
+            )}
           </div>
           <div className="text-right">
             <div className="text-2xl font-bold text-gray-900">
@@ -517,6 +528,11 @@ export function QuizPage() {
               );
             })}
           </div>
+          {ragSources.length > 0 && (
+            <div className="mt-2">
+              <SourceList sources={ragSources} label="Quiz gebaseerd op cursusmateriaal" />
+            </div>
+          )}
         </div>
       </div>
     );

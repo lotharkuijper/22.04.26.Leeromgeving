@@ -4,7 +4,8 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation } from '../services/llm.service';
 import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
-import { BookOpen, Search, Send, CheckCircle, XCircle, AlertCircle, RefreshCw, LogOut, FileText } from 'lucide-react';
+import { BookOpen, Search, Send, CheckCircle, XCircle, AlertCircle, RefreshCw, LogOut } from 'lucide-react';
+import { SourceList } from '../components/SourceList';
 import type { Database } from '../lib/database.types';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
@@ -255,27 +256,33 @@ export function ExplainPage() {
                 Geen begrippen gevonden
               </p>
             )}
-            {filteredConcepts.map((concept) => (
-              <button
-                key={concept.id}
-                onClick={() => {
-                  setSelectedConcept(concept);
-                  setExplanation('');
-                  setFeedback(null);
-                }}
-                className={`w-full text-left p-3 rounded-lg transition-all ${
-                  selectedConcept?.id === concept.id
-                    ? 'bg-gradient-to-r from-blue-100 to-blue-200 text-blue-900 font-medium'
-                    : 'hover:bg-gray-100 text-gray-700'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 flex-shrink-0" />
-                  <span className="text-sm">{concept.name}</span>
-                </div>
-                <span className="text-xs text-gray-500 ml-6">{concept.category}</span>
-              </button>
-            ))}
+            {filteredConcepts.map((concept) => {
+              const isRagExtracted = concept.key_points?.includes('[RAG-geëxtraheerd uit cursusmateriaal]');
+              return (
+                <button
+                  key={concept.id}
+                  onClick={() => {
+                    setSelectedConcept(concept);
+                    setExplanation('');
+                    setFeedback(null);
+                  }}
+                  className={`w-full text-left p-3 rounded-lg transition-all ${
+                    selectedConcept?.id === concept.id
+                      ? 'bg-gradient-to-r from-blue-100 to-blue-200 text-blue-900 font-medium'
+                      : 'hover:bg-gray-100 text-gray-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm">{concept.name}</span>
+                    {isRagExtracted && (
+                      <span className="ml-auto text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium shrink-0">AI</span>
+                    )}
+                  </div>
+                  <span className="text-xs text-gray-500 ml-6">{concept.category}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -339,23 +346,7 @@ export function ExplainPage() {
                   <div className="prose max-w-none text-gray-700 whitespace-pre-wrap">
                     {feedback}
                   </div>
-                  {retrievedSources.length > 0 && (
-                    <div className="mt-6 pt-6 border-t border-gray-200">
-                      <div className="flex items-center gap-2 mb-3">
-                        <FileText className="w-4 h-4 text-blue-600" />
-                        <h4 className="text-sm font-semibold text-gray-900">Gebruikte bronnen uit cursusmateriaal</h4>
-                      </div>
-                      <div className="space-y-2">
-                        {retrievedSources.map((source, index) => (
-                          <div key={index} className="flex items-start gap-2 text-sm text-gray-700">
-                            <span className="font-medium text-blue-600">[{index + 1}]</span>
-                            <span className="flex-1 italic">{source.title}</span>
-                            <span className="text-gray-500 text-xs">({(source.similarity * 100).toFixed(0)}% relevant)</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  <SourceList sources={retrievedSources} />
                 </div>
               )}
             </>

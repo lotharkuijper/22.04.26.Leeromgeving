@@ -449,6 +449,209 @@ app.get('/api/folder-type', async (req, res) => {
   }
 });
 
+app.post('/api/admin/extract-concepts', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) {
+    return res.status(503).json({ error: 'GROQ_API_KEY not configured on server' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+
+  const { courseId } = req.body;
+  if (!courseId) {
+    return res.status(400).json({ error: 'courseId is required' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('role, email')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      return res.status(403).json({ error: 'Could not verify user role' });
+    }
+
+    const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Admin role required' });
+    }
+
+    const { data: assignments } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .select('folder_id')
+      .eq('course_id', courseId);
+
+    if (!assignments || assignments.length === 0) {
+      return res.json({ concepts: [], message: 'Geen RAG-mappen gevonden voor deze cursus' });
+    }
+
+    const assignedFolderIds = assignments.map((a) => a.folder_id);
+
+    const { data: ragFolders } = await supabaseAdmin
+      .from('document_folders')
+      .select('id')
+      .in('id', assignedFolderIds)
+      .eq('folder_type', 'rag_sources');
+
+    if (!ragFolders || ragFolders.length === 0) {
+      return res.json({ concepts: [], message: 'Geen RAG-bronmappen gevonden voor deze cursus' });
+    }
+
+    const ragFolderIds = ragFolders.map((f) => f.id);
+
+    const { data: docs } = await supabaseAdmin
+      .from('documents')
+      .select('id')
+      .in('folder_id', ragFolderIds)
+      .eq('processing_status', 'completed');
+
+    if (!docs || docs.length === 0) {
+      return res.json({ concepts: [], message: 'Geen verwerkte documenten gevonden in RAG-mappen' });
+    }
+
+    const docIds = docs.map((d) => d.id);
+
+    const { data: chunks } = await supabaseAdmin
+      .from('document_chunks')
+      .select('content, document_id')
+      .in('document_id', docIds)
+      .limit(60);
+
+    if (!chunks || chunks.length === 0) {
+      return res.json({ concepts: [], message: 'Geen document-chunks gevonden' });
+    }
+
+    const combinedText = chunks
+      .map((c) => c.content)
+      .join('\n\n---\n\n')
+      .slice(0, 12000);
+
+    const extractionPrompt = `Je bent een expert in epidemiologie en biostatistiek aan de VU Amsterdam.
+
+Analyseer de volgende tekst uit cursusmateriaal en extraheer maximaal 20 sleutelbegrippen die studenten moeten kennen. Elk begrip krijgt:
+- name: de exacte naam van het begrip (in het Nederlands)
+- category: precies "epidemiologie" of "biostatistiek"
+- definition: een korte definitie van 1-2 zinnen in het Nederlands
+
+Geef ALLEEN een JSON-array terug, geen extra tekst:
+[
+  {"name": "Begrip naam", "category": "epidemiologie", "definition": "Definitie hier."}
+]
+
+CURSUSMATERIAAL:
+${combinedText}`;
+
+    const llmResponse = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${groqKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: extractionPrompt }],
+        temperature: 0.3,
+        max_tokens: 3000,
+      }),
+    });
+
+    if (!llmResponse.ok) {
+      const errData = await llmResponse.json().catch(() => ({}));
+      console.error('[extract-concepts] LLM error:', errData);
+      return res.status(500).json({ error: 'LLM extractie mislukt', details: errData });
+    }
+
+    const llmData = await llmResponse.json();
+    const rawContent = llmData.choices?.[0]?.message?.content || '';
+
+    let extractedConcepts = [];
+    try {
+      const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        extractedConcepts = JSON.parse(jsonMatch[0]);
+      }
+    } catch (parseErr) {
+      console.error('[extract-concepts] JSON parse error:', parseErr, 'raw:', rawContent.slice(0, 200));
+      return res.status(500).json({ error: 'Kon LLM-respons niet verwerken als JSON' });
+    }
+
+    if (!Array.isArray(extractedConcepts) || extractedConcepts.length === 0) {
+      return res.json({ concepts: [], message: 'Geen begrippen gevonden in LLM-respons' });
+    }
+
+    const validCategories = ['epidemiologie', 'biostatistiek'];
+    const validConcepts = extractedConcepts.filter(
+      (c) => c.name && c.category && validCategories.includes(c.category) && c.definition
+    );
+
+    const { data: existingConcepts } = await supabaseAdmin
+      .from('concepts')
+      .select('name');
+
+    const existingNames = new Set((existingConcepts || []).map((c) => c.name.toLowerCase().trim()));
+
+    const newConcepts = validConcepts.filter(
+      (c) => !existingNames.has(c.name.toLowerCase().trim())
+    );
+
+    if (newConcepts.length === 0) {
+      return res.json({
+        concepts: [],
+        skipped: validConcepts.length,
+        message: 'Alle geëxtraheerde begrippen bestaan al in de database',
+      });
+    }
+
+    const toInsert = newConcepts.map((c) => ({
+      name: c.name.trim(),
+      category: c.category,
+      definition: c.definition.trim(),
+      key_points: ['[RAG-geëxtraheerd uit cursusmateriaal]'],
+      examples: [],
+    }));
+
+    const { data: inserted, error: insertError } = await supabaseAdmin
+      .from('concepts')
+      .insert(toInsert)
+      .select('id, name, category, definition');
+
+    if (insertError) {
+      console.error('[extract-concepts] Insert error:', insertError);
+      return res.status(500).json({ error: `Begrippen opslaan mislukt: ${insertError.message}` });
+    }
+
+    console.log(`[extract-concepts] Inserted ${inserted?.length ?? 0} new concepts for course ${courseId}`);
+
+    return res.json({
+      concepts: inserted || [],
+      skipped: validConcepts.length - (inserted?.length ?? 0),
+      message: `${inserted?.length ?? 0} nieuwe begrippen toegevoegd`,
+    });
+  } catch (err) {
+    console.error('[extract-concepts] Unexpected error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
