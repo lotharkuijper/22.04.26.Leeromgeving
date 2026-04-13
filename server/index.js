@@ -26,7 +26,6 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
-const HUGGINGFACE_EMBEDDINGS_URL = 'https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction';
 
 app.post('/api/chat', async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;
@@ -57,83 +56,47 @@ app.post('/api/chat', async (req, res) => {
 
 app.post('/api/embeddings', async (req, res) => {
   const openaiKey = process.env.OPENAI_API_KEY;
-  const hfKey = process.env.HUGGINGFACE_API_KEY;
 
-  if (!openaiKey && !hfKey) {
-    return res.status(503).json({ error: 'No embedding API key configured on server' });
+  if (!openaiKey) {
+    return res.status(503).json({ error: 'OPENAI_API_KEY not configured on server' });
   }
 
-  const { texts, provider } = req.body;
+  const { texts } = req.body;
   if (!texts || !Array.isArray(texts)) {
     return res.status(400).json({ error: 'texts array required' });
   }
 
-  if (hfKey && provider !== 'openai') {
-    try {
-      const results = [];
-      for (const text of texts) {
-        const response = await fetch(HUGGINGFACE_EMBEDDINGS_URL, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${hfKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ inputs: text }),
-        });
+  try {
+    const response = await fetch(OPENAI_EMBEDDINGS_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'text-embedding-3-small',
+        input: texts,
+      }),
+    });
 
-        if (!response.ok) {
-          throw new Error(`HuggingFace error: ${response.status}`);
-        }
-
-        const embedding = await response.json();
-        results.push(Array.isArray(embedding[0]) ? embedding[0] : embedding);
-      }
-      console.log(`[/api/embeddings] Generated ${results.length} embeddings via HuggingFace (dim=${results[0]?.length})`);
-      return res.json({ embeddings: results, provider: 'huggingface' });
-    } catch (hfErr) {
-      console.warn('[/api/embeddings] HuggingFace failed, trying OpenAI:', hfErr.message);
-      if (!openaiKey) {
-        return res.status(503).json({ error: hfErr.message });
-      }
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      console.error('[/api/embeddings] OpenAI error response:', response.status, JSON.stringify(errData));
+      return res.status(response.status).json({ error: errData.error?.message || errData.error || `OpenAI error ${response.status}` });
     }
-  }
 
-  if (openaiKey) {
-    try {
-      const response = await fetch(OPENAI_EMBEDDINGS_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'text-embedding-3-small',
-          input: texts,
-          dimensions: 384,
-        }),
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        console.error('[/api/embeddings] OpenAI error response:', response.status, JSON.stringify(errData));
-        return res.status(response.status).json({ error: errData.error?.message || errData.error || `OpenAI error ${response.status}` });
-      }
-
-      const data = await response.json();
-      if (!data.data || !Array.isArray(data.data)) {
-        console.error('[/api/embeddings] Unexpected OpenAI response shape:', JSON.stringify(data));
-        return res.status(500).json({ error: 'Unexpected response from OpenAI embeddings API' });
-      }
-      const embeddings = data.data.map((item) => item.embedding);
-      console.log(`[/api/embeddings] Generated ${embeddings.length} embeddings via OpenAI (dim=${embeddings[0]?.length})`);
-      return res.json({ embeddings, provider: 'openai' });
-    } catch (err) {
-      console.error('[/api/embeddings] OpenAI request failed:', err.message);
-      return res.status(500).json({ error: err.message });
+    const data = await response.json();
+    if (!data.data || !Array.isArray(data.data)) {
+      console.error('[/api/embeddings] Unexpected OpenAI response shape:', JSON.stringify(data));
+      return res.status(500).json({ error: 'Unexpected response from OpenAI embeddings API' });
     }
+    const embeddings = data.data.map((item) => item.embedding);
+    console.log(`[/api/embeddings] Generated ${embeddings.length} embeddings via OpenAI (dim=${embeddings[0]?.length})`);
+    return res.json({ embeddings, provider: 'openai' });
+  } catch (err) {
+    console.error('[/api/embeddings] OpenAI request failed:', err.message);
+    return res.status(500).json({ error: err.message });
   }
-
-  return res.status(503).json({ error: 'No embedding provider available' });
 });
 
 app.get('/api/github/*path', async (req, res) => {
@@ -338,7 +301,6 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     groq: !!process.env.GROQ_API_KEY,
     openai: !!process.env.OPENAI_API_KEY,
-    huggingface: !!process.env.HUGGINGFACE_API_KEY,
     github: !!process.env.GITHUB_TOKEN,
     supabase: !!process.env.SUPABASE_URL,
   });
