@@ -59,7 +59,8 @@ export async function searchRelevantChunks(
   matchThreshold: number = 0.7,
   matchCount: number = 5,
   moduleType?: 'general' | 'explain' | 'project' | 'quiz',
-  userRole: 'student' | 'docent' | 'admin' = 'admin'
+  userRole: 'student' | 'docent' | 'admin' = 'admin',
+  courseRagFolderIds?: string[]
 ): Promise<DocumentChunk[]> {
   const embedding = await generateEmbedding(query);
 
@@ -81,7 +82,16 @@ export async function searchRelevantChunks(
 
     console.log(`[RAG] Found ${docCount} RAG documents in database`);
 
-    const ragEnabledFolders = await getRAGEnabledFolders(moduleType);
+    let ragEnabledFolders = await getRAGEnabledFolders(moduleType);
+
+    if (courseRagFolderIds && courseRagFolderIds.length > 0) {
+      ragEnabledFolders = ragEnabledFolders.filter(id => courseRagFolderIds.includes(id));
+      if (ragEnabledFolders.length === 0) {
+        ragEnabledFolders = courseRagFolderIds;
+      }
+      console.log(`[RAG] Scoped to active course RAG folders: ${ragEnabledFolders.length}`);
+    }
+
     const accessibleFolderIds = await getAccessibleFolders(userRole);
 
     const allowedFolderIds = userRole === 'admin'

@@ -192,9 +192,14 @@ export interface QuizQuestion {
 export async function generateQuiz(
   topic: string,
   difficulty: 'easy' | 'medium' | 'hard',
-  numQuestions: number = 5
+  numQuestions: number = 5,
+  ragContext?: string
 ): Promise<QuizQuestion[]> {
-  const quizPrompt = `Genereer ${numQuestions} ${difficulty === 'easy' ? 'makkelijke' : difficulty === 'medium' ? 'gemiddelde' : 'moeilijke'} meerkeuzevragen over ${topic} in het domein van epidemiologie en biostatistiek.
+  const contextSection = ragContext
+    ? `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}\n`
+    : '';
+
+  const quizPrompt = `Genereer ${numQuestions} ${difficulty === 'easy' ? 'makkelijke' : difficulty === 'medium' ? 'gemiddelde' : 'moeilijke'} meerkeuzevragen over ${topic} in het domein van epidemiologie en biostatistiek.${contextSection}
 
 Voor elke vraag:
 - Maak een duidelijke, specifieke vraag

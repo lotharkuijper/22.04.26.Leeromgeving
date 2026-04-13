@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { generateQuiz, type QuizQuestion } from '../services/llm.service';
+import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
 import {
   BookOpen,
   Play,
@@ -26,6 +28,7 @@ interface QuizAttempt {
 
 export function QuizPage() {
   const { profile } = useAuth();
+  const { activeCourseRagFolderIds } = useActiveCourse();
   const [state, setState] = useState<QuizState>('setup');
   const [topic, setTopic] = useState('');
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
@@ -64,7 +67,27 @@ export function QuizPage() {
 
     setLoading(true);
     try {
-      const generatedQuestions = await generateQuiz(topic, difficulty, numQuestions);
+      let ragContext: string | undefined;
+      if (activeCourseRagFolderIds.length > 0) {
+        try {
+          const chunks = await searchRelevantChunks(
+            topic,
+            0.65,
+            5,
+            'quiz',
+            profile?.role || 'student',
+            activeCourseRagFolderIds
+          );
+          if (chunks.length > 0) {
+            ragContext = formatContextFromChunks(chunks);
+            console.log(`[QUIZ] Using RAG context: ${chunks.length} chunks from active course`);
+          }
+        } catch (ragErr) {
+          console.warn('[QUIZ] RAG search failed, generating without context:', ragErr);
+        }
+      }
+
+      const generatedQuestions = await generateQuiz(topic, difficulty, numQuestions, ragContext);
       setQuestions(generatedQuestions);
       setSelectedAnswers(new Array(generatedQuestions.length).fill(-1));
       setCurrentQuestion(0);

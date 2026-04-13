@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { sendChatMessage, type Message } from '../services/llm.service';
 import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
@@ -21,6 +22,7 @@ interface Conversation {
 
 export function ChatPage() {
   const { profile, signOut } = useAuth();
+  const { activeCourseRagFolderIds } = useActiveCourse();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -179,7 +181,8 @@ try {
     0.7,
     5,
     'general',
-    profile?.role || 'student'
+    profile?.role || 'student',
+    activeCourseRagFolderIds.length > 0 ? activeCourseRagFolderIds : undefined
   );
 
   if (chunks.length === 0) {

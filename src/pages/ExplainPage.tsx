@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation } from '../services/llm.service';
 import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
@@ -11,6 +12,7 @@ type Concept = Database['public']['Tables']['concepts']['Row'];
 
 export function ExplainPage() {
   const { profile, signOut } = useAuth();
+  const { activeCourseRagFolderIds } = useActiveCourse();
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [filteredConcepts, setFilteredConcepts] = useState<Concept[]>([]);
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null);
@@ -96,7 +98,8 @@ export function ExplainPage() {
         0.7,
         5,
         'explain',
-        profile?.role || 'student'
+        profile?.role || 'student',
+        activeCourseRagFolderIds.length > 0 ? activeCourseRagFolderIds : undefined
       );
 
       const sources = chunks.map(chunk => ({

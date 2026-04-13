@@ -26,16 +26,15 @@ export function ResourcesPage() {
   const [activeTab, setActiveTab] = useState<'datasets' | 'docs'>('datasets');
   const [searchQuery, setSearchQuery] = useState('');
   const [ragFiles, setRagFiles] = useState([]);
-  const { activeCourse } = useActiveCourse();
-
+  const { activeCourse, activeCourseRagFolderIds } = useActiveCourse();
 
   useEffect(() => {
     loadResources();
   }, []);
-  
-    useEffect(() => {
+
+  useEffect(() => {
     loadRagFiles();
-  }, [activeCourse]);
+  }, [activeCourseRagFolderIds]);
 
 
   const loadResources = async () => {
@@ -113,8 +112,8 @@ export function ResourcesPage() {
     }
   };
 
-    const loadRagFiles = async () => {
-    if (!activeCourse?.rag_folder_id) {
+  const loadRagFiles = async () => {
+    if (!activeCourseRagFolderIds || activeCourseRagFolderIds.length === 0) {
       setRagFiles([]);
       return;
     }
@@ -127,7 +126,7 @@ export function ResourcesPage() {
           name
         )
       `)
-      .eq("folder_id", activeCourse.rag_folder_id)
+      .in("folder_id", activeCourseRagFolderIds)
       .eq("processing_status", "completed")
       .order("created_at", { ascending: false });
 
