@@ -412,7 +412,7 @@ export function RAGSetupPanel() {
                   <><Sparkles className="w-4 h-4" /> Extraheren uit alle {processedDocs.length} document{processedDocs.length !== 1 ? 'en' : ''}</>
                 )}
               </button>
-              {selectedDocIds.size > 0 && selectedDocIds.size < processedDocs.length && (
+              {selectedDocIds.size > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {Array.from(selectedDocIds).map(id => {
                     const doc = processedDocs.find(d => d.id === id);
