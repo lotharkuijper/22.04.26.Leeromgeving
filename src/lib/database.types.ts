@@ -157,6 +157,7 @@ export type Database = {
           definition: string | null
           key_points: string[]
           examples: string[]
+          course_id: string | null
           created_at: string
           updated_at: string
         }
@@ -167,6 +168,7 @@ export type Database = {
           definition?: string | null
           key_points?: string[]
           examples?: string[]
+          course_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -177,6 +179,7 @@ export type Database = {
           definition?: string | null
           key_points?: string[]
           examples?: string[]
+          course_id?: string | null
           created_at?: string
           updated_at?: string
         }

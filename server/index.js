@@ -27,6 +27,19 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
+let conceptsHasCourseId = false;
+async function detectConceptsCourseIdColumn() {
+  if (!supabaseAdmin) return;
+  try {
+    const { error } = await supabaseAdmin.from('concepts').select('course_id').limit(1);
+    conceptsHasCourseId = !error || !error.message.includes('course_id');
+    console.log(`[API Server] concepts.course_id: ${conceptsHasCourseId ? 'beschikbaar' : 'niet gemigreerd — key_points fallback actief'}`);
+  } catch (e) {
+    conceptsHasCourseId = false;
+    console.warn('[API Server] Column detectie mislukt:', e.message);
+  }
+}
+
 app.post('/api/chat', async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -498,26 +511,39 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     }
 
     if (replace) {
-      const { data: taggedConcepts, error: taggedErr } = await supabaseAdmin
-        .from('concepts')
-        .select('id, key_points')
-        .contains('key_points', [courseMarker]);
-
-      if (taggedErr) {
-        console.error('[extract-concepts] Tagged concepts query error on replace:', taggedErr);
-        return res.status(500).json({ error: `Ophalen mislukt: ${taggedErr.message}` });
-      }
-
-      for (const concept of taggedConcepts || []) {
-        const updatedKeyPoints = (concept.key_points || []).filter(
-          (kp) => kp !== courseMarker && kp !== '[RAG-geëxtraheerd uit cursusmateriaal]'
-        );
-        await supabaseAdmin
+      if (conceptsHasCourseId) {
+        const { error: delErr } = await supabaseAdmin
           .from('concepts')
-          .update({ key_points: updatedKeyPoints })
-          .eq('id', concept.id);
+          .delete()
+          .eq('course_id', courseId)
+          .contains('key_points', ['[RAG-geëxtraheerd uit cursusmateriaal]']);
+        if (delErr) {
+          console.error('[extract-concepts] Delete (replace) error:', delErr);
+          return res.status(500).json({ error: `Verwijderen mislukt: ${delErr.message}` });
+        }
+        console.log(`[extract-concepts] Deleted extracted concepts for course ${courseId} (replace mode, course_id)`);
+      } else {
+        const { data: taggedConcepts, error: taggedErr } = await supabaseAdmin
+          .from('concepts')
+          .select('id, key_points')
+          .contains('key_points', [courseMarker]);
+
+        if (taggedErr) {
+          console.error('[extract-concepts] Tagged concepts query error on replace:', taggedErr);
+          return res.status(500).json({ error: `Ophalen mislukt: ${taggedErr.message}` });
+        }
+
+        for (const concept of taggedConcepts || []) {
+          const updatedKeyPoints = (concept.key_points || []).filter(
+            (kp) => kp !== courseMarker && kp !== '[RAG-geëxtraheerd uit cursusmateriaal]'
+          );
+          await supabaseAdmin
+            .from('concepts')
+            .update({ key_points: updatedKeyPoints })
+            .eq('id', concept.id);
+        }
+        console.log(`[extract-concepts] Untagged ${taggedConcepts?.length ?? 0} concepts (replace mode, key_points fallback)`);
       }
-      console.log(`[extract-concepts] Untagged ${taggedConcepts?.length ?? 0} concepts for course ${courseId} (replace mode)`);
     }
 
     const { data: assignments } = await supabaseAdmin
@@ -644,72 +670,124 @@ ${combinedText}`;
       (c) => c.name && c.category && validCategories.includes(c.category) && c.definition
     );
 
-    const { data: allExisting } = await supabaseAdmin
-      .from('concepts')
-      .select('id, name, key_points');
+    let inserted = [];
+    let updatedCount = 0;
+    let skipped = 0;
 
-    const existingByName = new Map(
-      (allExisting || []).map((c) => [c.name.toLowerCase().trim(), c])
-    );
+    if (conceptsHasCourseId) {
+      const { data: existingForCourse } = await supabaseAdmin
+        .from('concepts')
+        .select('id, name')
+        .eq('course_id', courseId);
 
-    const alreadyTaggedForCourse = new Set(
-      (allExisting || [])
-        .filter((c) => (c.key_points || []).includes(courseMarker))
-        .map((c) => c.name.toLowerCase().trim())
-    );
+      const alreadyByCourse = new Set(
+        (existingForCourse || []).map((c) => c.name.toLowerCase().trim())
+      );
 
-    const toInsert = [];
-    const toUpdate = [];
+      const { data: allGlobal } = await supabaseAdmin
+        .from('concepts')
+        .select('id, name')
+        .is('course_id', null);
 
-    for (const c of validConcepts) {
-      const key = c.name.toLowerCase().trim();
-      if (alreadyTaggedForCourse.has(key)) continue;
+      const globalByName = new Map(
+        (allGlobal || []).map((c) => [c.name.toLowerCase().trim(), c])
+      );
 
-      const existing = existingByName.get(key);
-      if (existing) {
-        const updatedKeyPoints = [...new Set([...(existing.key_points || []), courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'])];
-        toUpdate.push({ id: existing.id, key_points: updatedKeyPoints });
-      } else {
+      const toInsert = [];
+      for (const c of validConcepts) {
+        const key = c.name.toLowerCase().trim();
+        if (alreadyByCourse.has(key)) { skipped++; continue; }
+        if (globalByName.has(key)) {
+          skipped++;
+          continue;
+        }
         toInsert.push({
           name: c.name.trim(),
           category: c.category,
           definition: c.definition.trim(),
-          key_points: [courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'],
+          key_points: ['[RAG-geëxtraheerd uit cursusmateriaal]'],
           examples: [],
+          course_id: courseId,
         });
       }
-    }
 
-    for (const u of toUpdate) {
-      const { error: updErr } = await supabaseAdmin
-        .from('concepts')
-        .update({ key_points: u.key_points })
-        .eq('id', u.id);
-      if (updErr) console.error('[extract-concepts] Update error:', updErr);
-    }
-
-    let inserted = [];
-    if (toInsert.length > 0) {
-      const { data: ins, error: insertError } = await supabaseAdmin
-        .from('concepts')
-        .insert(toInsert)
-        .select('id, name, category, definition');
-
-      if (insertError) {
-        console.error('[extract-concepts] Insert error:', insertError);
-        return res.status(500).json({ error: `Begrippen opslaan mislukt: ${insertError.message}` });
+      if (toInsert.length > 0) {
+        const { data: ins, error: insertError } = await supabaseAdmin
+          .from('concepts')
+          .insert(toInsert)
+          .select('id, name, category, definition');
+        if (insertError) {
+          console.error('[extract-concepts] Insert error (course_id path):', insertError);
+          return res.status(500).json({ error: `Begrippen opslaan mislukt: ${insertError.message}` });
+        }
+        inserted = ins || [];
       }
-      inserted = ins || [];
+    } else {
+      const { data: allExisting } = await supabaseAdmin
+        .from('concepts')
+        .select('id, name, key_points');
+
+      const existingByName = new Map(
+        (allExisting || []).map((c) => [c.name.toLowerCase().trim(), c])
+      );
+
+      const alreadyTaggedForCourse = new Set(
+        (allExisting || [])
+          .filter((c) => (c.key_points || []).includes(courseMarker))
+          .map((c) => c.name.toLowerCase().trim())
+      );
+
+      const toInsert = [];
+      const toUpdate = [];
+
+      for (const c of validConcepts) {
+        const key = c.name.toLowerCase().trim();
+        if (alreadyTaggedForCourse.has(key)) { skipped++; continue; }
+
+        const existing = existingByName.get(key);
+        if (existing) {
+          const updatedKeyPoints = [...new Set([...(existing.key_points || []), courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'])];
+          toUpdate.push({ id: existing.id, key_points: updatedKeyPoints });
+        } else {
+          toInsert.push({
+            name: c.name.trim(),
+            category: c.category,
+            definition: c.definition.trim(),
+            key_points: [courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'],
+            examples: [],
+          });
+        }
+      }
+
+      for (const u of toUpdate) {
+        const { error: updErr } = await supabaseAdmin
+          .from('concepts')
+          .update({ key_points: u.key_points })
+          .eq('id', u.id);
+        if (updErr) console.error('[extract-concepts] Update error:', updErr);
+      }
+      updatedCount = toUpdate.length;
+
+      if (toInsert.length > 0) {
+        const { data: ins, error: insertError } = await supabaseAdmin
+          .from('concepts')
+          .insert(toInsert)
+          .select('id, name, category, definition');
+        if (insertError) {
+          console.error('[extract-concepts] Insert error (key_points path):', insertError);
+          return res.status(500).json({ error: `Begrippen opslaan mislukt: ${insertError.message}` });
+        }
+        inserted = ins || [];
+      }
     }
 
-    const totalAdded = inserted.length + toUpdate.length;
-    const skipped = validConcepts.length - toInsert.length - toUpdate.length;
+    const totalAdded = inserted.length + updatedCount;
 
-    console.log(`[extract-concepts] Done for course ${courseId}: ${inserted.length} new, ${toUpdate.length} updated, ${skipped} already tagged`);
+    console.log(`[extract-concepts] Done for course ${courseId}: ${inserted.length} new, ${updatedCount} updated, ${skipped} already tagged`);
 
     return res.json({
       concepts: inserted,
-      updated: toUpdate.length,
+      updated: updatedCount,
       skipped,
       message: `${totalAdded} begrippen toegevoegd/bijgewerkt voor deze cursus`,
     });
@@ -741,36 +819,81 @@ app.get('/api/concepts', async (req, res) => {
 
   try {
     if (courseId) {
-      const courseMarker = `course_id:${courseId}`;
-      const { data: courseConcepts, error } = await supabaseAdmin
-        .from('concepts')
-        .select('*')
-        .contains('key_points', [courseMarker])
-        .order('name');
+      if (conceptsHasCourseId) {
+        const { data: courseConcepts, error: courseErr } = await supabaseAdmin
+          .from('concepts')
+          .select('*')
+          .eq('course_id', courseId)
+          .order('name');
 
-      if (error) {
-        console.error('[concepts] query error:', error);
-        return res.status(500).json({ error: error.message });
+        if (courseErr) {
+          console.error('[concepts] course_id query error:', courseErr);
+          return res.status(500).json({ error: courseErr.message });
+        }
+
+        if (courseConcepts && courseConcepts.length > 0) {
+          return res.json({ concepts: courseConcepts, source: 'course' });
+        }
+
+        const { data: globalConcepts, error: globalErr } = await supabaseAdmin
+          .from('concepts')
+          .select('*')
+          .is('course_id', null)
+          .order('name');
+
+        if (globalErr) {
+          console.error('[concepts] global fallback query error:', globalErr);
+          return res.status(500).json({ error: globalErr.message });
+        }
+
+        return res.json({ concepts: globalConcepts || [], source: globalConcepts?.length ? 'global' : 'empty' });
+      } else {
+        const courseMarker = `course_id:${courseId}`;
+        const { data: courseConcepts, error: courseErr } = await supabaseAdmin
+          .from('concepts')
+          .select('*')
+          .contains('key_points', [courseMarker])
+          .order('name');
+
+        if (courseErr) {
+          console.error('[concepts] key_points query error:', courseErr);
+          return res.status(500).json({ error: courseErr.message });
+        }
+
+        if (courseConcepts && courseConcepts.length > 0) {
+          return res.json({ concepts: courseConcepts, source: 'course' });
+        }
+
+        const { data: globalConcepts, error: globalErr } = await supabaseAdmin
+          .from('concepts')
+          .select('*')
+          .not('key_points', 'cs', JSON.stringify(['course_id:']))
+          .order('name');
+
+        if (globalErr) {
+          console.error('[concepts] global fallback (key_points) query error:', globalErr);
+          return res.status(500).json({ error: globalErr.message });
+        }
+
+        const filtered = (globalConcepts || []).filter(
+          (c) => !(c.key_points || []).some((kp) => kp.startsWith('course_id:'))
+        );
+
+        return res.json({ concepts: filtered, source: filtered.length ? 'global' : 'empty' });
       }
-
-      if (courseConcepts && courseConcepts.length > 0) {
-        return res.json({ concepts: courseConcepts, source: 'course' });
-      }
-
-      return res.json({ concepts: [], source: 'empty' });
     }
 
-    const { data: globalConcepts, error } = await supabaseAdmin
+    const { data: allConcepts, error: allErr } = await supabaseAdmin
       .from('concepts')
       .select('*')
       .order('name');
 
-    if (error) {
-      console.error('[concepts] global query error:', error);
-      return res.status(500).json({ error: error.message });
+    if (allErr) {
+      console.error('[concepts] all query error:', allErr);
+      return res.status(500).json({ error: allErr.message });
     }
 
-    return res.json({ concepts: globalConcepts || [], source: 'global' });
+    return res.json({ concepts: allConcepts || [], source: 'global' });
   } catch (err) {
     console.error('[concepts] Unexpected error:', err);
     return res.status(500).json({ error: err.message });
@@ -789,4 +912,5 @@ app.get('/api/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[API Server] Running on port ${PORT}`);
+  detectConceptsCourseIdColumn();
 });
