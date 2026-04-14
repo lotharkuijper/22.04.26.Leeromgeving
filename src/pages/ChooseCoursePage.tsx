@@ -12,7 +12,6 @@ export default function ChooseCoursePage() {
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Load courses the user is enrolled in
   useEffect(() => {
     if (!user || authLoading) return;
 
@@ -20,9 +19,10 @@ export default function ChooseCoursePage() {
       setLoading(true);
 
       const { data, error } = await supabase
-        .from("course_enrollments")
-        .select("course_id, courses(*)")
-        .eq("student_id", user.id);
+        .from("courses")
+        .select("id, name, description")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
 
       if (error) {
         console.error("[COURSE SELECT] Error loading courses:", error);
@@ -31,8 +31,7 @@ export default function ChooseCoursePage() {
         return;
       }
 
-      const mapped = data.map((row) => row.courses);
-      setCourses(mapped);
+      setCourses(data ?? []);
       setLoading(false);
     };
 
@@ -41,10 +40,7 @@ export default function ChooseCoursePage() {
 
   const handleSelect = async (courseId: string) => {
     console.log("[COURSE SELECT] Switching to:", courseId);
-
     await setActiveCourse(courseId);
-
-    // Redirect to dashboard after switching
     navigate("/dashboard");
   };
 
@@ -53,7 +49,11 @@ export default function ChooseCoursePage() {
   }
 
   if (courses.length === 0) {
-    return <div style={{ padding: "2rem" }}>Je bent nog niet ingeschreven voor cursussen.</div>;
+    return (
+      <div style={{ padding: "2rem" }}>
+        Er zijn op dit moment geen actieve cursussen beschikbaar. Neem contact op met je docent.
+      </div>
+    );
   }
 
   return (
@@ -67,6 +67,7 @@ export default function ChooseCoursePage() {
         {courses.map((course) => (
           <button
             key={course.id}
+            data-testid={`btn-course-${course.id}`}
             onClick={() => handleSelect(course.id)}
             style={{
               padding: "1rem",
@@ -81,7 +82,9 @@ export default function ChooseCoursePage() {
             onMouseLeave={(e) => (e.currentTarget.style.background = "#f9f9f9")}
           >
             <strong style={{ fontSize: "1.1rem" }}>{course.name}</strong>
-            <div style={{ opacity: 0.7 }}>{course.description}</div>
+            {course.description && (
+              <div style={{ opacity: 0.7 }}>{course.description}</div>
+            )}
           </button>
         ))}
       </div>

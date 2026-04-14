@@ -25,10 +25,8 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
   const [loadingCourses, setLoadingCourses] = useState(true);
 
   useEffect(() => {
-    // Auth is still loading → don't reset yet
     if (user === undefined) return;
 
-    // No user → no courses
     if (!user) {
       setCourses([]);
       setLoadingCourses(false);
@@ -38,7 +36,7 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
     const loadCourses = async () => {
       setLoadingCourses(true);
 
-      const { data, error } = await supabase
+      const { data: memberData, error: memberError } = await supabase
         .from("course_members")
         .select(`
           role,
@@ -50,18 +48,38 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
         `)
         .eq("user_id", user.id);
 
-      if (error) {
-        console.error("[COURSES] Error loading courses:", error);
+      if (!memberError && memberData && memberData.length > 0) {
+        const mapped: Course[] = memberData.map((row: any) => ({
+          role: row.role,
+          id: row.courses.id,
+          name: row.courses.name,
+          folder_name: row.courses.folder_name,
+        }));
+        setCourses(mapped);
+        setLoadingCourses(false);
+        return;
+      }
+
+      if (memberError) {
+        console.error("[COURSES] Error loading course_members:", memberError);
+      }
+
+      const { data: allCourses, error: allError } = await supabase
+        .from("courses")
+        .select("id, name, folder_name")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+
+      if (allError) {
+        console.error("[COURSES] Error loading all courses:", allError);
         setCourses([]);
       } else {
-        const mapped: Course[] =
-          data?.map((row: any) => ({
-            role: row.role,
-            id: row.courses.id,
-            name: row.courses.name,
-            folder_name: row.courses.folder_name,
-          })) ?? [];
-
+        const mapped: Course[] = (allCourses ?? []).map((c: any) => ({
+          role: "student",
+          id: c.id,
+          name: c.name,
+          folder_name: c.folder_name ?? "",
+        }));
         setCourses(mapped);
       }
 
@@ -69,7 +87,7 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
     };
 
     loadCourses();
-  }, [user?.id]); // only reload when user changes
+  }, [user?.id]);
 
   return (
     <CourseAccessContext.Provider value={{ courses, loadingCourses }}>
