@@ -20,12 +20,12 @@ const CourseAccessContext = createContext<CourseAccessContextType>({
 });
 
 export function CourseAccessProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loadingCourses, setLoadingCourses] = useState(true);
 
   useEffect(() => {
-    if (user === undefined) return;
+    if (user === undefined || authLoading) return;
 
     if (!user) {
       setCourses([]);
@@ -48,7 +48,14 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
         `)
         .eq("user_id", user.id);
 
-      if (!memberError && memberData && memberData.length > 0) {
+      if (memberError) {
+        console.error("[COURSES] Error loading course_members:", memberError);
+        setCourses([]);
+        setLoadingCourses(false);
+        return;
+      }
+
+      if (memberData && memberData.length > 0) {
         const mapped: Course[] = memberData.map((row: any) => ({
           role: row.role,
           id: row.courses.id,
@@ -60,34 +67,35 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (memberError) {
-        console.error("[COURSES] Error loading course_members:", memberError);
-      }
+      const isStudent = !profile || profile.role === "student";
+      if (isStudent) {
+        const { data: allCourses, error: allError } = await supabase
+          .from("courses")
+          .select("id, name, folder_name")
+          .eq("is_active", true)
+          .order("name", { ascending: true });
 
-      const { data: allCourses, error: allError } = await supabase
-        .from("courses")
-        .select("id, name, folder_name")
-        .eq("is_active", true)
-        .order("name", { ascending: true });
-
-      if (allError) {
-        console.error("[COURSES] Error loading all courses:", allError);
-        setCourses([]);
+        if (allError) {
+          console.error("[COURSES] Error loading all courses (student fallback):", allError);
+          setCourses([]);
+        } else {
+          const mapped: Course[] = (allCourses ?? []).map((c: any) => ({
+            role: "student",
+            id: c.id,
+            name: c.name,
+            folder_name: c.folder_name ?? "",
+          }));
+          setCourses(mapped);
+        }
       } else {
-        const mapped: Course[] = (allCourses ?? []).map((c: any) => ({
-          role: "student",
-          id: c.id,
-          name: c.name,
-          folder_name: c.folder_name ?? "",
-        }));
-        setCourses(mapped);
+        setCourses([]);
       }
 
       setLoadingCourses(false);
     };
 
     loadCourses();
-  }, [user?.id]);
+  }, [user?.id, profile?.role, authLoading]);
 
   return (
     <CourseAccessContext.Provider value={{ courses, loadingCourses }}>
