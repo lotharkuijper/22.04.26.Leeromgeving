@@ -684,23 +684,10 @@ ${combinedText}`;
         (existingForCourse || []).map((c) => c.name.toLowerCase().trim())
       );
 
-      const { data: allGlobal } = await supabaseAdmin
-        .from('concepts')
-        .select('id, name')
-        .is('course_id', null);
-
-      const globalByName = new Map(
-        (allGlobal || []).map((c) => [c.name.toLowerCase().trim(), c])
-      );
-
       const toInsert = [];
       for (const c of validConcepts) {
         const key = c.name.toLowerCase().trim();
         if (alreadyByCourse.has(key)) { skipped++; continue; }
-        if (globalByName.has(key)) {
-          skipped++;
-          continue;
-        }
         toInsert.push({
           name: c.name.trim(),
           category: c.category,
