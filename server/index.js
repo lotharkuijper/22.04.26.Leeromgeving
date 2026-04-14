@@ -477,10 +477,11 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     return res.status(401).json({ error: 'Authorization header required' });
   }
 
-  const { courseId, replace = false } = req.body;
+  const { courseId, replace = false, documentIds } = req.body;
   if (!courseId) {
     return res.status(400).json({ error: 'courseId is required' });
   }
+  const filterDocIds = Array.isArray(documentIds) && documentIds.length > 0 ? documentIds : null;
 
   const courseMarker = `course_id:${courseId}`;
 
@@ -600,7 +601,14 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       return res.json({ concepts: [], message: 'Geen verwerkte documenten gevonden in RAG-mappen' });
     }
 
-    const docIds = docs.map((d) => d.id);
+    let docIds = docs.map((d) => d.id);
+    if (filterDocIds) {
+      const allowed = new Set(filterDocIds);
+      docIds = docIds.filter((id) => allowed.has(id));
+      if (docIds.length === 0) {
+        return res.json({ concepts: [], message: 'Geen geselecteerde documenten gevonden in de RAG-mappen' });
+      }
+    }
 
     const { data: chunks, error: chunksError } = await supabaseAdmin
       .from('document_chunks')

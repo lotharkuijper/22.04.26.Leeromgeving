@@ -11,6 +11,11 @@ import { RAGDocumentStatusPanel } from './RAGDocumentStatusPanel';
 
 const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.pptx', '.txt'];
 
+interface ProcessedDocument {
+  id: string;
+  filename: string;
+}
+
 interface StorageFile {
   name: string;
   storagePath: string;
@@ -80,21 +85,27 @@ export function RAGSetupPanel() {
   const [activeSection, setActiveSection] = useState<ActiveSection>('upload');
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
-  const [processedDocCount, setProcessedDocCount] = useState(0);
+  const [processedDocs, setProcessedDocs] = useState<ProcessedDocument[]>([]);
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const [existingConceptCount, setExistingConceptCount] = useState(0);
   const [replaceMode, setReplaceMode] = useState(false);
 
   useEffect(() => {
     if (activeCourseRagFolderIds.length === 0) {
-      setProcessedDocCount(0);
+      setProcessedDocs([]);
+      setSelectedDocIds(new Set());
       return;
     }
     supabase
       .from('documents')
-      .select('id', { count: 'exact', head: true })
+      .select('id, filename')
       .in('folder_id', activeCourseRagFolderIds)
       .eq('processing_status', 'completed')
-      .then(({ count }) => setProcessedDocCount(count ?? 0));
+      .then(({ data }) => {
+        const docs: ProcessedDocument[] = (data || []).map(d => ({ id: d.id, filename: d.filename }));
+        setProcessedDocs(docs);
+        setSelectedDocIds(new Set(docs.map(d => d.id)));
+      });
   }, [activeCourseRagFolderIds]);
 
   useEffect(() => {
@@ -175,7 +186,11 @@ export function RAGSetupPanel() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ courseId: activeCourseId, replace: replaceMode }),
+        body: JSON.stringify({
+          courseId: activeCourseId,
+          replace: replaceMode,
+          documentIds: selectedDocIds.size < processedDocs.length ? Array.from(selectedDocIds) : [],
+        }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -301,10 +316,89 @@ export function RAGSetupPanel() {
               Laat de AI automatisch vaktermen identificeren uit de geïmporteerde documenten — ook als ze impliciet in de tekst voorkomen — en voeg ze toe aan de lijst in &quot;Ik leg uit&quot;.
             </p>
             <div className="flex flex-wrap gap-3 text-xs text-gray-500 mb-3">
-              <span>{processedDocCount} verwerkt document{processedDocCount !== 1 ? 'en' : ''}</span>
+              <span>{processedDocs.length} verwerkt document{processedDocs.length !== 1 ? 'en' : ''}</span>
               <span>·</span>
               <span>{existingConceptCount} bestaande begrippen voor deze cursus</span>
             </div>
+
+            {processedDocs.length > 0 && (
+              <div className="mb-3 border border-gray-200 rounded-lg overflow-hidden bg-white">
+                <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
+                  <span className="text-xs font-medium text-gray-700">Selecteer documenten voor extractie</span>
+                  {processedDocs.length > 3 && (
+                    <button
+                      onClick={() => {
+                        if (selectedDocIds.size === processedDocs.length) {
+                          setSelectedDocIds(new Set());
+                        } else {
+                          setSelectedDocIds(new Set(processedDocs.map(d => d.id)));
+                        }
+                      }}
+                      className="text-xs text-blue-600 hover:underline"
+                      data-testid="button-toggle-all-docs"
+                    >
+                      {selectedDocIds.size === processedDocs.length ? 'Niets selecteren' : 'Alles selecteren'}
+                    </button>
+                  )}
+                </div>
+                <div className="divide-y divide-gray-100 max-h-40 overflow-y-auto">
+                  {processedDocs.map(doc => (
+                    <label
+                      key={doc.id}
+                      className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors"
+                      data-testid={`label-doc-${doc.id}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedDocIds.has(doc.id)}
+                        onChange={e => {
+                          setSelectedDocIds(prev => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(doc.id);
+                            else next.delete(doc.id);
+                            return next;
+                          });
+                        }}
+                        className="w-4 h-4 rounded accent-purple-600 flex-shrink-0"
+                        data-testid={`checkbox-doc-${doc.id}`}
+                      />
+                      <span className="text-xs text-gray-700 truncate">{doc.filename}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedDocIds.size > 0 && selectedDocIds.size < processedDocs.length && (
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                {Array.from(selectedDocIds).map(id => {
+                  const doc = processedDocs.find(d => d.id === id);
+                  if (!doc) return null;
+                  return (
+                    <span
+                      key={id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full border border-purple-200"
+                      data-testid={`chip-doc-${id}`}
+                    >
+                      <span className="max-w-[140px] truncate">{doc.filename}</span>
+                      <button
+                        onClick={() => setSelectedDocIds(prev => {
+                          const next = new Set(prev);
+                          next.delete(id);
+                          return next;
+                        })}
+                        className="ml-0.5 text-purple-600 hover:text-purple-900 flex-shrink-0"
+                        data-testid={`chip-remove-doc-${id}`}
+                        aria-label={`${doc.filename} deselecteren`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
             {extractResult && (
               <div className={`mb-3 text-sm px-3 py-2 rounded-lg ${
                 extractResult.count > 0
@@ -330,14 +424,16 @@ export function RAGSetupPanel() {
               </label>
               <button
                 onClick={handleExtractConcepts}
-                disabled={extracting || processedDocCount === 0}
+                disabled={extracting || processedDocs.length === 0 || selectedDocIds.size === 0}
                 data-testid="button-extract-concepts"
                 className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors self-start"
               >
                 {extracting ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> Extraheren...</>
+                ) : selectedDocIds.size < processedDocs.length ? (
+                  <><Sparkles className="w-4 h-4" /> Extraheren uit {selectedDocIds.size} geselecteerde document{selectedDocIds.size !== 1 ? 'en' : ''}</>
                 ) : (
-                  <><Sparkles className="w-4 h-4" /> {existingConceptCount > 0 && replaceMode ? 'Opnieuw extraheren' : 'Onderwerpen extraheren'}</>
+                  <><Sparkles className="w-4 h-4" /> {existingConceptCount > 0 && replaceMode ? 'Opnieuw extraheren' : `Extraheren uit alle ${processedDocs.length} document${processedDocs.length !== 1 ? 'en' : ''}`}</>
                 )}
               </button>
             </div>
