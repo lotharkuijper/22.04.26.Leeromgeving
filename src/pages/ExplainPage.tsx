@@ -274,12 +274,12 @@ export function ExplainPage() {
                 </p>
               </div>
             )}
-            {!conceptsLoading && conceptSource === 'course' && filteredConcepts.length === 0 && (
+            {!conceptsLoading && (conceptSource === 'course' || (conceptSource === 'global' && !activeCourse)) && filteredConcepts.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-4">
                 Geen begrippen gevonden
               </p>
             )}
-            {conceptSource === 'course' && filteredConcepts.map((concept) => {
+            {(conceptSource === 'course' || (conceptSource === 'global' && !activeCourse)) && filteredConcepts.map((concept) => {
               const isRagExtracted = concept.key_points?.includes('[RAG-geëxtraheerd uit cursusmateriaal]');
               return (
                 <button

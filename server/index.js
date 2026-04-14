@@ -870,7 +870,6 @@ app.get('/api/concepts', async (req, res) => {
         const { data: globalConcepts, error: globalErr } = await supabaseAdmin
           .from('concepts')
           .select('*')
-          .not('key_points', 'cs', JSON.stringify(['course_id:']))
           .order('name');
 
         if (globalErr) {
