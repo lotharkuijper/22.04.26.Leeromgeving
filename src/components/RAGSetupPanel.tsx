@@ -342,60 +342,36 @@ export function RAGSetupPanel() {
                   )}
                 </div>
                 <div className="divide-y divide-gray-100 max-h-40 overflow-y-auto">
-                  {processedDocs.map(doc => (
-                    <label
-                      key={doc.id}
-                      className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors"
-                      data-testid={`label-doc-${doc.id}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedDocIds.has(doc.id)}
-                        onChange={e => {
-                          setSelectedDocIds(prev => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(doc.id);
-                            else next.delete(doc.id);
-                            return next;
-                          });
-                        }}
-                        className="w-4 h-4 rounded accent-purple-600 flex-shrink-0"
-                        data-testid={`checkbox-doc-${doc.id}`}
-                      />
-                      <span className="text-xs text-gray-700 truncate">{doc.filename}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {selectedDocIds.size > 0 && selectedDocIds.size < processedDocs.length && (
-              <div className="flex flex-wrap gap-1.5 mb-3">
-                {Array.from(selectedDocIds).map(id => {
-                  const doc = processedDocs.find(d => d.id === id);
-                  if (!doc) return null;
-                  return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full border border-purple-200"
-                      data-testid={`chip-doc-${id}`}
-                    >
-                      <span className="max-w-[140px] truncate">{doc.filename}</span>
-                      <button
-                        onClick={() => setSelectedDocIds(prev => {
-                          const next = new Set(prev);
-                          next.delete(id);
-                          return next;
-                        })}
-                        className="ml-0.5 text-purple-600 hover:text-purple-900 flex-shrink-0"
-                        data-testid={`chip-remove-doc-${id}`}
-                        aria-label={`${doc.filename} deselecteren`}
+                  {processedDocs.map(doc => {
+                    const ext = doc.filename.split('.').pop()?.toUpperCase() ?? '';
+                    return (
+                      <label
+                        key={doc.id}
+                        className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors"
+                        data-testid={`label-doc-${doc.id}`}
                       >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  );
-                })}
+                        <input
+                          type="checkbox"
+                          checked={selectedDocIds.has(doc.id)}
+                          onChange={e => {
+                            setSelectedDocIds(prev => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(doc.id);
+                              else next.delete(doc.id);
+                              return next;
+                            });
+                          }}
+                          className="w-4 h-4 rounded accent-purple-600 flex-shrink-0"
+                          data-testid={`checkbox-doc-${doc.id}`}
+                        />
+                        <span className="text-xs text-gray-700 truncate flex-1">{doc.filename}</span>
+                        {ext && (
+                          <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded font-mono flex-shrink-0">{ext}</span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -424,18 +400,47 @@ export function RAGSetupPanel() {
               </label>
               <button
                 onClick={handleExtractConcepts}
-                disabled={extracting || processedDocs.length === 0 || selectedDocIds.size === 0}
+                disabled={extracting || processedDocs.length === 0}
                 data-testid="button-extract-concepts"
                 className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors self-start"
               >
                 {extracting ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> Extraheren...</>
-                ) : selectedDocIds.size < processedDocs.length ? (
+                ) : selectedDocIds.size > 0 && selectedDocIds.size < processedDocs.length ? (
                   <><Sparkles className="w-4 h-4" /> Extraheren uit {selectedDocIds.size} geselecteerde document{selectedDocIds.size !== 1 ? 'en' : ''}</>
                 ) : (
-                  <><Sparkles className="w-4 h-4" /> {existingConceptCount > 0 && replaceMode ? 'Opnieuw extraheren' : `Extraheren uit alle ${processedDocs.length} document${processedDocs.length !== 1 ? 'en' : ''}`}</>
+                  <><Sparkles className="w-4 h-4" /> Extraheren uit alle {processedDocs.length} document{processedDocs.length !== 1 ? 'en' : ''}</>
                 )}
               </button>
+              {selectedDocIds.size > 0 && selectedDocIds.size < processedDocs.length && (
+                <div className="flex flex-wrap gap-1.5">
+                  {Array.from(selectedDocIds).map(id => {
+                    const doc = processedDocs.find(d => d.id === id);
+                    if (!doc) return null;
+                    return (
+                      <span
+                        key={id}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full border border-purple-200"
+                        data-testid={`chip-doc-${id}`}
+                      >
+                        <span className="max-w-[140px] truncate">{doc.filename}</span>
+                        <button
+                          onClick={() => setSelectedDocIds(prev => {
+                            const next = new Set(prev);
+                            next.delete(id);
+                            return next;
+                          })}
+                          className="ml-0.5 text-purple-600 hover:text-purple-900 flex-shrink-0"
+                          data-testid={`chip-remove-doc-${id}`}
+                          aria-label={`${doc.filename} deselecteren`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
