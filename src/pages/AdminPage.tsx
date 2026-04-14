@@ -132,7 +132,7 @@ export function AdminPage() {
     if (activeTab === 'documents') loadDocuments();
     if (activeTab === 'concepts') loadConcepts();
     if (activeTab === 'prompts') loadPrompts();
-  }, [activeTab]);
+  }, [activeTab, activeCourseId]);
 
   const loadUsers = async () => {
     const { data, error } = await supabase
