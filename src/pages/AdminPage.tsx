@@ -2,15 +2,15 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home } from 'lucide-react';
+import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
 import { retryFailedDocument, UploadProgress } from '../services/document-upload.service';
-import { ConceptReviewPanel } from '../components/ConceptReviewPanel';
 import { QuizValidationPanel } from '../components/QuizValidationPanel';
 import { RAGSetupPanel } from '../components/RAGSetupPanel';
 import { ShareStatsImportPanel } from '../components/ShareStatsImportPanel';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 
 import FileManager from '../pages/FileManager';
 
@@ -27,16 +27,32 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'concept_review' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'settings';
+type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'settings';
+
+interface ConceptWithSource extends Concept {
+  _source?: 'course' | 'global';
+}
 
 export function AdminPage() {
-  const { profile, isAdmin, isDocent } = useAuth();
+  const { profile, isAdmin, isDocent, session } = useAuth();
+  const { activeCourseId, activeCourse } = useActiveCourse();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>(isAdmin ? 'users' : 'documents');
   const [users, setUsers] = useState<Profile[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [concepts, setConcepts] = useState<Concept[]>([]);
+  const [concepts, setConcepts] = useState<ConceptWithSource[]>([]);
+  const [conceptsSource, setConceptsSource] = useState<'course' | 'global' | 'empty' | null>(null);
   const [prompts, setPrompts] = useState<ChatbotPrompt[]>([]);
+  const [deletingConceptId, setDeletingConceptId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [addConceptForm, setAddConceptForm] = useState(false);
+  const [addConceptName, setAddConceptName] = useState('');
+  const [addConceptCategory, setAddConceptCategory] = useState<'epidemiologie' | 'biostatistiek'>('epidemiologie');
+  const [addConceptDefinition, setAddConceptDefinition] = useState('');
+  const [addConceptLoading, setAddConceptLoading] = useState(false);
+  const [addConceptError, setAddConceptError] = useState<string | null>(null);
+  const [addConceptSuccess, setAddConceptSuccess] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<ChatbotPrompt | null>(null);
   const [promptContent, setPromptContent] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -82,17 +98,24 @@ export function AdminPage() {
   };
 
   const loadConcepts = async () => {
-    const { data, error } = await supabase
-      .from('concepts')
-      .select('*')
-      .order('name');
-
-    if (error) {
-      console.error('Error loading concepts:', error);
-      return;
+    if (!session?.access_token) return;
+    try {
+      const url = activeCourseId
+        ? `/api/concepts?courseId=${encodeURIComponent(activeCourseId)}`
+        : '/api/concepts';
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) {
+        console.error('Error loading concepts:', await res.text());
+        return;
+      }
+      const data = await res.json();
+      setConcepts((data.concepts || []).map((c: Concept) => ({ ...c, _source: data.source })));
+      setConceptsSource(data.source ?? null);
+    } catch (err) {
+      console.error('Error loading concepts:', err);
     }
-
-    setConcepts(data || []);
   };
 
   const loadPrompts = async () => {
@@ -207,25 +230,60 @@ export function AdminPage() {
   };
 
   const handleAddConcept = async () => {
-    const name = prompt('Naam van het begrip:');
-    if (!name) return;
+    if (!addConceptName.trim()) {
+      setAddConceptError('Naam is verplicht');
+      return;
+    }
+    setAddConceptLoading(true);
+    setAddConceptError(null);
+    setAddConceptSuccess(false);
 
-    const category = confirm('Is dit begrip uit epidemiologie? (Cancel voor biostatistiek)')
-      ? 'epidemiologie'
-      : 'biostatistiek';
-
-    const definition = prompt('Definitie (optioneel):');
+    const insertData: Record<string, any> = {
+      name: addConceptName.trim(),
+      category: addConceptCategory,
+      definition: addConceptDefinition.trim() || null,
+    };
+    if (activeCourseId) {
+      insertData.key_points = [`course_id:${activeCourseId}`];
+    }
 
     const { error } = await supabase
       .from('concepts')
-      .insert({ name, category, definition });
+      .insert(insertData);
 
     if (error) {
       console.error('Error adding concept:', error);
-      alert('Er is een fout opgetreden');
+      setAddConceptError('Fout bij toevoegen: ' + error.message);
     } else {
-      alert('Begrip toegevoegd');
-      loadConcepts();
+      setAddConceptSuccess(true);
+      setAddConceptName('');
+      setAddConceptDefinition('');
+      setAddConceptCategory('epidemiologie');
+      await loadConcepts();
+      setTimeout(() => setAddConceptSuccess(false), 3000);
+    }
+    setAddConceptLoading(false);
+  };
+
+  const handleDeleteConcept = async (conceptId: string) => {
+    if (!session?.access_token) return;
+    setDeletingConceptId(conceptId);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/admin/concepts/${conceptId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Fout ${res.status}`);
+      }
+      setDeleteConfirmId(null);
+      await loadConcepts();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Onbekende fout');
+    } finally {
+      setDeletingConceptId(null);
     }
   };
 
@@ -289,7 +347,6 @@ const tabs = [
   { id: 'documents' as TabType, label: 'Documenten', icon: FolderTree, show: true },
   { id: 'rag_beheer' as TabType, label: 'RAG Beheer', icon: RefreshCw, show: true },
   { id: 'concepts' as TabType, label: 'Begrippen', icon: BookOpen, show: true },
-  { id: 'concept_review' as TabType, label: 'Begrippen Review', icon: Eye, show: true },
   { id: 'quiz_validation' as TabType, label: 'Quiz Validatie', icon: ClipboardCheck, show: true },
   { id: 'sharestats_import' as TabType, label: 'ShareStats Import', icon: Download, show: true },
   { id: 'prompts' as TabType, label: 'Chatbot Prompts', icon: MessageSquareText, show: isAdmin },
@@ -451,19 +508,103 @@ const tabs = [
           {activeTab === 'concepts' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <p className="text-gray-600">Beheer begrippen voor de "Ik Leg Uit" module</p>
+                <div>
+                  <p className="text-gray-600">Beheer begrippen voor de "Ik Leg Uit" module</p>
+                  {activeCourse && (
+                    <p className="text-sm text-blue-600 mt-1 flex items-center gap-1">
+                      <GraduationCap className="w-4 h-4" />
+                      Gefilterd op: <strong>{activeCourse.name}</strong>
+                      {conceptsSource === 'global' && <span className="text-amber-600 ml-1">(geen cursus-begrippen — globale weergave)</span>}
+                    </p>
+                  )}
+                  {!activeCourse && (
+                    <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
+                      <Globe className="w-4 h-4" />
+                      Alle begrippen (geen actieve cursus)
+                    </p>
+                  )}
+                </div>
                 <button
-                  onClick={handleAddConcept}
+                  onClick={() => { setAddConceptForm(v => !v); setAddConceptError(null); setAddConceptSuccess(false); }}
                   className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg flex items-center gap-2"
+                  data-testid="button-toggle-add-concept"
                 >
-                  <BookOpen className="w-4 h-4" />
-                  Handmatig Begrip Toevoegen
+                  <Plus className="w-4 h-4" />
+                  Begrip toevoegen
                 </button>
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              {addConceptForm && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                  <h3 className="font-semibold text-gray-900">Nieuw begrip toevoegen</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Naam *</label>
+                      <input
+                        type="text"
+                        value={addConceptName}
+                        onChange={e => setAddConceptName(e.target.value)}
+                        placeholder="Bijv. Relatief risico"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                        data-testid="input-concept-name"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Categorie</label>
+                      <select
+                        value={addConceptCategory}
+                        onChange={e => setAddConceptCategory(e.target.value as 'epidemiologie' | 'biostatistiek')}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                        data-testid="select-concept-category"
+                      >
+                        <option value="epidemiologie">Epidemiologie</option>
+                        <option value="biostatistiek">Biostatistiek</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Definitie (optioneel)</label>
+                    <textarea
+                      value={addConceptDefinition}
+                      onChange={e => setAddConceptDefinition(e.target.value)}
+                      placeholder="Korte definitie van het begrip..."
+                      rows={2}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                      data-testid="input-concept-definition"
+                    />
+                  </div>
+                  {addConceptError && (
+                    <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{addConceptError}</p>
+                  )}
+                  {addConceptSuccess && (
+                    <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">Begrip succesvol toegevoegd.</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleAddConcept}
+                      disabled={addConceptLoading}
+                      className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 text-sm"
+                      data-testid="button-save-concept"
+                    >
+                      {addConceptLoading ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Opslaan'}
+                    </button>
+                    <button
+                      onClick={() => { setAddConceptForm(false); setAddConceptError(null); }}
+                      className="px-4 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all text-sm"
+                    >
+                      Annuleren
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {deleteError && (
+                <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{deleteError}</p>
+              )}
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <p className="text-sm text-gray-700">
-                  💡 <strong>Tip:</strong> Ga naar de "Begrippen Review" tab om begrippen automatisch te extracteren uit geüploade documenten.
+                  <strong>Tip:</strong> Gebruik de "RAG Beheer" tab om begrippen automatisch te extracteren uit cursusmateriaal.
                 </p>
               </div>
 
@@ -471,27 +612,78 @@ const tabs = [
                 {concepts.length === 0 && (
                   <div className="col-span-2 text-center py-12 text-gray-500">
                     <BookOpen className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-                    <p>Nog geen begrippen toegevoegd</p>
+                    <p>{activeCourse ? `Geen begrippen gevonden voor ${activeCourse.name}` : 'Nog geen begrippen toegevoegd'}</p>
                   </div>
                 )}
-                {concepts.map(concept => (
-                  <div key={concept.id} className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50">
-                    <div className="flex items-start justify-between mb-2">
-                      <h3 className="font-semibold text-gray-900">{concept.name}</h3>
-                      <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold">
-                        {concept.category}
-                      </span>
+                {concepts.map(concept => {
+                  const isRagExtracted = (concept.key_points || []).includes('[RAG-geëxtraheerd uit cursusmateriaal]');
+                  const isCourseTagged = activeCourseId && (
+                    (concept as any).course_id === activeCourseId ||
+                    (concept.key_points || []).includes(`course_id:${activeCourseId}`)
+                  );
+                  const sourceLabel = isRagExtracted && isCourseTagged
+                    ? 'Cursus — AI'
+                    : isCourseTagged
+                    ? 'Cursus'
+                    : 'Globaal';
+                  const sourceBg = sourceLabel === 'Globaal'
+                    ? 'bg-gray-100 text-gray-600'
+                    : sourceLabel === 'Cursus — AI'
+                    ? 'bg-purple-100 text-purple-700'
+                    : 'bg-blue-100 text-blue-700';
+
+                  return (
+                    <div key={concept.id} className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50" data-testid={`card-concept-${concept.id}`}>
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-semibold text-gray-900">{concept.name}</h3>
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
+                            {concept.category}
+                          </span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceBg}`}>
+                            {sourceLabel}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                          {deleteConfirmId === concept.id ? (
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-red-600">Verwijderen?</span>
+                              <button
+                                onClick={() => handleDeleteConcept(concept.id)}
+                                disabled={deletingConceptId === concept.id}
+                                className="px-2 py-0.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                                data-testid={`button-confirm-delete-${concept.id}`}
+                              >
+                                {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Ja'}
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirmId(null)}
+                                className="px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                              >
+                                Nee
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => { setDeleteConfirmId(concept.id); setDeleteError(null); }}
+                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Verwijderen"
+                              data-testid={`button-delete-${concept.id}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {concept.definition && (
+                        <p className="text-sm text-gray-600 line-clamp-2">{concept.definition}</p>
+                      )}
                     </div>
-                    {concept.definition && (
-                      <p className="text-sm text-gray-600 line-clamp-2">{concept.definition}</p>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
-
-          {activeTab === 'concept_review' && <ConceptReviewPanel />}
 
           {activeTab === 'quiz_validation' && <QuizValidationPanel />}
 

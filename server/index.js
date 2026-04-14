@@ -902,6 +902,65 @@ app.get('/api/concepts', async (req, res) => {
   }
 });
 
+app.delete('/api/admin/concepts/:id', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+
+  const { id } = req.params;
+  if (!id) {
+    return res.status(400).json({ error: 'Concept ID is required' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('role, email')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      return res.status(403).json({ error: 'Could not verify user role' });
+    }
+
+    const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Admin role required' });
+    }
+
+    const { error: deleteError } = await supabaseAdmin
+      .from('concepts')
+      .delete()
+      .eq('id', id);
+
+    if (deleteError) {
+      console.error('[delete-concept] Delete error:', deleteError);
+      return res.status(500).json({ error: `Verwijderen mislukt: ${deleteError.message}` });
+    }
+
+    console.log(`[delete-concept] Concept ${id} verwijderd door ${user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[delete-concept] Unexpected error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',

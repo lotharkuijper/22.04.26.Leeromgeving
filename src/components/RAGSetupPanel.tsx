@@ -542,8 +542,10 @@ function ImportSection({
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
   const [importedPaths, setImportedPaths] = useState<Set<string>>(new Set());
+  const [importFileErrors, setImportFileErrors] = useState<Record<string, string>>({});
   const [bulkImporting, setBulkImporting] = useState(false);
   const [importResults, setImportResults] = useState<{ ok: string[]; fail: { path: string; error: string }[] } | null>(null);
+  const [confirmBulkImport, setConfirmBulkImport] = useState(false);
 
   const loadFiles = useCallback(async () => {
     setLoadingFiles(true);
@@ -606,7 +608,8 @@ function ImportSection({
         f.storagePath === sf.storagePath ? { ...f, alreadyImported: true } : f
       ));
     } catch (err) {
-      alert(`Fout bij importeren van ${sf.name}: ${err instanceof Error ? err.message : 'Onbekende fout'}`);
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setImportFileErrors(prev => ({ ...prev, [sf.storagePath]: msg }));
     } finally {
       setImportingPaths(prev => {
         const next = new Set(prev);
@@ -620,8 +623,11 @@ function ImportSection({
     const toImport = storageFiles.filter(f => !f.alreadyImported && !importedPaths.has(f.storagePath));
     if (toImport.length === 0) return;
 
-    if (!confirm(`${toImport.length} bestand(en) importeren en verwerken? Dit kan enkele minuten duren.`)) return;
-
+    if (!confirmBulkImport) {
+      setConfirmBulkImport(true);
+      return;
+    }
+    setConfirmBulkImport(false);
     setBulkImporting(true);
     const ok: string[] = [];
     const fail: { path: string; error: string }[] = [];
@@ -691,7 +697,7 @@ function ImportSection({
           >
             <RefreshCw className={`w-4 h-4 ${loadingFiles ? 'animate-spin' : ''}`} />
           </button>
-          {notImported.length > 0 && (
+          {notImported.length > 0 && !confirmBulkImport && (
             <button
               onClick={importAll}
               disabled={bulkImporting || importingPaths.size > 0}
@@ -704,6 +710,24 @@ function ImportSection({
                 <><Download className="w-3 h-3" /> Alles importeren ({notImported.length})</>
               )}
             </button>
+          )}
+          {confirmBulkImport && (
+            <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-sm">
+              <span className="text-amber-800">{notImported.length} bestand(en) importeren?</span>
+              <button
+                onClick={importAll}
+                className="px-2 py-0.5 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 text-xs"
+                data-testid="button-confirm-import-all"
+              >
+                Ja
+              </button>
+              <button
+                onClick={() => setConfirmBulkImport(false)}
+                className="px-2 py-0.5 bg-gray-200 text-gray-700 rounded font-medium hover:bg-gray-300 text-xs"
+              >
+                Annuleren
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -733,7 +757,10 @@ function ImportSection({
                   {sf.displayPath !== sf.name ? `${sf.displayPath} • ` : ''}{formatBytes(sf.size)}
                 </p>
               </div>
-              <div className="flex-shrink-0">
+              <div className="flex-shrink-0 flex flex-col items-end gap-1">
+                {importFileErrors[sf.storagePath] && (
+                  <span className="text-xs text-red-600 max-w-xs text-right">{importFileErrors[sf.storagePath]}</span>
+                )}
                 {isImported ? (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                     <CheckCircle2 className="w-3 h-3" /> Geïmporteerd
@@ -744,7 +771,7 @@ function ImportSection({
                   </span>
                 ) : (
                   <button
-                    onClick={() => importFile(sf)}
+                    onClick={() => { setImportFileErrors(prev => { const n = {...prev}; delete n[sf.storagePath]; return n; }); importFile(sf); }}
                     disabled={bulkImporting || importingPaths.size > 0}
                     data-testid={`button-import-${sf.name}`}
                     className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors"
