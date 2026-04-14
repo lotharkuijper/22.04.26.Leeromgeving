@@ -27,6 +27,15 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
+const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
+
+Regels:
+1. Geef ALTIJD eerst 2-3 zinnen heldere uitleg over het concept
+2. Volg op met één uitdagende vervolgvraag die aanzet tot kritisch denken
+3. Houd antwoorden beknopt — vermijd lange theoretische uiteenzettingen
+4. Geef studenten genoeg context om zelfstandig na te denken
+5. Prijs deelantwoorden en moedig studenten aan dieper na te denken`;
+
 let conceptsHasCourseId = false;
 async function detectConceptsCourseIdColumn() {
   if (!supabaseAdmin) return;
@@ -46,6 +55,50 @@ app.post('/api/chat', async (req, res) => {
     return res.status(503).json({ error: 'GROQ_API_KEY not configured on server' });
   }
 
+  const {
+    messages = [],
+    context,
+    model = 'llama-3.3-70b-versatile',
+    temperature = 0.7,
+    top_p = 1,
+    stream = false,
+    max_tokens,
+  } = req.body;
+
+  let systemPromptContent = FALLBACK_SYSTEM_PROMPT;
+  if (supabaseAdmin) {
+    try {
+      const { data: promptData } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('content')
+        .eq('is_active', true)
+        .maybeSingle();
+      if (promptData?.content) {
+        systemPromptContent = promptData.content;
+        console.log('[/api/chat] Actieve prompt uit database geladen');
+      } else {
+        console.warn('[/api/chat] Geen actieve prompt gevonden — fallback gebruikt');
+      }
+    } catch (err) {
+      console.warn('[/api/chat] Prompt ophalen mislukt, fallback gebruikt:', err.message);
+    }
+  }
+
+  const systemContent = context
+    ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}`
+    : systemPromptContent;
+
+  const userMessages = Array.isArray(messages) ? messages.filter(m => m.role !== 'system') : [];
+
+  const groqBody = {
+    model,
+    messages: [{ role: 'system', content: systemContent }, ...userMessages],
+    temperature,
+    max_tokens: max_tokens ?? 512,
+    top_p,
+    stream,
+  };
+
   try {
     const response = await fetch(GROQ_API_URL, {
       method: 'POST',
@@ -53,7 +106,7 @@ app.post('/api/chat', async (req, res) => {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(groqBody),
     });
 
     const data = await response.json();

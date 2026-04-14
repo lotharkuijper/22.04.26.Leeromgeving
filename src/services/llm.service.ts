@@ -1,5 +1,3 @@
-import { supabase } from '../lib/supabase';
-
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -8,65 +6,6 @@ export interface Message {
 export interface LLMResponse {
   content: string;
   error?: string;
-}
-
-const SOCRATIC_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek. Je doel is studenten te begeleiden door een balans tussen uitleg en uitdagende vragen.
-
-Belangrijke regels:
-1. Begin ALTIJD met 2-3 zinnen heldere, informatieve uitleg over het concept
-2. Volg de uitleg op met een uitdagende vervolgvraag die aanzet tot kritisch denken
-3. Geef studenten genoeg context om productief na te kunnen denken
-4. Wees geduldig en ondersteunend, maar blijf studenten uitdagen
-5. Gebruik voorbeelden en analogieën om begrip te versterken
-6. Prijs deelantwoorden en moedig studenten aan dieper na te denken
-
-STRUCTUUR VAN EEN GOEDE RESPONSE:
-1. Korte, heldere uitleg (2-3 zinnen) met essentiële informatie
-2. Optioneel: een voorbeeld of analogie
-3. Uitdagende vervolgvraag die voortbouwt op de uitleg
-
-Voorbeelden van GOEDE responses:
-
-Student: "Hoe werkt een gemiddelde?"
-Assistent: "Een gemiddelde bereken je door alle waarden op te tellen en dit totaal te delen door het aantal waarden. Als je bijvoorbeeld de cijfers 6, 8, en 10 hebt, reken je (6+8+10)/3 = 8. Het gemiddelde geeft je een centraal punt in je dataset.
-
-Nu een vraag: waarom zou je in sommige situaties de mediaan verkiezen boven het gemiddelde?"
-
-Student: "Wat is een p-waarde?"
-Assistent: "Een p-waarde geeft de kans weer dat je de gevonden resultaten zou zien als er in werkelijkheid geen effect bestaat. Een lage p-waarde (bijvoorbeeld < 0.05) suggereert dat je resultaten waarschijnlijk niet op toeval berusten. Het is een maat voor de sterkte van je bewijs tegen de nulhypothese.
-
-Kun je uitleggen wat het betekent als je een p-waarde van 0.03 vindt in je onderzoek?"
-
-Voorbeelden van SLECHTE responses (VERMIJD DEZE):
-- "Wat weet je zelf al over gemiddelden?" (zonder eerst uitleg te geven)
-- "Interessante vraag! Kun je zelf nadenken over hoe dat werkt?" (te vaag en niet helpend)
-- Lange theoretische uiteenzettingen zonder vervolgvragen
-
-Blijf studenten helpen MET informatie én uitdagen MET vragen!`;
-
-async function getActiveSystemPrompt(): Promise<string> {
-  try {
-    const { data, error } = await supabase
-      .from('chatbot_prompts')
-      .select('content')
-      .eq('is_active', true)
-      .maybeSingle();
-
-    if (error) {
-      console.warn('Error fetching active prompt, using default:', error);
-      return SOCRATIC_SYSTEM_PROMPT;
-    }
-
-    if (!data) {
-      console.warn('No active prompt found, using default');
-      return SOCRATIC_SYSTEM_PROMPT;
-    }
-
-    return data.content;
-  } catch (error) {
-    console.error('Error fetching active prompt:', error);
-    return SOCRATIC_SYSTEM_PROMPT;
-  }
 }
 
 async function callChatAPI(body: object): Promise<any> {
@@ -90,20 +29,13 @@ export async function sendChatMessage(
   context?: string
 ): Promise<LLMResponse> {
   try {
-    const activePrompt = await getActiveSystemPrompt();
-
-    const systemMessage: Message = {
-      role: 'system',
-      content: context
-        ? `${activePrompt}\n\nContext uit cursusmateriaal:\n${context}`
-        : activePrompt
-    };
+    const userMessages = messages.filter(m => m.role !== 'system');
 
     const data = await callChatAPI({
       model: 'llama-3.3-70b-versatile',
-      messages: [systemMessage, ...messages],
+      messages: userMessages,
+      context,
       temperature: 0.7,
-      max_tokens: 1024,
       top_p: 1,
       stream: false,
     });
