@@ -105,8 +105,11 @@ export function RAGSetupPanel() {
     fetch(`/api/concepts?courseId=${activeCourseId}`, {
       headers: { Authorization: `Bearer ${session.access_token}` },
     })
-      .then(r => r.ok ? r.json() : { concepts: [] })
-      .then(data => setExistingConceptCount(data.concepts?.length ?? 0))
+      .then(r => r.ok ? r.json() : { concepts: [], source: 'empty' })
+      .then(data => {
+        const count = data.source === 'course' ? (data.concepts?.length ?? 0) : 0;
+        setExistingConceptCount(count);
+      })
       .catch(() => setExistingConceptCount(0));
   }, [activeCourseId, session?.access_token, extractResult]);
 

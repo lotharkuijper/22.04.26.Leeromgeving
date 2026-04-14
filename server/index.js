@@ -533,16 +533,32 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
           return res.status(500).json({ error: `Ophalen mislukt: ${taggedErr.message}` });
         }
 
+        const ragMarker = '[RAG-geëxtraheerd uit cursusmateriaal]';
+        const toDeleteIds = [];
+        const toUntag = [];
+
         for (const concept of taggedConcepts || []) {
-          const updatedKeyPoints = (concept.key_points || []).filter(
-            (kp) => kp !== courseMarker && kp !== '[RAG-geëxtraheerd uit cursusmateriaal]'
-          );
-          await supabaseAdmin
-            .from('concepts')
-            .update({ key_points: updatedKeyPoints })
-            .eq('id', concept.id);
+          const isRagExtracted = (concept.key_points || []).includes(ragMarker);
+          if (isRagExtracted) {
+            toDeleteIds.push(concept.id);
+          } else {
+            toUntag.push({ id: concept.id, key_points: (concept.key_points || []).filter((kp) => kp !== courseMarker) });
+          }
         }
-        console.log(`[extract-concepts] Untagged ${taggedConcepts?.length ?? 0} concepts (replace mode, key_points fallback)`);
+
+        if (toDeleteIds.length > 0) {
+          const { error: delErr } = await supabaseAdmin
+            .from('concepts')
+            .delete()
+            .in('id', toDeleteIds);
+          if (delErr) console.error('[extract-concepts] Delete (replace fallback) error:', delErr);
+        }
+
+        for (const u of toUntag) {
+          await supabaseAdmin.from('concepts').update({ key_points: u.key_points }).eq('id', u.id);
+        }
+
+        console.log(`[extract-concepts] Replace (fallback): deleted ${toDeleteIds.length} RAG-extracted, untagged ${toUntag.length} seeds`);
       }
     }
 
