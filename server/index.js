@@ -260,17 +260,21 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
       }
     }
 
+    const summaryCreated = generateSummary && journalEntryId !== null;
+    const summaryFailed = generateSummary && journalEntryId === null;
+
     const { error: archiveError } = await supabaseAdmin
       .from('conversations')
       .update({ status: 'archived' })
-      .eq('id', conversationId);
+      .eq('id', conversationId)
+      .eq('user_id', user.id);
 
     if (archiveError) {
       return res.status(500).json({ error: `Archiveren mislukt: ${archiveError.message}` });
     }
 
-    console.log(`[archive] Gesprek ${conversationId} gearchiveerd (samenvatting: ${generateSummary}, dagboek: ${journalEntryId})`);
-    return res.json({ success: true, journalEntryId });
+    console.log(`[archive] Gesprek ${conversationId} gearchiveerd (summaryCreated: ${summaryCreated})`);
+    return res.json({ success: true, journalEntryId, summaryCreated, summaryFailed });
   } catch (err) {
     console.error('[archive] Onverwachte fout:', err);
     return res.status(500).json({ error: err.message || 'Internal server error' });

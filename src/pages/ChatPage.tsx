@@ -172,6 +172,8 @@ export function ChatPage() {
         throw new Error(err.error || `Archiveren mislukt (${res.status})`);
       }
 
+      const result = await res.json();
+
       setConversations(prev => prev.filter(c => c.id !== conversationId));
       if (currentConversationId === conversationId) {
         const remaining = conversations.filter(c => c.id !== conversationId);
@@ -179,6 +181,10 @@ export function ChatPage() {
         if (remaining.length === 0) setMessages([]);
       }
       setArchiveDialog(null);
+
+      if (generateSummary && result.summaryFailed) {
+        alert('Het gesprek is afgesloten, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.');
+      }
     } catch (err: any) {
       alert(`Fout bij archiveren: ${err.message}`);
     } finally {
