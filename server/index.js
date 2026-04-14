@@ -749,7 +749,7 @@ ${combinedText}`;
 
         const existing = existingByName.get(key);
         if (existing) {
-          const updatedKeyPoints = [...new Set([...(existing.key_points || []), courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'])];
+          const updatedKeyPoints = [...new Set([...(existing.key_points || []), courseMarker])];
           toUpdate.push({ id: existing.id, key_points: updatedKeyPoints });
         } else {
           toInsert.push({

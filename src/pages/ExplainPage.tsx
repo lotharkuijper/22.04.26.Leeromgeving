@@ -265,12 +265,7 @@ export function ExplainPage() {
                 <p className="text-xs text-gray-500">Begrippen laden...</p>
               </div>
             )}
-            {!conceptsLoading && conceptSource === 'global' && activeCourse && (
-              <div className="mb-2 px-2 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
-                Geen cursus-specifieke begrippen gevonden — globale begrippen worden getoond.
-              </div>
-            )}
-            {!conceptsLoading && conceptSource === 'empty' && (
+            {!conceptsLoading && (conceptSource === 'empty' || (conceptSource === 'global' && !!activeCourse)) && (
               <div className="text-center py-6 px-2">
                 <Sparkles className="w-8 h-8 mx-auto mb-2 text-purple-300" />
                 <p className="text-sm font-medium text-gray-700 mb-1">Nog geen begrippen voor deze cursus</p>
@@ -279,12 +274,12 @@ export function ExplainPage() {
                 </p>
               </div>
             )}
-            {!conceptsLoading && conceptSource !== 'empty' && filteredConcepts.length === 0 && (
+            {!conceptsLoading && conceptSource === 'course' && filteredConcepts.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-4">
                 Geen begrippen gevonden
               </p>
             )}
-            {filteredConcepts.map((concept) => {
+            {conceptSource === 'course' && filteredConcepts.map((concept) => {
               const isRagExtracted = concept.key_points?.includes('[RAG-geëxtraheerd uit cursusmateriaal]');
               return (
                 <button
