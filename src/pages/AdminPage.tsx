@@ -29,8 +29,69 @@ interface ChatbotPrompt {
 
 type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'settings';
 
-interface ConceptWithSource extends Concept {
-  _source?: 'course' | 'global';
+type ConceptCategory = 'epidemiologie' | 'biostatistiek';
+type UserRole = 'student' | 'docent' | 'admin';
+
+interface ConceptCardProps {
+  concept: Concept;
+  sourceLabel: string;
+  sourceBg: string;
+  deleteConfirmId: string | null;
+  deletingConceptId: string | null;
+  onDeleteRequest: (id: string) => void;
+  onDeleteConfirm: (id: string) => void;
+  onDeleteCancel: () => void;
+}
+
+function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deletingConceptId, onDeleteRequest, onDeleteConfirm, onDeleteCancel }: ConceptCardProps) {
+  return (
+    <div className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50" data-testid={`card-concept-${concept.id}`}>
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="font-semibold text-gray-900">{concept.name}</h3>
+          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
+            {concept.category}
+          </span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceBg}`}>
+            {sourceLabel}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+          {deleteConfirmId === concept.id ? (
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-red-600">Verwijderen?</span>
+              <button
+                onClick={() => onDeleteConfirm(concept.id)}
+                disabled={deletingConceptId === concept.id}
+                className="px-2 py-0.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                data-testid={`button-confirm-delete-${concept.id}`}
+              >
+                {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Ja'}
+              </button>
+              <button
+                onClick={onDeleteCancel}
+                className="px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+              >
+                Nee
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => onDeleteRequest(concept.id)}
+              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              title="Verwijderen"
+              data-testid={`button-delete-${concept.id}`}
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+      {concept.definition && (
+        <p className="text-sm text-gray-600 line-clamp-2">{concept.definition}</p>
+      )}
+    </div>
+  );
 }
 
 export function AdminPage() {
@@ -40,19 +101,23 @@ export function AdminPage() {
   const [activeTab, setActiveTab] = useState<TabType>(isAdmin ? 'users' : 'documents');
   const [users, setUsers] = useState<Profile[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [concepts, setConcepts] = useState<ConceptWithSource[]>([]);
-  const [conceptsSource, setConceptsSource] = useState<'course' | 'global' | 'empty' | null>(null);
+  const [courseConcepts, setCourseConcepts] = useState<Concept[]>([]);
+  const [globalConcepts, setGlobalConcepts] = useState<Concept[]>([]);
   const [prompts, setPrompts] = useState<ChatbotPrompt[]>([]);
   const [deletingConceptId, setDeletingConceptId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [addConceptForm, setAddConceptForm] = useState(false);
   const [addConceptName, setAddConceptName] = useState('');
-  const [addConceptCategory, setAddConceptCategory] = useState<'epidemiologie' | 'biostatistiek'>('epidemiologie');
+  const [addConceptCategory, setAddConceptCategory] = useState<ConceptCategory>('epidemiologie');
   const [addConceptDefinition, setAddConceptDefinition] = useState('');
   const [addConceptLoading, setAddConceptLoading] = useState(false);
   const [addConceptError, setAddConceptError] = useState<string | null>(null);
   const [addConceptSuccess, setAddConceptSuccess] = useState(false);
+  const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole } | null>(null);
+  const [docMsg, setDocMsg] = useState<string | null>(null);
+  const [promptMsg, setPromptMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<ChatbotPrompt | null>(null);
   const [promptContent, setPromptContent] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -100,10 +165,7 @@ export function AdminPage() {
   const loadConcepts = async () => {
     if (!session?.access_token) return;
     try {
-      const url = activeCourseId
-        ? `/api/concepts?courseId=${encodeURIComponent(activeCourseId)}`
-        : '/api/concepts';
-      const res = await fetch(url, {
+      const res = await fetch('/api/concepts', {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) {
@@ -111,8 +173,21 @@ export function AdminPage() {
         return;
       }
       const data = await res.json();
-      setConcepts((data.concepts || []).map((c: Concept) => ({ ...c, _source: data.source })));
-      setConceptsSource(data.source ?? null);
+      const all: Concept[] = data.concepts || [];
+      if (activeCourseId) {
+        const courseMarker = `course_id:${activeCourseId}`;
+        const course = all.filter(
+          c => c.course_id === activeCourseId || (c.key_points || []).includes(courseMarker)
+        );
+        const global = all.filter(
+          c => c.course_id !== activeCourseId && !(c.key_points || []).includes(courseMarker)
+        );
+        setCourseConcepts(course);
+        setGlobalConcepts(global);
+      } else {
+        setCourseConcepts([]);
+        setGlobalConcepts(all);
+      }
     } catch (err) {
       console.error('Error loading concepts:', err);
     }
@@ -132,15 +207,16 @@ export function AdminPage() {
     setPrompts(data || []);
   };
 
-  const handleChangeUserRole = async (userId: string, newRole: 'student' | 'docent' | 'admin') => {
-    if (!isAdmin) {
-      alert('Alleen administrators kunnen rollen wijzigen');
-      return;
-    }
+  const handleChangeUserRole = async (userId: string, newRole: UserRole) => {
+    if (!isAdmin) return;
+    setRoleConfirm({ userId, newRole });
+  };
 
-    const confirmChange = window.confirm(`Weet je zeker dat je de rol wilt wijzigen naar "${newRole}"?`);
-    if (!confirmChange) return;
-
+  const confirmRoleChange = async () => {
+    if (!roleConfirm) return;
+    const { userId, newRole } = roleConfirm;
+    setRoleConfirm(null);
+    setRoleMsg(null);
     setLoading(true);
     const { error } = await supabase
       .from('profiles')
@@ -149,17 +225,17 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error updating role:', error);
-      alert('Er is een fout opgetreden bij het wijzigen van de rol');
+      setRoleMsg({ type: 'error', text: 'Fout bij wijzigen van rol: ' + error.message });
     } else {
-      alert('Rol succesvol gewijzigd');
+      setRoleMsg({ type: 'success', text: 'Rol succesvol gewijzigd.' });
       loadUsers();
     }
-
     setLoading(false);
   };
 
   const handleDeleteDocument = async (documentId: string, filePath: string) => {
     setLoading(true);
+    setDocMsg(null);
 
     try {
       const { data: doc, error: fetchError } = await supabase
@@ -170,7 +246,7 @@ export function AdminPage() {
 
       if (fetchError) {
         console.error('Error fetching document:', fetchError);
-        alert('Fout bij ophalen document gegevens.');
+        setDocMsg('Fout bij ophalen document gegevens: ' + fetchError.message);
         return;
       }
 
@@ -181,7 +257,7 @@ export function AdminPage() {
 
       if (chunksError) {
         console.error('Error deleting chunks:', chunksError);
-        alert('Fout bij verwijderen document chunks.');
+        setDocMsg('Fout bij verwijderen document chunks: ' + chunksError.message);
         return;
       }
 
@@ -192,7 +268,7 @@ export function AdminPage() {
 
       if (docError) {
         console.error('Error deleting document:', docError);
-        alert('Fout bij verwijderen document record.');
+        setDocMsg('Fout bij verwijderen document record: ' + docError.message);
         return;
       }
 
@@ -208,7 +284,7 @@ export function AdminPage() {
       loadDocuments();
     } catch (error) {
       console.error('Delete error:', error);
-      alert('Fout bij verwijderen: ' + (error as Error).message);
+      setDocMsg('Fout bij verwijderen: ' + (error as Error).message);
     } finally {
       setLoading(false);
     }
@@ -238,14 +314,13 @@ export function AdminPage() {
     setAddConceptError(null);
     setAddConceptSuccess(false);
 
-    const insertData: Record<string, any> = {
+    type ConceptInsert = Database['public']['Tables']['concepts']['Insert'];
+    const insertData: ConceptInsert = {
       name: addConceptName.trim(),
       category: addConceptCategory,
       definition: addConceptDefinition.trim() || null,
+      key_points: activeCourseId ? [`course_id:${activeCourseId}`] : [],
     };
-    if (activeCourseId) {
-      insertData.key_points = [`course_id:${activeCourseId}`];
-    }
 
     const { error } = await supabase
       .from('concepts')
@@ -289,8 +364,8 @@ export function AdminPage() {
 
   const handleSavePrompt = async () => {
     if (!editingPrompt || !profile) return;
-
     setLoading(true);
+    setPromptMsg(null);
 
     const { error } = await supabase
       .from('chatbot_prompts')
@@ -302,19 +377,19 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error updating prompt:', error);
-      alert('Er is een fout opgetreden bij het opslaan');
+      setPromptMsg({ type: 'error', text: 'Fout bij opslaan: ' + error.message });
     } else {
-      alert('Prompt succesvol bijgewerkt');
+      setPromptMsg({ type: 'success', text: 'Prompt succesvol bijgewerkt.' });
       setEditingPrompt(null);
       setPromptContent('');
       loadPrompts();
     }
-
     setLoading(false);
   };
 
   const handleActivatePrompt = async (promptId: string) => {
     setLoading(true);
+    setPromptMsg(null);
 
     await supabase
       .from('chatbot_prompts')
@@ -328,12 +403,11 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error activating prompt:', error);
-      alert('Er is een fout opgetreden');
+      setPromptMsg({ type: 'error', text: 'Fout bij activeren: ' + error.message });
     } else {
-      alert('Prompt geactiveerd');
+      setPromptMsg({ type: 'success', text: 'Prompt geactiveerd.' });
       loadPrompts();
     }
-
     setLoading(false);
   };
 
@@ -421,6 +495,18 @@ const tabs = [
         <div className="p-6">
           {activeTab === 'users' && (
             <div className="space-y-4">
+              {roleMsg && (
+                <div className={`rounded-lg px-4 py-2 text-sm ${roleMsg.type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+                  {roleMsg.text}
+                </div>
+              )}
+              {roleConfirm && (
+                <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm">
+                  <span className="text-amber-800">Rol wijzigen naar <strong>{roleConfirm.newRole}</strong>?</span>
+                  <button onClick={confirmRoleChange} className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-medium">Bevestigen</button>
+                  <button onClick={() => setRoleConfirm(null)} className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium">Annuleren</button>
+                </div>
+              )}
               <div className="flex items-center gap-4">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -602,85 +688,77 @@ const tabs = [
                 <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{deleteError}</p>
               )}
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-sm text-gray-700">
                   <strong>Tip:</strong> Gebruik de "RAG Beheer" tab om begrippen automatisch te extracteren uit cursusmateriaal.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {concepts.length === 0 && (
-                  <div className="col-span-2 text-center py-12 text-gray-500">
-                    <BookOpen className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-                    <p>{activeCourse ? `Geen begrippen gevonden voor ${activeCourse.name}` : 'Nog geen begrippen toegevoegd'}</p>
+              {activeCourse && (
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <GraduationCap className="w-4 h-4 text-purple-600" />
+                    Cursus: {activeCourse.name}
+                    <span className="text-sm font-normal text-gray-500">({courseConcepts.length})</span>
+                  </h3>
+                  {courseConcepts.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500 border border-dashed border-gray-200 rounded-lg">
+                      <BookOpen className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                      <p className="text-sm">Geen cursus-begrippen — gebruik RAG Beheer om te extracteren.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {courseConcepts.map(concept => {
+                        const isRagExtracted = (concept.key_points || []).includes('[RAG-geëxtraheerd uit cursusmateriaal]');
+                        const sourceLabel = isRagExtracted ? 'Cursus — AI' : 'Cursus';
+                        const sourceBg = isRagExtracted ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
+                        return (
+                          <ConceptCard
+                            key={concept.id}
+                            concept={concept}
+                            sourceLabel={sourceLabel}
+                            sourceBg={sourceBg}
+                            deleteConfirmId={deleteConfirmId}
+                            deletingConceptId={deletingConceptId}
+                            onDeleteRequest={(id) => { setDeleteConfirmId(id); setDeleteError(null); }}
+                            onDeleteConfirm={handleDeleteConcept}
+                            onDeleteCancel={() => setDeleteConfirmId(null)}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <h3 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-gray-500" />
+                  Globale seeds
+                  <span className="text-sm font-normal text-gray-500">({globalConcepts.length})</span>
+                </h3>
+                {globalConcepts.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500 border border-dashed border-gray-200 rounded-lg">
+                    <BookOpen className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                    <p className="text-sm">Nog geen globale begrippen toegevoegd.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {globalConcepts.map(concept => (
+                      <ConceptCard
+                        key={concept.id}
+                        concept={concept}
+                        sourceLabel="Globaal"
+                        sourceBg="bg-gray-100 text-gray-600"
+                        deleteConfirmId={deleteConfirmId}
+                        deletingConceptId={deletingConceptId}
+                        onDeleteRequest={(id) => { setDeleteConfirmId(id); setDeleteError(null); }}
+                        onDeleteConfirm={handleDeleteConcept}
+                        onDeleteCancel={() => setDeleteConfirmId(null)}
+                      />
+                    ))}
                   </div>
                 )}
-                {concepts.map(concept => {
-                  const isRagExtracted = (concept.key_points || []).includes('[RAG-geëxtraheerd uit cursusmateriaal]');
-                  const isCourseTagged = activeCourseId && (
-                    (concept as any).course_id === activeCourseId ||
-                    (concept.key_points || []).includes(`course_id:${activeCourseId}`)
-                  );
-                  const sourceLabel = isRagExtracted && isCourseTagged
-                    ? 'Cursus — AI'
-                    : isCourseTagged
-                    ? 'Cursus'
-                    : 'Globaal';
-                  const sourceBg = sourceLabel === 'Globaal'
-                    ? 'bg-gray-100 text-gray-600'
-                    : sourceLabel === 'Cursus — AI'
-                    ? 'bg-purple-100 text-purple-700'
-                    : 'bg-blue-100 text-blue-700';
-
-                  return (
-                    <div key={concept.id} className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50" data-testid={`card-concept-${concept.id}`}>
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="font-semibold text-gray-900">{concept.name}</h3>
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
-                            {concept.category}
-                          </span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceBg}`}>
-                            {sourceLabel}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-                          {deleteConfirmId === concept.id ? (
-                            <div className="flex items-center gap-1">
-                              <span className="text-xs text-red-600">Verwijderen?</span>
-                              <button
-                                onClick={() => handleDeleteConcept(concept.id)}
-                                disabled={deletingConceptId === concept.id}
-                                className="px-2 py-0.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-                                data-testid={`button-confirm-delete-${concept.id}`}
-                              >
-                                {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Ja'}
-                              </button>
-                              <button
-                                onClick={() => setDeleteConfirmId(null)}
-                                className="px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                              >
-                                Nee
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => { setDeleteConfirmId(concept.id); setDeleteError(null); }}
-                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                              title="Verwijderen"
-                              data-testid={`button-delete-${concept.id}`}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      {concept.definition && (
-                        <p className="text-sm text-gray-600 line-clamp-2">{concept.definition}</p>
-                      )}
-                    </div>
-                  );
-                })}
               </div>
             </div>
           )}
@@ -692,6 +770,12 @@ const tabs = [
           {activeTab === 'prompts' && (
             <div className="space-y-4">
               <p className="text-gray-600">Beheer de systeem prompts voor de chatbot</p>
+
+              {promptMsg && (
+                <div className={`rounded-lg px-4 py-2 text-sm ${promptMsg.type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+                  {promptMsg.text}
+                </div>
+              )}
 
               {editingPrompt ? (
                 <div className="bg-white border border-gray-200 rounded-lg p-6">
