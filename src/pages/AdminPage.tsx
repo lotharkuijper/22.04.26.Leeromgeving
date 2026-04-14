@@ -174,19 +174,19 @@ export function AdminPage() {
       }
       const data = await res.json();
       const all: Concept[] = data.concepts || [];
+      const isGlobalSeed = (c: Concept) =>
+        !c.course_id && !(c.key_points || []).some(kp => kp.startsWith('course_id:'));
       if (activeCourseId) {
         const courseMarker = `course_id:${activeCourseId}`;
         const course = all.filter(
           c => c.course_id === activeCourseId || (c.key_points || []).includes(courseMarker)
         );
-        const global = all.filter(
-          c => c.course_id !== activeCourseId && !(c.key_points || []).includes(courseMarker)
-        );
+        const global = all.filter(isGlobalSeed);
         setCourseConcepts(course);
         setGlobalConcepts(global);
       } else {
         setCourseConcepts([]);
-        setGlobalConcepts(all);
+        setGlobalConcepts(all.filter(isGlobalSeed));
       }
     } catch (err) {
       console.error('Error loading concepts:', err);
@@ -599,8 +599,8 @@ const tabs = [
                   {activeCourse && (
                     <p className="text-sm text-blue-600 mt-1 flex items-center gap-1">
                       <GraduationCap className="w-4 h-4" />
-                      Gefilterd op: <strong>{activeCourse.name}</strong>
-                      {conceptsSource === 'global' && <span className="text-amber-600 ml-1">(geen cursus-begrippen — globale weergave)</span>}
+                      Actieve cursus: <strong>{activeCourse.name}</strong>
+                      {courseConcepts.length === 0 && <span className="text-amber-600 ml-1">(nog geen cursus-begrippen)</span>}
                     </p>
                   )}
                   {!activeCourse && (
