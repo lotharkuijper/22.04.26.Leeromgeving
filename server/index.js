@@ -63,36 +63,44 @@ app.post('/api/chat', async (req, res) => {
     top_p = 1,
     stream = false,
     max_tokens,
+    skipSystemPrompt = false,
   } = req.body;
-
-  let systemPromptContent = FALLBACK_SYSTEM_PROMPT;
-  if (supabaseAdmin) {
-    try {
-      const { data: promptData } = await supabaseAdmin
-        .from('chatbot_prompts')
-        .select('content')
-        .eq('is_active', true)
-        .maybeSingle();
-      if (promptData?.content) {
-        systemPromptContent = promptData.content;
-        console.log('[/api/chat] Actieve prompt uit database geladen');
-      } else {
-        console.warn('[/api/chat] Geen actieve prompt gevonden — fallback gebruikt');
-      }
-    } catch (err) {
-      console.warn('[/api/chat] Prompt ophalen mislukt, fallback gebruikt:', err.message);
-    }
-  }
-
-  const systemContent = context
-    ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}`
-    : systemPromptContent;
 
   const userMessages = Array.isArray(messages) ? messages.filter(m => m.role !== 'system') : [];
 
+  let finalMessages;
+  if (skipSystemPrompt) {
+    finalMessages = userMessages;
+  } else {
+    let systemPromptContent = FALLBACK_SYSTEM_PROMPT;
+    if (supabaseAdmin) {
+      try {
+        const { data: promptData, error: promptError } = await supabaseAdmin
+          .from('chatbot_prompts')
+          .select('content')
+          .eq('is_active', true)
+          .maybeSingle();
+        if (promptError) {
+          console.warn('[/api/chat] Prompt ophalen mislukt, fallback gebruikt:', promptError.message);
+        } else if (promptData?.content) {
+          systemPromptContent = promptData.content;
+          console.log('[/api/chat] Actieve prompt uit database geladen');
+        } else {
+          console.warn('[/api/chat] Geen actieve prompt in database — fallback gebruikt');
+        }
+      } catch (err) {
+        console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
+      }
+    }
+    const systemContent = context
+      ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}`
+      : systemPromptContent;
+    finalMessages = [{ role: 'system', content: systemContent }, ...userMessages];
+  }
+
   const groqBody = {
     model,
-    messages: [{ role: 'system', content: systemContent }, ...userMessages],
+    messages: finalMessages,
     temperature,
     max_tokens: max_tokens ?? 512,
     top_p,

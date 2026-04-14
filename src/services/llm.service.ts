@@ -100,6 +100,7 @@ Geef gestructureerde feedback met:
       messages: [{ role: 'user', content: evaluationPrompt }],
       temperature: 0.3,
       max_tokens: 1500,
+      skipSystemPrompt: true,
     });
 
     return {
@@ -157,6 +158,7 @@ BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst.`;
       messages: [{ role: 'user', content: quizPrompt }],
       temperature: 0.7,
       max_tokens: 2048,
+      skipSystemPrompt: true,
     });
 
     const content = data.choices[0]?.message?.content || '';
