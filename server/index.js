@@ -128,6 +128,155 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+app.post('/api/chat/archive', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header vereist' });
+  }
+
+  const { conversationId, generateSummary = false } = req.body;
+  if (!conversationId) {
+    return res.status(400).json({ error: 'conversationId is vereist' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Niet geauthenticeerd' });
+    }
+
+    const { data: conversation, error: convError } = await supabaseAdmin
+      .from('conversations')
+      .select('id, title, user_id')
+      .eq('id', conversationId)
+      .maybeSingle();
+
+    if (convError || !conversation) {
+      return res.status(404).json({ error: 'Gesprek niet gevonden' });
+    }
+
+    if (conversation.user_id !== user.id) {
+      return res.status(403).json({ error: 'Geen toegang tot dit gesprek' });
+    }
+
+    let journalEntryId = null;
+
+    if (generateSummary) {
+      const apiKey = process.env.GROQ_API_KEY;
+
+      const { data: msgs, error: msgError } = await supabaseAdmin
+        .from('messages')
+        .select('role, content, retrieved_context')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true });
+
+      if (!msgError && msgs && msgs.length > 0) {
+        const ragSources = new Set();
+        for (const msg of msgs) {
+          const chunks = msg.retrieved_context?.chunks;
+          if (Array.isArray(chunks)) {
+            for (const chunk of chunks) {
+              if (chunk.documentTitle) ragSources.add(chunk.documentTitle);
+            }
+          }
+        }
+
+        const chatText = msgs
+          .filter(m => m.role !== 'system')
+          .map(m => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content}`)
+          .join('\n\n');
+
+        const sourcesText = ragSources.size > 0
+          ? `\n\nGebruikte cursusbronnen in dit gesprek: ${[...ragSources].join(', ')}`
+          : '';
+
+        const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Analyseer het volgende studiegesprek en schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands.
+
+Je verslag bevat:
+1. Een beargumenteerd formatief oordeel over wat de student heeft laten zien en geleerd
+2. Concrete sterke punten én verbeterpunten (eerlijk maar opbouwend)
+3. Een specifieke suggestie voor verdere verdieping, bij voorkeur met verwijzing naar beschikbare cursusbronnen${sourcesText}
+
+Gesprekstitel: "${conversation.title}"
+
+Gesprek:
+${chatText}
+
+Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
+
+        if (apiKey) {
+          try {
+            const groqResp = await fetch(GROQ_API_URL, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: 'llama-3.3-70b-versatile',
+                messages: [{ role: 'user', content: summaryPrompt }],
+                temperature: 0.5,
+                max_tokens: 600,
+              }),
+            });
+
+            if (groqResp.ok) {
+              const groqData = await groqResp.json();
+              const summaryContent = groqData.choices?.[0]?.message?.content;
+              if (summaryContent) {
+                const { data: entry, error: journalError } = await supabaseAdmin
+                  .from('learning_journal_entries')
+                  .insert({
+                    user_id: user.id,
+                    title: `Chatreflectie: ${conversation.title}`,
+                    content: summaryContent,
+                    activity_type: 'chat_reflection',
+                  })
+                  .select('id')
+                  .single();
+
+                if (journalError) {
+                  console.error('[archive] Journal insert error:', journalError);
+                } else {
+                  journalEntryId = entry.id;
+                  console.log(`[archive] Journal entry aangemaakt: ${journalEntryId}`);
+                }
+              }
+            } else {
+              console.error('[archive] Groq fout:', groqResp.status, await groqResp.text());
+            }
+          } catch (groqErr) {
+            console.error('[archive] Groq request mislukt:', groqErr.message);
+          }
+        } else {
+          console.warn('[archive] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
+        }
+      }
+    }
+
+    const { error: archiveError } = await supabaseAdmin
+      .from('conversations')
+      .update({ status: 'archived' })
+      .eq('id', conversationId);
+
+    if (archiveError) {
+      return res.status(500).json({ error: `Archiveren mislukt: ${archiveError.message}` });
+    }
+
+    console.log(`[archive] Gesprek ${conversationId} gearchiveerd (samenvatting: ${generateSummary}, dagboek: ${journalEntryId})`);
+    return res.json({ success: true, journalEntryId });
+  } catch (err) {
+    console.error('[archive] Onverwachte fout:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.post('/api/embeddings', async (req, res) => {
   const openaiKey = process.env.OPENAI_API_KEY;
 

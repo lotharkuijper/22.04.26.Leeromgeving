@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import { sendChatMessage, type Message } from '../services/llm.service';
 import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
 import { SourceList } from '../components/SourceList';
-import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut } from 'lucide-react';
+import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
 
@@ -31,6 +31,8 @@ export function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [showContext, setShowContext] = useState(false);
   const [profileTimeout, setProfileTimeout] = useState(false);
+  const [archiveDialog, setArchiveDialog] = useState<{ conversationId: string; title: string } | null>(null);
+  const [archiving, setArchiving] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -151,6 +153,37 @@ export function ChatPage() {
     setConversations([data, ...conversations]);
     setCurrentConversationId(data.id);
     setMessages([]);
+  };
+
+  const handleArchive = async (conversationId: string, generateSummary: boolean) => {
+    setArchiving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const authHeader = session ? `Bearer ${session.access_token}` : '';
+
+      const res = await fetch('/api/chat/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
+        body: JSON.stringify({ conversationId, generateSummary }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Archiveren mislukt (${res.status})`);
+      }
+
+      setConversations(prev => prev.filter(c => c.id !== conversationId));
+      if (currentConversationId === conversationId) {
+        const remaining = conversations.filter(c => c.id !== conversationId);
+        setCurrentConversationId(remaining.length > 0 ? remaining[0].id : null);
+        if (remaining.length === 0) setMessages([]);
+      }
+      setArchiveDialog(null);
+    } catch (err: any) {
+      alert(`Fout bij archiveren: ${err.message}`);
+    } finally {
+      setArchiving(false);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -295,6 +328,7 @@ try {
   }
 
   return (
+    <>
     <div className="h-[calc(100vh-8rem)] flex gap-4">
       <div className="w-64 bg-white rounded-2xl border border-gray-200 p-4 flex flex-col">
         <button
@@ -308,20 +342,33 @@ try {
 
         <div className="flex-1 overflow-y-auto space-y-2">
           {conversations.map(conv => (
-            <button
+            <div
               key={conv.id}
-              onClick={() => setCurrentConversationId(conv.id)}
-              className={`w-full text-left p-3 rounded-lg transition-all ${
+              className={`group relative flex items-start rounded-lg transition-all ${
                 currentConversationId === conv.id
                   ? 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-800 font-medium'
                   : 'hover:bg-gray-100 text-gray-700'
               }`}
             >
-              <div className="flex items-start gap-2">
-                <MessageSquare className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                <span className="text-sm line-clamp-2">{conv.title}</span>
-              </div>
-            </button>
+              <button
+                data-testid={`btn-conversation-${conv.id}`}
+                onClick={() => setCurrentConversationId(conv.id)}
+                className="flex-1 text-left p-3"
+              >
+                <div className="flex items-start gap-2">
+                  <MessageSquare className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span className="text-sm line-clamp-2 pr-6">{conv.title}</span>
+                </div>
+              </button>
+              <button
+                data-testid={`btn-archive-${conv.id}`}
+                onClick={(e) => { e.stopPropagation(); setArchiveDialog({ conversationId: conv.id, title: conv.title }); }}
+                title="Verplaats naar leerdagboek"
+                className="absolute right-2 top-2.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-green-200 text-green-700"
+              >
+                <BookText className="w-4 h-4" />
+              </button>
+            </div>
           ))}
         </div>
       </div>
@@ -410,5 +457,63 @@ try {
         )}
       </div>
     </div>
+
+    {archiveDialog && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-green-100 rounded-xl">
+              <BookText className="w-5 h-5 text-green-700" />
+            </div>
+            <h2 className="text-lg font-semibold text-gray-900">Verplaats naar leerdagboek</h2>
+            <button
+              onClick={() => !archiving && setArchiveDialog(null)}
+              className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
+              data-testid="btn-archive-cancel"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <p className="text-sm text-gray-600 mb-2">
+            Je staat op het punt het gesprek <strong>"{archiveDialog.title}"</strong> af te sluiten.
+          </p>
+          <p className="text-sm text-gray-600 mb-6">
+            Wil je dat de leerassistent een formatieve samenvatting van dit gesprek opslaat in je leerdagboek? Die samenvatting kun je later bekijken om op te reflecteren.
+          </p>
+
+          <div className="flex flex-col gap-3">
+            <button
+              data-testid="btn-archive-with-summary"
+              onClick={() => handleArchive(archiveDialog.conversationId, true)}
+              disabled={archiving}
+              className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
+              Samenvatting opslaan en gesprek afsluiten
+            </button>
+
+            <button
+              data-testid="btn-archive-without-summary"
+              onClick={() => handleArchive(archiveDialog.conversationId, false)}
+              disabled={archiving}
+              className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Alleen afsluiten (geen dagboekvermelding)
+            </button>
+
+            <button
+              data-testid="btn-archive-dismiss"
+              onClick={() => setArchiveDialog(null)}
+              disabled={archiving}
+              className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
+            >
+              Annuleren
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
