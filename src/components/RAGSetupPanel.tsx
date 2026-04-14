@@ -81,6 +81,8 @@ export function RAGSetupPanel() {
   const [extracting, setExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
   const [processedDocCount, setProcessedDocCount] = useState(0);
+  const [existingConceptCount, setExistingConceptCount] = useState(0);
+  const [replaceMode, setReplaceMode] = useState(false);
 
   useEffect(() => {
     if (activeCourseRagFolderIds.length === 0) {
@@ -94,6 +96,19 @@ export function RAGSetupPanel() {
       .eq('processing_status', 'completed')
       .then(({ count }) => setProcessedDocCount(count ?? 0));
   }, [activeCourseRagFolderIds]);
+
+  useEffect(() => {
+    if (!activeCourseId || !session?.access_token) {
+      setExistingConceptCount(0);
+      return;
+    }
+    fetch(`/api/concepts?courseId=${activeCourseId}`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    })
+      .then(r => r.ok ? r.json() : { concepts: [] })
+      .then(data => setExistingConceptCount(data.concepts?.length ?? 0))
+      .catch(() => setExistingConceptCount(0));
+  }, [activeCourseId, session?.access_token, extractResult]);
 
   const ragFolderId = activeCourseRagFolderIds[0] ?? null;
 
@@ -157,14 +172,14 @@ export function RAGSetupPanel() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ courseId: activeCourseId }),
+        body: JSON.stringify({ courseId: activeCourseId, replace: replaceMode }),
       });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || `Server error ${response.status}`);
       }
       setExtractResult({
-        count: data.concepts?.length ?? 0,
+        count: (data.concepts?.length ?? 0) + (data.updated ?? 0),
         skipped: data.skipped ?? 0,
         message: data.message || '',
       });
@@ -279,12 +294,14 @@ export function RAGSetupPanel() {
           <Sparkles className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
             <h3 className="font-semibold text-gray-900 text-sm">Onderwerpen extraheren uit cursusmateriaal</h3>
-            <p className="text-xs text-gray-600 mt-0.5 mb-3">
-              Laat de AI automatisch sleutelbegrippen identificeren uit de geïmporteerde documenten en voeg ze toe aan de lijst in &quot;Ik leg uit&quot;.
-              {processedDocCount > 0
-                ? ` (${processedDocCount} verwerkt document${processedDocCount !== 1 ? 'en' : ''} beschikbaar)`
-                : ' — upload en verwerk eerst documenten.'}
+            <p className="text-xs text-gray-600 mt-0.5 mb-1">
+              Laat de AI automatisch vaktermen identificeren uit de geïmporteerde documenten — ook als ze impliciet in de tekst voorkomen — en voeg ze toe aan de lijst in &quot;Ik leg uit&quot;.
             </p>
+            <div className="flex flex-wrap gap-3 text-xs text-gray-500 mb-3">
+              <span>{processedDocCount} verwerkt document{processedDocCount !== 1 ? 'en' : ''}</span>
+              <span>·</span>
+              <span>{existingConceptCount} bestaande begrippen voor deze cursus</span>
+            </div>
             {extractResult && (
               <div className={`mb-3 text-sm px-3 py-2 rounded-lg ${
                 extractResult.count > 0
@@ -297,18 +314,30 @@ export function RAGSetupPanel() {
                 )}
               </div>
             )}
-            <button
-              onClick={handleExtractConcepts}
-              disabled={extracting || processedDocCount === 0}
-              data-testid="button-extract-concepts"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-            >
-              {extracting ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Extraheren...</>
-              ) : (
-                <><Sparkles className="w-4 h-4" /> Onderwerpen extraheren</>
-              )}
-            </button>
+            <div className="flex flex-col gap-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={replaceMode}
+                  onChange={e => setReplaceMode(e.target.checked)}
+                  data-testid="checkbox-replace-concepts"
+                  className="w-4 h-4 rounded accent-purple-600"
+                />
+                Bestaande begrippen vervangen (verwijdert huidige cursuslijst voor opnieuw extraheren)
+              </label>
+              <button
+                onClick={handleExtractConcepts}
+                disabled={extracting || processedDocCount === 0}
+                data-testid="button-extract-concepts"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors self-start"
+              >
+                {extracting ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Extraheren...</>
+                ) : (
+                  <><Sparkles className="w-4 h-4" /> {existingConceptCount > 0 && replaceMode ? 'Opnieuw extraheren' : 'Onderwerpen extraheren'}</>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>

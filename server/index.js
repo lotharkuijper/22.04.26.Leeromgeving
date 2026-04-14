@@ -464,10 +464,12 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     return res.status(401).json({ error: 'Authorization header required' });
   }
 
-  const { courseId } = req.body;
+  const { courseId, replace = false } = req.body;
   if (!courseId) {
     return res.status(400).json({ error: 'courseId is required' });
   }
+
+  const courseMarker = `course_id:${courseId}`;
 
   try {
     const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -493,6 +495,29 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
     if (!isAdmin) {
       return res.status(403).json({ error: 'Admin role required' });
+    }
+
+    if (replace) {
+      const { data: taggedConcepts, error: taggedErr } = await supabaseAdmin
+        .from('concepts')
+        .select('id, key_points')
+        .contains('key_points', [courseMarker]);
+
+      if (taggedErr) {
+        console.error('[extract-concepts] Tagged concepts query error on replace:', taggedErr);
+        return res.status(500).json({ error: `Ophalen mislukt: ${taggedErr.message}` });
+      }
+
+      for (const concept of taggedConcepts || []) {
+        const updatedKeyPoints = (concept.key_points || []).filter(
+          (kp) => kp !== courseMarker && kp !== '[RAG-geëxtraheerd uit cursusmateriaal]'
+        );
+        await supabaseAdmin
+          .from('concepts')
+          .update({ key_points: updatedKeyPoints })
+          .eq('id', concept.id);
+      }
+      console.log(`[extract-concepts] Untagged ${taggedConcepts?.length ?? 0} concepts for course ${courseId} (replace mode)`);
     }
 
     const { data: assignments } = await supabaseAdmin
@@ -539,7 +564,7 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       .from('document_chunks')
       .select('content, document_id')
       .in('document_id', docIds)
-      .limit(60);
+      .limit(80);
 
     if (chunksError) {
       console.error('[extract-concepts] chunks query error:', chunksError);
@@ -553,16 +578,22 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     const combinedText = chunks
       .map((c) => c.content)
       .join('\n\n---\n\n')
-      .slice(0, 12000);
+      .slice(0, 14000);
 
     const extractionPrompt = `Je bent een expert in epidemiologie en biostatistiek aan de VU Amsterdam.
 
-Analyseer de volgende tekst uit cursusmateriaal en extraheer maximaal 20 sleutelbegrippen die studenten moeten kennen. Elk begrip krijgt:
-- name: de exacte naam van het begrip (in het Nederlands)
-- category: precies "epidemiologie" of "biostatistiek"
-- definition: een korte definitie van 1-2 zinnen in het Nederlands
+Analyseer de onderstaande tekst uit universitair cursusmateriaal. Identificeer ALLE relevante vakbegrippen die studenten moeten kennen en kunnen uitleggen — ook als ze slechts terloops of impliciet in de tekst voorkomen. Wees volledig en breed: liever 30 begrippen dan 10.
 
-Geef ALLEEN een JSON-array terug, geen extra tekst:
+Geschikte begrippen omvatten (maar zijn niet beperkt tot):
+- Epidemiologie: incidentie, prevalentie, relatief risico, odds ratio, attributief risico, confounding, effect modification, selectiebias, informatiebias, cohortonderzoek, patiënt-controleonderzoek, cross-sectioneel onderzoek, gerandomiseerd gecontroleerd onderzoek, ecologisch onderzoek, case report, surveillance, screening, sensitiviteit, specificiteit, positief voorspellende waarde, negatief voorspellende waarde, DAG (gerichte acyclische graaf), mediatie, effect modificatie, interactie
+- Biostatistiek: gemiddelde, mediaan, standaarddeviatie, variantie, normaalverdeling, binomiale verdeling, Poisson-verdeling, betrouwbaarheidsinterval, p-waarde, nulhypothese, statistische toets, t-toets, chi-kwadraattoets, regressieanalyse, logistische regressie, Kaplan-Meier, log-rank toets, hazard ratio, steekproefomvang, power, type I fout, type II fout, effectgrootte, multiple testing
+
+Geef elk gevonden begrip de volgende velden:
+- name: de gangbare Nederlandse (of internationaal gebruikte) term
+- category: precies "epidemiologie" of "biostatistiek"
+- definition: een heldere definitie van 1-2 zinnen in het Nederlands
+
+Geef UITSLUITEND een JSON-array terug, zonder extra tekst of uitleg:
 [
   {"name": "Begrip naam", "category": "epidemiologie", "definition": "Definitie hier."}
 ]
@@ -579,8 +610,8 @@ ${combinedText}`;
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: extractionPrompt }],
-        temperature: 0.3,
-        max_tokens: 3000,
+        temperature: 0.2,
+        max_tokens: 6000,
       }),
     });
 
@@ -613,52 +644,136 @@ ${combinedText}`;
       (c) => c.name && c.category && validCategories.includes(c.category) && c.definition
     );
 
-    const { data: existingConcepts } = await supabaseAdmin
+    const { data: allExisting } = await supabaseAdmin
       .from('concepts')
-      .select('name');
+      .select('id, name, key_points');
 
-    const existingNames = new Set((existingConcepts || []).map((c) => c.name.toLowerCase().trim()));
-
-    const newConcepts = validConcepts.filter(
-      (c) => !existingNames.has(c.name.toLowerCase().trim())
+    const existingByName = new Map(
+      (allExisting || []).map((c) => [c.name.toLowerCase().trim(), c])
     );
 
-    if (newConcepts.length === 0) {
-      return res.json({
-        concepts: [],
-        skipped: validConcepts.length,
-        message: 'Alle geëxtraheerde begrippen bestaan al in de database',
-      });
+    const alreadyTaggedForCourse = new Set(
+      (allExisting || [])
+        .filter((c) => (c.key_points || []).includes(courseMarker))
+        .map((c) => c.name.toLowerCase().trim())
+    );
+
+    const toInsert = [];
+    const toUpdate = [];
+
+    for (const c of validConcepts) {
+      const key = c.name.toLowerCase().trim();
+      if (alreadyTaggedForCourse.has(key)) continue;
+
+      const existing = existingByName.get(key);
+      if (existing) {
+        const updatedKeyPoints = [...new Set([...(existing.key_points || []), courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'])];
+        toUpdate.push({ id: existing.id, key_points: updatedKeyPoints });
+      } else {
+        toInsert.push({
+          name: c.name.trim(),
+          category: c.category,
+          definition: c.definition.trim(),
+          key_points: [courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'],
+          examples: [],
+        });
+      }
     }
 
-    const toInsert = newConcepts.map((c) => ({
-      name: c.name.trim(),
-      category: c.category,
-      definition: c.definition.trim(),
-      key_points: ['[RAG-geëxtraheerd uit cursusmateriaal]'],
-      examples: [],
-    }));
-
-    const { data: inserted, error: insertError } = await supabaseAdmin
-      .from('concepts')
-      .insert(toInsert)
-      .select('id, name, category, definition');
-
-    if (insertError) {
-      console.error('[extract-concepts] Insert error:', insertError);
-      return res.status(500).json({ error: `Begrippen opslaan mislukt: ${insertError.message}` });
+    for (const u of toUpdate) {
+      const { error: updErr } = await supabaseAdmin
+        .from('concepts')
+        .update({ key_points: u.key_points })
+        .eq('id', u.id);
+      if (updErr) console.error('[extract-concepts] Update error:', updErr);
     }
 
-    console.log(`[extract-concepts] Inserted ${inserted?.length ?? 0} new concepts for course ${courseId}`);
+    let inserted = [];
+    if (toInsert.length > 0) {
+      const { data: ins, error: insertError } = await supabaseAdmin
+        .from('concepts')
+        .insert(toInsert)
+        .select('id, name, category, definition');
+
+      if (insertError) {
+        console.error('[extract-concepts] Insert error:', insertError);
+        return res.status(500).json({ error: `Begrippen opslaan mislukt: ${insertError.message}` });
+      }
+      inserted = ins || [];
+    }
+
+    const totalAdded = inserted.length + toUpdate.length;
+    const skipped = validConcepts.length - toInsert.length - toUpdate.length;
+
+    console.log(`[extract-concepts] Done for course ${courseId}: ${inserted.length} new, ${toUpdate.length} updated, ${skipped} already tagged`);
 
     return res.json({
-      concepts: inserted || [],
-      skipped: validConcepts.length - (inserted?.length ?? 0),
-      message: `${inserted?.length ?? 0} nieuwe begrippen toegevoegd`,
+      concepts: inserted,
+      updated: toUpdate.length,
+      skipped,
+      message: `${totalAdded} begrippen toegevoegd/bijgewerkt voor deze cursus`,
     });
   } catch (err) {
     console.error('[extract-concepts] Unexpected error:', err);
     return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+app.get('/api/concepts', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available' });
+  }
+
+  const { courseId } = req.query;
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+  const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { error: userError } = await callerClient.auth.getUser();
+  if (userError) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  try {
+    if (courseId) {
+      const courseMarker = `course_id:${courseId}`;
+      const { data: courseConcepts, error } = await supabaseAdmin
+        .from('concepts')
+        .select('*')
+        .contains('key_points', [courseMarker])
+        .order('name');
+
+      if (error) {
+        console.error('[concepts] query error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+
+      if (courseConcepts && courseConcepts.length > 0) {
+        return res.json({ concepts: courseConcepts, source: 'course' });
+      }
+
+      return res.json({ concepts: [], source: 'empty' });
+    }
+
+    const { data: globalConcepts, error } = await supabaseAdmin
+      .from('concepts')
+      .select('*')
+      .order('name');
+
+    if (error) {
+      console.error('[concepts] global query error:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ concepts: globalConcepts || [], source: 'global' });
+  } catch (err) {
+    console.error('[concepts] Unexpected error:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 

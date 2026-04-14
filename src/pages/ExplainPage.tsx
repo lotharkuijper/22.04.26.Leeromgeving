@@ -4,7 +4,7 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation } from '../services/llm.service';
 import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
-import { BookOpen, Search, Send, CheckCircle, XCircle, AlertCircle, RefreshCw, LogOut } from 'lucide-react';
+import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import type { Database } from '../lib/database.types';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
@@ -24,6 +24,8 @@ export function ExplainPage() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'epidemiologie' | 'biostatistiek'>('all');
   const [profileTimeout, setProfileTimeout] = useState(false);
   const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number }>>([]);
+  const [conceptSource, setConceptSource] = useState<'course' | 'global' | 'empty' | null>(null);
+  const [conceptsLoading, setConceptsLoading] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -37,32 +39,38 @@ export function ExplainPage() {
   }, [profile]);
 
   useEffect(() => {
-    loadConcepts();
-  }, []);
+    if (profile) loadConcepts();
+  }, [activeCourse, profile]);
 
   useEffect(() => {
     filterConcepts();
   }, [searchTerm, categoryFilter, concepts]);
 
   const loadConcepts = async () => {
-    try {
-      console.log('[EXPLAIN] Loading concepts from database');
-      const { data, error } = await supabase
-        .from('concepts')
-        .select('*')
-        .order('name');
+    const session = (await supabase.auth.getSession()).data.session;
+    if (!session?.access_token) return;
 
-      if (error) {
-        console.error('[EXPLAIN] Error loading concepts:', error);
-        alert('Kon begrippen niet laden. Probeer de pagina te vernieuwen.');
+    setConceptsLoading(true);
+    try {
+      const params = activeCourse ? `?courseId=${activeCourse}` : '';
+      console.log(`[EXPLAIN] Loading concepts from backend${params}`);
+      const response = await fetch(`/api/concepts${params}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (!response.ok) {
+        console.error('[EXPLAIN] Error loading concepts:', response.status);
         return;
       }
 
-      console.log(`[EXPLAIN] Loaded ${data?.length || 0} concepts`);
-      setConcepts(data || []);
+      const data = await response.json();
+      console.log(`[EXPLAIN] Loaded ${data.concepts?.length || 0} concepts (source: ${data.source})`);
+      setConcepts(data.concepts || []);
+      setConceptSource(data.source ?? null);
     } catch (error) {
       console.error('[EXPLAIN] Unexpected error loading concepts:', error);
-      alert('Er is een onverwachte fout opgetreden.');
+    } finally {
+      setConceptsLoading(false);
     }
   };
 
@@ -251,7 +259,22 @@ export function ExplainPage() {
           </div>
 
           <div className="space-y-2 max-h-[500px] overflow-y-auto">
-            {filteredConcepts.length === 0 && (
+            {conceptsLoading && (
+              <div className="text-center py-6">
+                <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                <p className="text-xs text-gray-500">Begrippen laden...</p>
+              </div>
+            )}
+            {!conceptsLoading && conceptSource === 'empty' && (
+              <div className="text-center py-6 px-2">
+                <Sparkles className="w-8 h-8 mx-auto mb-2 text-purple-300" />
+                <p className="text-sm font-medium text-gray-700 mb-1">Nog geen begrippen voor deze cursus</p>
+                <p className="text-xs text-gray-500">
+                  Vraag de beheerder om begrippen te extraheren via het Admin-paneel (RAG-instellingen).
+                </p>
+              </div>
+            )}
+            {!conceptsLoading && conceptSource !== 'empty' && filteredConcepts.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-4">
                 Geen begrippen gevonden
               </p>
