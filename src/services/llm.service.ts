@@ -82,8 +82,12 @@ ${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
 
   if (ragContext) {
     evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
-    if (ragStrictMode) {
+  }
+  if (ragStrictMode) {
+    if (ragContext) {
       evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
+    } else {
+      evaluationPrompt += `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten gevonden voor dit begrip. Geef dit duidelijk aan in je feedback.`;
     }
   }
 
@@ -137,10 +141,13 @@ export async function generateQuiz(
   ragContext?: string,
   ragStrictMode?: boolean
 ): Promise<QuizQuestion[]> {
-  const strictNote = ragStrictMode && ragContext ? RAG_STRICT_INSTRUCTION_LLM : '';
-  const contextSection = ragContext
-    ? `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}${strictNote}\n`
-    : '';
+  let contextSection = '';
+  if (ragContext) {
+    const strictNote = ragStrictMode ? RAG_STRICT_INSTRUCTION_LLM : '';
+    contextSection = `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}${strictNote}\n`;
+  } else if (ragStrictMode) {
+    contextSection = `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten beschikbaar. Geef dit aan in de vragen of genereer geen vragen.\n`;
+  }
 
   const quizPrompt = `Genereer ${numQuestions} ${difficulty === 'easy' ? 'makkelijke' : difficulty === 'medium' ? 'gemiddelde' : 'moeilijke'} meerkeuzevragen over ${topic} in het domein van epidemiologie en biostatistiek.${contextSection}
 

@@ -127,10 +127,18 @@ app.post('/api/chat', async (req, res) => {
         console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
       }
     }
-    const strictSuffix = ragStrictMode && context ? RAG_STRICT_INSTRUCTION : '';
-    const systemContent = context
-      ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${strictSuffix}`
-      : systemPromptContent;
+    let systemContent;
+    if (ragStrictMode) {
+      if (context) {
+        systemContent = `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${RAG_STRICT_INSTRUCTION}`;
+      } else {
+        systemContent = `${systemPromptContent}${RAG_STRICT_INSTRUCTION}\n\nEr zijn geen relevante cursusteksten gevonden voor deze vraag. Informeer de student hierover.`;
+      }
+    } else {
+      systemContent = context
+        ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}`
+        : systemPromptContent;
+    }
     finalMessages = [{ role: 'system', content: systemContent }, ...userMessages];
   }
 
@@ -403,6 +411,23 @@ app.put('/api/rag-settings', async (req, res) => {
     );
     if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
 
+    // Valideer en clamp settings per module
+    const MODULES = ['chat', 'explain', 'quiz', 'project'];
+    for (const mod of MODULES) {
+      if (settings[mod]) {
+        const m = settings[mod];
+        if (m.similarity_threshold !== undefined) {
+          m.similarity_threshold = Math.max(0.50, Math.min(0.95, parseFloat(m.similarity_threshold)));
+        }
+        if (m.match_count !== undefined) {
+          m.match_count = Math.max(1, Math.min(20, parseInt(m.match_count)));
+        }
+        if (m.rag_strict_mode !== undefined) {
+          m.rag_strict_mode = Boolean(m.rag_strict_mode);
+        }
+      }
+    }
+
     const settingsKey = courseId ? `__rag_settings_${courseId}__` : '__rag_settings_global__';
     const content = JSON.stringify(settings);
 
@@ -410,14 +435,16 @@ app.put('/api/rag-settings', async (req, res) => {
       .from('chatbot_prompts').select('id').eq('name', settingsKey).maybeSingle();
 
     if (existing) {
-      await supabaseAdmin
+      const { error: updateErr } = await supabaseAdmin
         .from('chatbot_prompts')
         .update({ content, updated_at: new Date().toISOString() })
         .eq('name', settingsKey);
+      if (updateErr) throw new Error(`DB update mislukt: ${updateErr.message}`);
     } else {
-      await supabaseAdmin
+      const { error: insertErr } = await supabaseAdmin
         .from('chatbot_prompts')
         .insert({ name: settingsKey, content, is_active: false });
+      if (insertErr) throw new Error(`DB insert mislukt: ${insertErr.message}`);
     }
 
     console.log(`[rag-settings PUT] Saved settings for key=${settingsKey} by user=${user.id}`);

@@ -970,7 +970,7 @@ const tabs = [
                         <p className="text-xs text-gray-500 mb-2">Minimale overeenkomst voor RAG-chunks (0.0 – 1.0)</p>
                         <input
                           type="range"
-                          min={0.3}
+                          min={0.50}
                           max={0.95}
                           step={0.01}
                           value={s.similarity_threshold}
@@ -979,7 +979,7 @@ const tabs = [
                           data-testid={`slider-threshold-${mod}`}
                         />
                         <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                          <span>Breed (0.30)</span><span>Strikt (0.95)</span>
+                          <span>Breed (0.50)</span><span>Strikt (0.95)</span>
                         </div>
                       </div>
 
@@ -987,11 +987,11 @@ const tabs = [
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Max. chunks (<span className="font-mono">{s.match_count}</span>)
                         </label>
-                        <p className="text-xs text-gray-500 mb-2">Aantal top-overeenkomende passages (1 – 15)</p>
+                        <p className="text-xs text-gray-500 mb-2">Aantal top-overeenkomende passages (1 – 20)</p>
                         <input
                           type="range"
                           min={1}
-                          max={15}
+                          max={20}
                           step={1}
                           value={s.match_count}
                           onChange={e => updateRagModule(mod, 'match_count', parseInt(e.target.value))}
@@ -999,7 +999,7 @@ const tabs = [
                           data-testid={`slider-matchcount-${mod}`}
                         />
                         <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                          <span>1</span><span>15</span>
+                          <span>1</span><span>20</span>
                         </div>
                       </div>
 
