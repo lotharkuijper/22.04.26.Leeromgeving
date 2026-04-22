@@ -27,6 +27,26 @@ interface QuizAttempt {
   created_at: string;
 }
 
+interface RagModuleSettings {
+  similarity_threshold: number;
+  match_count: number;
+  rag_strict_mode: boolean;
+}
+
+interface RagSettings {
+  chat: RagModuleSettings;
+  explain: RagModuleSettings;
+  quiz: RagModuleSettings;
+  project: RagModuleSettings;
+}
+
+const RAG_DEFAULTS: RagSettings = {
+  chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
+  explain: { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: true  },
+  quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
+  project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
+};
+
 export function QuizPage() {
   const { profile } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
@@ -41,10 +61,18 @@ export function QuizPage() {
   const [loading, setLoading] = useState(false);
   const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
   const [ragSources, setRagSources] = useState<SourceItem[]>([]);
+  const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
 
   useEffect(() => {
     loadAttempts();
   }, []);
+
+  useEffect(() => {
+    const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
+    fetch(url).then(r => r.ok ? r.json() : null).then(data => {
+      if (data) setRagSettings(data);
+    }).catch(() => {});
+  }, [activeCourse]);
 
   const loadAttempts = async () => {
     if (!profile) return;
@@ -75,8 +103,8 @@ export function QuizPage() {
         try {
           const chunks = await searchRelevantChunks(
             topic,
-            0.65,
-            5,
+            ragSettings.quiz.similarity_threshold,
+            ragSettings.quiz.match_count,
             'quiz',
             profile?.role || 'student',
             activeCourse
@@ -91,7 +119,7 @@ export function QuizPage() {
         }
       }
 
-      const generatedQuestions = await generateQuiz(topic, difficulty, numQuestions, ragContext);
+      const generatedQuestions = await generateQuiz(topic, difficulty, numQuestions, ragContext, ragSettings.quiz.rag_strict_mode);
       setQuestions(generatedQuestions);
       setSelectedAnswers(new Array(generatedQuestions.length).fill(-1));
       setCurrentQuestion(0);

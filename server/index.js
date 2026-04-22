@@ -36,6 +36,40 @@ Regels:
 4. Geef studenten genoeg context om zelfstandig na te denken
 5. Prijs deelantwoorden en moedig studenten aan dieper na te denken`;
 
+const RAG_MODULE_DEFAULTS = {
+  chat:    { similarity_threshold: 0.70, match_count: 5,  rag_strict_mode: false },
+  explain: { similarity_threshold: 0.70, match_count: 5,  rag_strict_mode: true  },
+  quiz:    { similarity_threshold: 0.65, match_count: 5,  rag_strict_mode: true  },
+  project: { similarity_threshold: 0.60, match_count: 7,  rag_strict_mode: false },
+};
+
+const RAG_STRICT_INSTRUCTION = `\n\nSTRIKTE BRONBEPERKING: Gebruik UITSLUITEND de context die hierboven is meegegeven uit het cursusmateriaal. Ga NIET buiten deze bronnen. Als iets niet in de meegeleverde context staat, zeg dan eerlijk: "Dit onderwerp staat niet in het beschikbare cursusmateriaal."`;
+
+async function loadRagSettings(courseId) {
+  if (!supabaseAdmin) return { ...RAG_MODULE_DEFAULTS };
+  const keys = courseId
+    ? [`__rag_settings_${courseId}__`, '__rag_settings_global__']
+    : ['__rag_settings_global__'];
+  for (const key of keys) {
+    const { data } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('content')
+      .eq('name', key)
+      .maybeSingle();
+    if (data?.content) {
+      try {
+        const parsed = JSON.parse(data.content);
+        const merged = {};
+        for (const mod of Object.keys(RAG_MODULE_DEFAULTS)) {
+          merged[mod] = { ...RAG_MODULE_DEFAULTS[mod], ...(parsed[mod] || {}) };
+        }
+        return merged;
+      } catch { /* fall through to next key */ }
+    }
+  }
+  return { ...RAG_MODULE_DEFAULTS };
+}
+
 let conceptsHasCourseId = false;
 async function detectConceptsCourseIdColumn() {
   if (!supabaseAdmin) return;
@@ -64,6 +98,7 @@ app.post('/api/chat', async (req, res) => {
     stream = false,
     max_tokens,
     skipSystemPrompt = false,
+    ragStrictMode = false,
   } = req.body;
 
   const userMessages = Array.isArray(messages) ? messages.filter(m => m.role !== 'system') : [];
@@ -92,8 +127,9 @@ app.post('/api/chat', async (req, res) => {
         console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
       }
     }
+    const strictSuffix = ragStrictMode && context ? RAG_STRICT_INSTRUCTION : '';
     const systemContent = context
-      ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}`
+      ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${strictSuffix}`
       : systemPromptContent;
     finalMessages = [{ role: 'system', content: systemContent }, ...userMessages];
   }
@@ -322,6 +358,72 @@ app.post('/api/embeddings', async (req, res) => {
     return res.json({ embeddings, provider: 'openai' });
   } catch (err) {
     console.error('[/api/embeddings] OpenAI request failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/rag-settings', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const { courseId } = req.query;
+  try {
+    const settings = await loadRagSettings(courseId || null);
+    return res.json(settings);
+  } catch (err) {
+    console.error('[rag-settings GET] Error:', err.message);
+    return res.json({ ...RAG_MODULE_DEFAULTS });
+  }
+});
+
+app.put('/api/rag-settings', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { courseId, settings } = req.body;
+  if (!settings || typeof settings !== 'object') {
+    return res.status(400).json({ error: 'settings object vereist' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+    const isAllowed = profile && (
+      profile.role === 'admin' ||
+      profile.role === 'docent' ||
+      profile.email === SUPERUSER_EMAIL
+    );
+    if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
+
+    const settingsKey = courseId ? `__rag_settings_${courseId}__` : '__rag_settings_global__';
+    const content = JSON.stringify(settings);
+
+    const { data: existing } = await supabaseAdmin
+      .from('chatbot_prompts').select('id').eq('name', settingsKey).maybeSingle();
+
+    if (existing) {
+      await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ content, updated_at: new Date().toISOString() })
+        .eq('name', settingsKey);
+    } else {
+      await supabaseAdmin
+        .from('chatbot_prompts')
+        .insert({ name: settingsKey, content, is_active: false });
+    }
+
+    console.log(`[rag-settings PUT] Saved settings for key=${settingsKey} by user=${user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[rag-settings PUT] Error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });

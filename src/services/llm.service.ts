@@ -26,7 +26,8 @@ async function callChatAPI(body: object): Promise<any> {
 
 export async function sendChatMessage(
   messages: Message[],
-  context?: string
+  context?: string,
+  ragStrictMode?: boolean
 ): Promise<LLMResponse> {
   try {
     const userMessages = messages.filter(m => m.role !== 'system');
@@ -38,6 +39,7 @@ export async function sendChatMessage(
       temperature: 0.7,
       top_p: 1,
       stream: false,
+      ragStrictMode: ragStrictMode ?? false,
     });
 
     const content = data.choices[0]?.message?.content;
@@ -59,13 +61,16 @@ export async function sendChatMessage(
   }
 }
 
+const RAG_STRICT_INSTRUCTION_LLM = `\n\nSTRIKTE BRONBEPERKING: Gebruik UITSLUITEND de context die hierboven is meegegeven. Ga NIET buiten deze bronnen. Als iets niet in de meegeleverde context staat, zeg dan eerlijk: "Dit onderwerp staat niet in het beschikbare cursusmateriaal."`;
+
 export async function evaluateExplanation(
   concept: string,
   explanation: string,
   definition: string,
   keyPoints: string[],
   ragContext?: string,
-  retrievedSources?: Array<{ title: string; similarity: number }>
+  retrievedSources?: Array<{ title: string; similarity: number }>,
+  ragStrictMode?: boolean
 ): Promise<LLMResponse> {
   let evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
 
@@ -77,6 +82,9 @@ ${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
 
   if (ragContext) {
     evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
+    if (ragStrictMode) {
+      evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
+    }
   }
 
   evaluationPrompt += `\n\nUitleg van de student:
@@ -126,10 +134,12 @@ export async function generateQuiz(
   topic: string,
   difficulty: 'easy' | 'medium' | 'hard',
   numQuestions: number = 5,
-  ragContext?: string
+  ragContext?: string,
+  ragStrictMode?: boolean
 ): Promise<QuizQuestion[]> {
+  const strictNote = ragStrictMode && ragContext ? RAG_STRICT_INSTRUCTION_LLM : '';
   const contextSection = ragContext
-    ? `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}\n`
+    ? `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}${strictNote}\n`
     : '';
 
   const quizPrompt = `Genereer ${numQuestions} ${difficulty === 'easy' ? 'makkelijke' : difficulty === 'medium' ? 'gemiddelde' : 'moeilijke'} meerkeuzevragen over ${topic} in het domein van epidemiologie en biostatistiek.${contextSection}

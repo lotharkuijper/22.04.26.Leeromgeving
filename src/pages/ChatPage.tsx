@@ -21,6 +21,26 @@ interface Conversation {
   created_at: string;
 }
 
+interface RagModuleSettings {
+  similarity_threshold: number;
+  match_count: number;
+  rag_strict_mode: boolean;
+}
+
+interface RagSettings {
+  chat: RagModuleSettings;
+  explain: RagModuleSettings;
+  quiz: RagModuleSettings;
+  project: RagModuleSettings;
+}
+
+const RAG_DEFAULTS: RagSettings = {
+  chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
+  explain: { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: true  },
+  quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
+  project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
+};
+
 export function ChatPage() {
   const { profile, signOut } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
@@ -33,7 +53,15 @@ export function ChatPage() {
   const [profileTimeout, setProfileTimeout] = useState(false);
   const [archiveDialog, setArchiveDialog] = useState<{ conversationId: string; title: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
+  const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
+    fetch(url).then(r => r.ok ? r.json() : null).then(data => {
+      if (data) setRagSettings(data);
+    }).catch(() => {});
+  }, [activeCourse]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -218,8 +246,8 @@ export function ChatPage() {
 try {
   chunks = await searchRelevantChunks(
     userMessage.content,
-    0.7,
-    5,
+    ragSettings.chat.similarity_threshold,
+    ragSettings.chat.match_count,
     'general',
     profile?.role || 'student',
     activeCourse
@@ -253,7 +281,8 @@ try {
       console.log('[CHAT] Sending message to LLM...');
       const response = await sendChatMessage(
         [...conversationHistory, { role: 'user', content: userMessage.content }],
-        context
+        context,
+        ragSettings.chat.rag_strict_mode
       );
 
       const assistantMessage: ChatMessage = {

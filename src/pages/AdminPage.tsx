@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap } from 'lucide-react';
+import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
@@ -27,7 +27,27 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'settings';
+type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'rag_settings' | 'settings';
+
+interface RagModuleSettings {
+  similarity_threshold: number;
+  match_count: number;
+  rag_strict_mode: boolean;
+}
+
+interface RagSettingsConfig {
+  chat: RagModuleSettings;
+  explain: RagModuleSettings;
+  quiz: RagModuleSettings;
+  project: RagModuleSettings;
+}
+
+const RAG_ADMIN_DEFAULTS: RagSettingsConfig = {
+  chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
+  explain: { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: true  },
+  quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
+  project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
+};
 
 type ConceptCategory = 'epidemiologie' | 'biostatistiek';
 type UserRole = 'student' | 'docent' | 'admin';
@@ -126,12 +146,16 @@ export function AdminPage() {
   const [uploadFolderId, setUploadFolderId] = useState<string | null>(null);
   const [retryingDocId, setRetryingDocId] = useState<string | null>(null);
   const [retryProgress, setRetryProgress] = useState<UploadProgress | null>(null);
+  const [ragSettingsState, setRagSettingsState] = useState<RagSettingsConfig>(RAG_ADMIN_DEFAULTS);
+  const [ragSettingsSaving, setRagSettingsSaving] = useState(false);
+  const [ragSettingsMsg, setRagSettingsMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     if (activeTab === 'users') loadUsers();
     if (activeTab === 'documents') loadDocuments();
     if (activeTab === 'concepts') loadConcepts();
     if (activeTab === 'prompts') loadPrompts();
+    if (activeTab === 'rag_settings') loadRagSettingsAdmin();
   }, [activeTab, activeCourseId]);
 
   const loadUsers = async () => {
@@ -197,6 +221,7 @@ export function AdminPage() {
     const { data, error } = await supabase
       .from('chatbot_prompts')
       .select('*')
+      .not('name', 'like', '__rag_settings%')
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -205,6 +230,52 @@ export function AdminPage() {
     }
 
     setPrompts(data || []);
+  };
+
+  const loadRagSettingsAdmin = async () => {
+    try {
+      const url = activeCourseId ? `/api/rag-settings?courseId=${activeCourseId}` : '/api/rag-settings';
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setRagSettingsState(data);
+      }
+    } catch (err) {
+      console.warn('[admin] RAG settings laden mislukt');
+    }
+  };
+
+  const saveRagSettingsAdmin = async () => {
+    if (!session?.access_token) return;
+    setRagSettingsSaving(true);
+    setRagSettingsMsg(null);
+    try {
+      const res = await fetch('/api/rag-settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: activeCourseId || undefined, settings: ragSettingsState }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRagSettingsMsg({ type: 'success', text: 'RAG instellingen opgeslagen.' });
+      } else {
+        setRagSettingsMsg({ type: 'error', text: data.error || 'Opslaan mislukt.' });
+      }
+    } catch (err: any) {
+      setRagSettingsMsg({ type: 'error', text: err.message });
+    } finally {
+      setRagSettingsSaving(false);
+    }
+  };
+
+  const updateRagModule = (mod: keyof RagSettingsConfig, field: keyof RagModuleSettings, value: number | boolean) => {
+    setRagSettingsState(prev => ({
+      ...prev,
+      [mod]: { ...prev[mod], [field]: value },
+    }));
   };
 
   const handleChangeUserRole = async (userId: string, newRole: UserRole) => {
@@ -424,6 +495,7 @@ const tabs = [
   { id: 'quiz_validation' as TabType, label: 'Quiz Validatie', icon: ClipboardCheck, show: true },
   { id: 'sharestats_import' as TabType, label: 'ShareStats Import', icon: Download, show: true },
   { id: 'prompts' as TabType, label: 'Chatbot Prompts', icon: MessageSquareText, show: isAdmin },
+  { id: 'rag_settings' as TabType, label: 'RAG Instellingen', icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'settings' as TabType, label: 'Instellingen', icon: Settings, show: isAdmin },
 ].filter(tab => tab.show);
 
@@ -858,6 +930,116 @@ const tabs = [
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'rag_settings' && (
+            <div className="space-y-6 p-6">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-1">RAG Nabijheidsinstellingen</h2>
+                <p className="text-sm text-gray-600">
+                  Stel per module in hoe strikt de RAG-zoekresultaten worden gefilterd.
+                  {activeCourseId
+                    ? <> Instellingen gelden voor cursus <strong>{activeCourse?.name || activeCourseId}</strong>.</>
+                    : <> Globale standaardinstellingen (geldt voor alle cursussen zonder eigen instelling).</>}
+                </p>
+              </div>
+
+              {ragSettingsMsg && (
+                <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${ragSettingsMsg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                  {ragSettingsMsg.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                  {ragSettingsMsg.text}
+                </div>
+              )}
+
+              {(['chat', 'explain', 'quiz', 'project'] as const).map(mod => {
+                const labels: Record<string, string> = { chat: 'Chat', explain: 'Begrippen uitleggen', quiz: 'Quiz', project: 'Project' };
+                const s = ragSettingsState[mod];
+                return (
+                  <div key={mod} className="border border-gray-200 rounded-xl p-5 space-y-4 bg-gray-50">
+                    <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                      <SlidersHorizontal className="w-4 h-4 text-blue-600" />
+                      {labels[mod]}
+                    </h3>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Drempelwaarde (<span className="font-mono">{s.similarity_threshold.toFixed(2)}</span>)
+                        </label>
+                        <p className="text-xs text-gray-500 mb-2">Minimale overeenkomst voor RAG-chunks (0.0 – 1.0)</p>
+                        <input
+                          type="range"
+                          min={0.3}
+                          max={0.95}
+                          step={0.01}
+                          value={s.similarity_threshold}
+                          onChange={e => updateRagModule(mod, 'similarity_threshold', parseFloat(e.target.value))}
+                          className="w-full accent-blue-600"
+                          data-testid={`slider-threshold-${mod}`}
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                          <span>Breed (0.30)</span><span>Strikt (0.95)</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Max. chunks (<span className="font-mono">{s.match_count}</span>)
+                        </label>
+                        <p className="text-xs text-gray-500 mb-2">Aantal top-overeenkomende passages (1 – 15)</p>
+                        <input
+                          type="range"
+                          min={1}
+                          max={15}
+                          step={1}
+                          value={s.match_count}
+                          onChange={e => updateRagModule(mod, 'match_count', parseInt(e.target.value))}
+                          className="w-full accent-blue-600"
+                          data-testid={`slider-matchcount-${mod}`}
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                          <span>1</span><span>15</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col justify-center">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Strikte bronbeperking</label>
+                        <p className="text-xs text-gray-500 mb-3">LLM mag alleen antwoorden op basis van de gevonden cursusteksten</p>
+                        <button
+                          onClick={() => updateRagModule(mod, 'rag_strict_mode', !s.rag_strict_mode)}
+                          className={`relative inline-flex items-center gap-3 w-fit px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${s.rag_strict_mode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                          data-testid={`toggle-strict-${mod}`}
+                        >
+                          {s.rag_strict_mode ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                          {s.rag_strict_mode ? 'Strikt aan' : 'Strikt uit'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div className="flex items-center gap-4 pt-2">
+                <button
+                  onClick={saveRagSettingsAdmin}
+                  disabled={ragSettingsSaving}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors font-medium"
+                  data-testid="button-save-rag-settings"
+                >
+                  {ragSettingsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {ragSettingsSaving ? 'Opslaan...' : 'Opslaan'}
+                </button>
+                <button
+                  onClick={loadRagSettingsAdmin}
+                  disabled={ragSettingsSaving}
+                  className="flex items-center gap-2 px-4 py-2.5 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+                  data-testid="button-reset-rag-settings"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Herladen
+                </button>
+              </div>
             </div>
           )}
 
