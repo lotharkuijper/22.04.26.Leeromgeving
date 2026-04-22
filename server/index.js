@@ -433,12 +433,28 @@ app.put('/api/rag-settings', async (req, res) => {
     }
 
     const settingsKey = courseId ? `__rag_settings_${courseId}__` : '__rag_settings_global__';
-    const content = JSON.stringify(settings);
 
-    const { data: existing } = await supabaseAdmin
-      .from('chatbot_prompts').select('id').eq('name', settingsKey).maybeSingle();
+    // Haal bestaande settings op en voeg samen om gedeeltelijke updates te steunen
+    const { data: existingRow } = await supabaseAdmin
+      .from('chatbot_prompts').select('id, content').eq('name', settingsKey).maybeSingle();
 
-    if (existing) {
+    let mergedSettings = { ...RAG_MODULE_DEFAULTS };
+    if (existingRow?.content) {
+      try {
+        const prev = JSON.parse(existingRow.content);
+        for (const mod of Object.keys(RAG_MODULE_DEFAULTS)) {
+          if (prev[mod]) mergedSettings[mod] = { ...RAG_MODULE_DEFAULTS[mod], ...prev[mod] };
+        }
+      } catch { /* negeer parse-fouten, gebruik defaults */ }
+    }
+    // Schrijf de inkomende modules over de bestaande settings heen
+    for (const mod of MODULES) {
+      if (settings[mod]) mergedSettings[mod] = { ...mergedSettings[mod], ...settings[mod] };
+    }
+
+    const content = JSON.stringify(mergedSettings);
+
+    if (existingRow) {
       const { error: updateErr } = await supabaseAdmin
         .from('chatbot_prompts')
         .update({ content, updated_at: new Date().toISOString() })
