@@ -417,10 +417,14 @@ app.put('/api/rag-settings', async (req, res) => {
       if (settings[mod]) {
         const m = settings[mod];
         if (m.similarity_threshold !== undefined) {
-          m.similarity_threshold = Math.max(0.50, Math.min(0.95, parseFloat(m.similarity_threshold)));
+          const parsed = parseFloat(m.similarity_threshold);
+          if (isNaN(parsed)) return res.status(400).json({ error: `similarity_threshold voor ${mod} is geen geldig getal` });
+          m.similarity_threshold = Math.max(0.50, Math.min(0.95, parsed));
         }
         if (m.match_count !== undefined) {
-          m.match_count = Math.max(1, Math.min(20, parseInt(m.match_count)));
+          const parsed = parseInt(m.match_count);
+          if (isNaN(parsed)) return res.status(400).json({ error: `match_count voor ${mod} is geen geldig getal` });
+          m.match_count = Math.max(1, Math.min(20, parsed));
         }
         if (m.rag_strict_mode !== undefined) {
           m.rag_strict_mode = Boolean(m.rag_strict_mode);
