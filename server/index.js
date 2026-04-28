@@ -475,6 +475,90 @@ app.put('/api/rag-settings', async (req, res) => {
   }
 });
 
+app.get('/api/rag-settings/overrides', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+    const isAllowed = profile && (
+      profile.role === 'admin' ||
+      profile.role === 'docent' ||
+      profile.email === SUPERUSER_EMAIL
+    );
+    if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
+
+    const { data, error } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('name')
+      .like('name', '__rag_settings_%__')
+      .neq('name', '__rag_settings_global__');
+    if (error) throw new Error(error.message);
+    const courseIds = (data || []).map(row => {
+      const match = row.name.match(/^__rag_settings_(.+)__$/);
+      return match ? match[1] : null;
+    }).filter(Boolean);
+    return res.json({ courseIds });
+  } catch (err) {
+    console.error('[rag-settings/overrides GET] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/rag-settings/:courseId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { courseId } = req.params;
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+    const isAllowed = profile && (
+      profile.role === 'admin' ||
+      profile.role === 'docent' ||
+      profile.email === SUPERUSER_EMAIL
+    );
+    if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
+
+    const settingsKey = `__rag_settings_${courseId}__`;
+    const { error: deleteErr } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .delete()
+      .eq('name', settingsKey);
+
+    if (deleteErr) throw new Error(`DB delete mislukt: ${deleteErr.message}`);
+
+    console.log(`[rag-settings DELETE] Removed override for courseId=${courseId} by user=${user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[rag-settings DELETE] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/github/*path', async (req, res) => {
   const token = process.env.GITHUB_TOKEN;
   const path = req.params.path;
