@@ -22,6 +22,7 @@ export function FeedbackPage() {
   const [activityType, setActivityType] = useState('reflection');
   const [loading, setLoading] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     loadEntries();
@@ -96,6 +97,7 @@ export function FeedbackPage() {
   };
 
   const handleDelete = async (entryId: string) => {
+    setDeleteError(null);
     const { error } = await supabase
       .from('learning_journal_entries')
       .delete()
@@ -103,6 +105,7 @@ export function FeedbackPage() {
 
     if (error) {
       console.error('Error deleting entry:', error);
+      setDeleteError('Verwijderen mislukt. Probeer het opnieuw.');
     } else {
       setDeleteConfirmId(null);
       loadEntries();
@@ -251,22 +254,27 @@ export function FeedbackPage() {
               </div>
               <div className="flex items-center gap-2">
                 {deleteConfirmId === entry.id ? (
-                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-                    <span className="text-sm text-red-700 font-medium">Verwijderen?</span>
-                    <button
-                      onClick={() => handleDelete(entry.id)}
-                      data-testid={`btn-confirm-delete-${entry.id}`}
-                      className="px-2.5 py-1 bg-red-600 text-white text-xs font-semibold rounded hover:bg-red-700 transition-colors"
-                    >
-                      Ja
-                    </button>
-                    <button
-                      onClick={() => setDeleteConfirmId(null)}
-                      data-testid={`btn-cancel-delete-${entry.id}`}
-                      className="px-2.5 py-1 bg-white text-gray-600 text-xs font-semibold rounded border border-gray-300 hover:bg-gray-50 transition-colors"
-                    >
-                      Annuleren
-                    </button>
+                  <div className="flex flex-col items-end gap-1">
+                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                      <span className="text-sm text-red-700 font-medium">Weet je het zeker?</span>
+                      <button
+                        onClick={() => handleDelete(entry.id)}
+                        data-testid={`btn-confirm-delete-${entry.id}`}
+                        className="px-2.5 py-1 bg-red-600 text-white text-xs font-semibold rounded hover:bg-red-700 transition-colors"
+                      >
+                        Verwijderen
+                      </button>
+                      <button
+                        onClick={() => { setDeleteConfirmId(null); setDeleteError(null); }}
+                        data-testid={`btn-cancel-delete-${entry.id}`}
+                        className="px-2.5 py-1 bg-white text-gray-600 text-xs font-semibold rounded border border-gray-300 hover:bg-gray-50 transition-colors"
+                      >
+                        Annuleren
+                      </button>
+                    </div>
+                    {deleteError && (
+                      <span className="text-xs text-red-600">{deleteError}</span>
+                    )}
                   </div>
                 ) : (
                   <>
