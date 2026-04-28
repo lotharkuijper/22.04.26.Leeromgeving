@@ -53,7 +53,7 @@ export function ExplainPage() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'epidemiologie' | 'biostatistiek'>('all');
   const [profileTimeout, setProfileTimeout] = useState(false);
   const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number }>>([]);
-  const [contextStats, setContextStats] = useState<{ used: number; total: number } | null>(null);
+  const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [conceptSource, setConceptSource] = useState<'course' | 'global' | 'empty' | null>(null);
   const [conceptsLoading, setConceptsLoading] = useState(false);
@@ -299,9 +299,9 @@ export function ExplainPage() {
 
       const built = chunks.length > 0
         ? buildContextWithCap(chunks)
-        : { context: '', usedChunks: 0, totalChunks: 0, truncated: false };
+        : { context: '', usedChunks: 0, totalChunks: 0, truncated: false, charTrimmed: false };
       const context = built.context.length > 0 ? built.context : undefined;
-      setContextStats({ used: built.usedChunks, total: built.totalChunks });
+      setContextStats({ used: built.usedChunks, total: built.totalChunks, charTrimmed: built.charTrimmed });
       if (built.truncated) {
         console.log(`[EXPLAIN] Context capped: using ${built.usedChunks}/${built.totalChunks} chunks (${built.context.length} chars)`);
       }
@@ -734,9 +734,11 @@ export function ExplainPage() {
                           className="text-xs text-red-700 mb-2"
                           data-testid="text-context-stats-error"
                         >
-                          {contextStats.used === contextStats.total
-                            ? `Alle ${contextStats.total} gevonden passages waren beschikbaar voor de evaluatie.`
-                            : `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`}
+                          {contextStats.used < contextStats.total
+                            ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
+                            : contextStats.charTrimmed
+                              ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
+                              : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor de evaluatie.`}
                         </p>
                       )}
                       <SourceList sources={retrievedSources} />
@@ -751,12 +753,14 @@ export function ExplainPage() {
                   <div className="prose max-w-none text-gray-700 whitespace-pre-wrap">
                     {feedback}
                   </div>
-                  {contextStats && contextStats.total > 0 && contextStats.used < contextStats.total && (
+                  {contextStats && contextStats.total > 0 && (contextStats.used < contextStats.total || contextStats.charTrimmed) && (
                     <p
                       className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2"
                       data-testid="text-context-stats"
                     >
-                      Let op: {contextStats.used} van {contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.
+                      {contextStats.used < contextStats.total
+                        ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`
+                        : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
                     </p>
                   )}
                   <SourceList sources={retrievedSources} />

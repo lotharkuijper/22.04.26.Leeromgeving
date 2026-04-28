@@ -240,7 +240,10 @@ export interface FormattedContext {
   context: string;
   usedChunks: number;
   totalChunks: number;
+  /** True wanneer er chunks zijn weggelaten of wanneer chunk-inhoud is ingekort. */
   truncated: boolean;
+  /** True wanneer minstens één chunk-inhoud is afgekapt door de char-cap. */
+  charTrimmed: boolean;
 }
 
 export function formatContextFromChunks(chunks: DocumentChunk[]): string {
@@ -254,7 +257,7 @@ export function buildContextWithCap(
 ): FormattedContext {
   const total = chunks.length;
   if (total === 0) {
-    return { context: '', usedChunks: 0, totalChunks: 0, truncated: false };
+    return { context: '', usedChunks: 0, totalChunks: 0, truncated: false, charTrimmed: false };
   }
 
   // Aannemen dat searchRelevantChunks al op similarity gesorteerd is (hoogst eerst).
@@ -263,6 +266,7 @@ export function buildContextWithCap(
   const parts: string[] = [];
   let runningChars = 0;
   let used = 0;
+  let charTrimmed = false;
   for (let i = 0; i < limitN; i++) {
     const chunk = chunks[i];
     const header = `[Bron ${i + 1}: ${chunk.documentTitle}]\n`;
@@ -274,9 +278,11 @@ export function buildContextWithCap(
     }
     // Trim chunk-inhoud zo nodig zodat we ook de eerste (mogelijk grote) chunk
     // strikt onder maxChars houden.
-    const content = chunk.content.length > headroom
-      ? chunk.content.slice(0, Math.max(0, headroom - 20)) + '…[ingekort]'
-      : chunk.content;
+    let content = chunk.content;
+    if (chunk.content.length > headroom) {
+      content = chunk.content.slice(0, Math.max(0, headroom - 20)) + '…[ingekort]';
+      charTrimmed = true;
+    }
     const part = header + content;
     parts.push(part);
     runningChars += part.length + sepLen;
@@ -287,7 +293,8 @@ export function buildContextWithCap(
     context: parts.join(SEP),
     usedChunks: used,
     totalChunks: total,
-    truncated: used < total,
+    truncated: used < total || charTrimmed,
+    charTrimmed,
   };
 }
 
