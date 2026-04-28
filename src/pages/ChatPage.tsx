@@ -467,7 +467,7 @@ try {
 
             <div className="border-t border-gray-200 p-4">
               <div className="mb-3">
-                <RAGStatusIndicator />
+                <RAGStatusIndicator strictMode={ragSettings.chat.rag_strict_mode} />
               </div>
               <div className="flex gap-3">
                 <input

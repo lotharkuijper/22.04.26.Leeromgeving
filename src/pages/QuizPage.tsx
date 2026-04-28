@@ -15,6 +15,7 @@ import {
   Clock,
   Award
 } from 'lucide-react';
+import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
 type QuizState = 'setup' | 'ready' | 'active' | 'completed';
 
@@ -257,6 +258,10 @@ export function QuizPage() {
                     <span>3</span>
                     <span>10</span>
                   </div>
+                </div>
+
+                <div>
+                  <RAGStatusIndicator strictMode={ragSettings.quiz.rag_strict_mode} />
                 </div>
 
                 <button

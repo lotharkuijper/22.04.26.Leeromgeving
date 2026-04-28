@@ -355,7 +355,7 @@ export function ExplainPage() {
 
                 <div className="space-y-4">
                   <div className="mb-4">
-                    <RAGStatusIndicator />
+                    <RAGStatusIndicator strictMode={ragSettings.explain.rag_strict_mode} />
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
