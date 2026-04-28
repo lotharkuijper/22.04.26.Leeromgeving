@@ -21,6 +21,7 @@ export function FeedbackPage() {
   const [content, setContent] = useState('');
   const [activityType, setActivityType] = useState('reflection');
   const [loading, setLoading] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
     loadEntries();
@@ -95,9 +96,6 @@ export function FeedbackPage() {
   };
 
   const handleDelete = async (entryId: string) => {
-    const confirmDelete = window.confirm('Weet je zeker dat je dit dagboek wilt verwijderen?');
-    if (!confirmDelete) return;
-
     const { error } = await supabase
       .from('learning_journal_entries')
       .delete()
@@ -105,8 +103,8 @@ export function FeedbackPage() {
 
     if (error) {
       console.error('Error deleting entry:', error);
-      alert('Er is een fout opgetreden bij het verwijderen');
     } else {
+      setDeleteConfirmId(null);
       loadEntries();
     }
   };
@@ -251,21 +249,45 @@ export function FeedbackPage() {
                   </span>
                 </div>
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleEdit(entry)}
-                  className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  title="Bewerken"
-                >
-                  <Edit2 className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handleDelete(entry.id)}
-                  className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  title="Verwijderen"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+              <div className="flex items-center gap-2">
+                {deleteConfirmId === entry.id ? (
+                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                    <span className="text-sm text-red-700 font-medium">Verwijderen?</span>
+                    <button
+                      onClick={() => handleDelete(entry.id)}
+                      data-testid={`btn-confirm-delete-${entry.id}`}
+                      className="px-2.5 py-1 bg-red-600 text-white text-xs font-semibold rounded hover:bg-red-700 transition-colors"
+                    >
+                      Ja
+                    </button>
+                    <button
+                      onClick={() => setDeleteConfirmId(null)}
+                      data-testid={`btn-cancel-delete-${entry.id}`}
+                      className="px-2.5 py-1 bg-white text-gray-600 text-xs font-semibold rounded border border-gray-300 hover:bg-gray-50 transition-colors"
+                    >
+                      Annuleren
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleEdit(entry)}
+                      data-testid={`btn-edit-${entry.id}`}
+                      className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                      title="Bewerken"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setDeleteConfirmId(entry.id)}
+                      data-testid={`btn-delete-${entry.id}`}
+                      className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Verwijderen"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             <p className="text-gray-700 whitespace-pre-wrap">{entry.content}</p>

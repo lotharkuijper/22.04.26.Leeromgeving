@@ -70,7 +70,7 @@ useEffect(() => {
 
     try {
       const [conversationsRes, explanationsRes, quizAttemptsRes, projectSessionsRes] = await Promise.all([
-        supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('user_id', profile.id),
+        supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('status', 'active'),
         supabase.from('student_explanations').select('id', { count: 'exact', head: true }).eq('student_id', profile.id),
         supabase.from('quiz_attempts').select('id', { count: 'exact', head: true }).eq('student_id', profile.id),
         supabase.from('student_project_sessions').select('id', { count: 'exact', head: true }).eq('student_id', profile.id)
@@ -111,7 +111,7 @@ useEffect(() => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatsCard
-          title="Chat Conversaties"
+          title="Actieve Chats"
           value={stats.totalConversations}
           icon={MessageSquare}
           color="from-green-500 to-emerald-600"
@@ -149,7 +149,7 @@ useEffect(() => {
           <div className="space-y-4">
             <div>
               <div className="flex justify-between text-sm mb-2">
-                <span className="text-gray-600">Chat Interacties</span>
+                <span className="text-gray-600">Actieve Chat Sessies</span>
                 <span className="font-semibold text-gray-900">{stats.totalConversations}</span>
               </div>
               <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
