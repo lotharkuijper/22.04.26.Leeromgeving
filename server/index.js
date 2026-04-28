@@ -672,12 +672,15 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
 
-    // Diagnose-endpoint is admin-only: kan alle chunks zien zonder drempel
+    // Diagnose mag door admin én docent uitgevoerd worden
+    // (consistent met /api/rag-settings: zelfde gebruikers die drempels mogen aanpassen,
+    // mogen ook diagnoseren waarom bepaalde scores gehaald worden).
     const isAllowed = profile && (
       profile.role === 'admin' ||
+      profile.role === 'docent' ||
       profile.email === SUPERUSER_EMAIL
     );
-    if (!isAllowed) return res.status(403).json({ error: 'Alleen admins mogen RAG-diagnose uitvoeren' });
+    if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
 
     // Bepaal toegestane mappen op basis van cursus (zelfde logica als extract-concepts)
     let allowedFolderIds = null;
