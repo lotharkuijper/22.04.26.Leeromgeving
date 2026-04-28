@@ -963,8 +963,9 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     }
 
     const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
-    if (!isAdmin) {
-      return res.status(403).json({ error: 'Admin role required' });
+    const isDocent = profile.role === 'docent';
+    if (!isAdmin && !isDocent) {
+      return res.status(403).json({ error: 'Admin of docent rol vereist' });
     }
 
     if (replace) {

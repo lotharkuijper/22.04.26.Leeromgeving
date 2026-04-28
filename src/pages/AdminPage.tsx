@@ -135,6 +135,9 @@ export function AdminPage() {
   const [addConceptLoading, setAddConceptLoading] = useState(false);
   const [addConceptError, setAddConceptError] = useState<string | null>(null);
   const [addConceptSuccess, setAddConceptSuccess] = useState(false);
+  const [regeneratingConcepts, setRegeneratingConcepts] = useState(false);
+  const [regenerateResult, setRegenerateResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole } | null>(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
@@ -522,6 +525,37 @@ export function AdminPage() {
     }
   };
 
+  const handleRegenerateConcepts = async () => {
+    if (!activeCourseId || !session?.access_token) return;
+    setRegeneratingConcepts(true);
+    setRegenerateResult(null);
+    setRegenerateError(null);
+    try {
+      const response = await fetch('/api/admin/extract-concepts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: activeCourseId, replace: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Serverfout ${response.status}`);
+      }
+      setRegenerateResult({
+        count: (data.concepts?.length ?? 0) + (data.updated ?? 0),
+        skipped: data.skipped ?? 0,
+        message: data.message || '',
+      });
+      await loadConcepts();
+    } catch (err) {
+      setRegenerateError(err instanceof Error ? err.message : 'Onbekende fout');
+    } finally {
+      setRegeneratingConcepts(false);
+    }
+  };
+
   const handleSavePrompt = async () => {
     if (!editingPrompt || !profile) return;
     setLoading(true);
@@ -818,15 +852,53 @@ const tabs = [
                     </p>
                   )}
                 </div>
-                <button
-                  onClick={() => { setAddConceptForm(v => !v); setAddConceptError(null); setAddConceptSuccess(false); }}
-                  className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg flex items-center gap-2"
-                  data-testid="button-toggle-add-concept"
-                >
-                  <Plus className="w-4 h-4" />
-                  Begrip toevoegen
-                </button>
+                <div className="flex items-center gap-2">
+                  {activeCourseId && (
+                    <button
+                      onClick={handleRegenerateConcepts}
+                      disabled={regeneratingConcepts}
+                      className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-white font-semibold rounded-lg hover:from-amber-600 hover:to-amber-700 transition-all shadow-lg flex items-center gap-2 disabled:opacity-50"
+                      data-testid="button-regenerate-concepts"
+                    >
+                      {regeneratingConcepts ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Bezig…
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-4 h-4" />
+                          Hergenereer begrippenlijst
+                        </>
+                      )}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setAddConceptForm(v => !v); setAddConceptError(null); setAddConceptSuccess(false); }}
+                    className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg flex items-center gap-2"
+                    data-testid="button-toggle-add-concept"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Begrip toevoegen
+                  </button>
+                </div>
               </div>
+
+              {regenerateResult && (
+                <div className="flex items-start gap-2 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-800" data-testid="text-regenerate-result">
+                  <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-green-600" />
+                  <span>
+                    <strong>{regenerateResult.count}</strong> begrippen gegenereerd
+                    {regenerateResult.skipped > 0 && <>, <strong>{regenerateResult.skipped}</strong> overgeslagen</>}.
+                    {regenerateResult.message && <> {regenerateResult.message}</>}
+                  </span>
+                </div>
+              )}
+              {regenerateError && (
+                <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3" data-testid="text-regenerate-error">
+                  {regenerateError}
+                </p>
+              )}
 
               {addConceptForm && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
