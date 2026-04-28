@@ -920,6 +920,65 @@ app.get('/api/folder-type', async (req, res) => {
   }
 });
 
+app.post('/api/admin/record-doc-mutation', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header required' });
+
+  const { courseId } = req.body;
+  if (!courseId) return res.status(400).json({ error: 'courseId is required' });
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+    const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+    const isDocent = profile?.role === 'docent';
+    if (!isAdmin && !isDocent) return res.status(403).json({ error: 'Admin of docent rol vereist' });
+
+    if (isDocent && !isAdmin) {
+      const { data: membership } = await supabaseAdmin
+        .from('course_members').select('id').eq('user_id', user.id).eq('course_id', courseId).maybeSingle();
+      if (!membership) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+
+    const mutationKey = `__doc_mutation_${courseId}__`;
+    const content = JSON.stringify({ lastMutationAt: new Date().toISOString() });
+
+    const { data: existing } = await supabaseAdmin
+      .from('chatbot_prompts').select('id').eq('name', mutationKey).maybeSingle();
+
+    if (existing) {
+      const { error: updateErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ content, updated_at: new Date().toISOString() })
+        .eq('name', mutationKey);
+      if (updateErr) throw new Error(`DB update mislukt: ${updateErr.message}`);
+    } else {
+      const { error: insertErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .insert({ name: mutationKey, content, is_active: false });
+      if (insertErr) throw new Error(`DB insert mislukt: ${insertErr.message}`);
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[record-doc-mutation] Error:', err.message);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.get('/api/admin/concepts-meta', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
@@ -1004,10 +1063,71 @@ app.get('/api/admin/concepts-meta', async (req, res) => {
       }
     }
 
+    let lastDocumentChange = null;
+    try {
+      const { data: assignments } = await supabaseAdmin
+        .from('course_folder_assignments')
+        .select('folder_id')
+        .eq('course_id', courseId);
+
+      if (assignments && assignments.length > 0) {
+        const assignedFolderIds = assignments.map((a) => a.folder_id);
+
+        const { data: ragFolders } = await supabaseAdmin
+          .from('document_folders')
+          .select('id')
+          .in('id', assignedFolderIds)
+          .eq('folder_type', 'rag_sources');
+
+        if (ragFolders && ragFolders.length > 0) {
+          const ragFolderIds = ragFolders.map((f) => f.id);
+
+          const { data: latestDocs } = await supabaseAdmin
+            .from('documents')
+            .select('created_at')
+            .in('folder_id', ragFolderIds)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (latestDocs && latestDocs.length > 0) {
+            lastDocumentChange = latestDocs[0].created_at;
+          }
+        }
+      }
+
+      const mutationKey = `__doc_mutation_${courseId}__`;
+      const { data: mutationRecord } = await supabaseAdmin
+        .from('chatbot_prompts').select('content').eq('name', mutationKey).maybeSingle();
+
+      if (mutationRecord?.content) {
+        try {
+          const { lastMutationAt } = JSON.parse(mutationRecord.content);
+          if (lastMutationAt && (!lastDocumentChange || lastMutationAt > lastDocumentChange)) {
+            lastDocumentChange = lastMutationAt;
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    } catch (docErr) {
+      console.warn('[concepts-meta] Could not determine lastDocumentChange:', docErr.message);
+    }
+
+    let lastSuccessfulRegeneration = null;
+    try {
+      const regenKey = `__concepts_regen_${courseId}__`;
+      const { data: regenRecord } = await supabaseAdmin
+        .from('chatbot_prompts').select('content').eq('name', regenKey).maybeSingle();
+      if (regenRecord?.content) {
+        const { lastRegenAt } = JSON.parse(regenRecord.content);
+        if (lastRegenAt) lastSuccessfulRegeneration = lastRegenAt;
+      }
+    } catch { /* ignore */ }
+
     return res.json({
       ragCount: ragConcepts.length,
       manualCount: manualConcepts.length,
       lastExtraction,
+      lastDocumentChange,
+      lastSuccessfulRegeneration,
     });
   } catch (err) {
     console.error('[concepts-meta] Unexpected error:', err);
@@ -1037,6 +1157,20 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
   const filterDocIds = Array.isArray(documentIds) && documentIds.length > 0 ? documentIds : null;
 
   const courseMarker = `course_id:${courseId}`;
+  const regenKey = `__concepts_regen_${courseId}__`;
+
+  async function writeRegenTimestamp() {
+    const content = JSON.stringify({ lastRegenAt: new Date().toISOString() });
+    const { data: existing } = await supabaseAdmin
+      .from('chatbot_prompts').select('id').eq('name', regenKey).maybeSingle();
+    if (existing) {
+      await supabaseAdmin.from('chatbot_prompts')
+        .update({ content, updated_at: new Date().toISOString() }).eq('name', regenKey);
+    } else {
+      await supabaseAdmin.from('chatbot_prompts')
+        .insert({ name: regenKey, content, is_active: false });
+    }
+  }
 
   try {
     const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -1139,6 +1273,7 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       .eq('course_id', courseId);
 
     if (!assignments || assignments.length === 0) {
+      await writeRegenTimestamp().catch(() => {});
       return res.json({ concepts: [], message: 'Geen RAG-mappen gevonden voor deze cursus' });
     }
 
@@ -1151,6 +1286,7 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       .eq('folder_type', 'rag_sources');
 
     if (!ragFolders || ragFolders.length === 0) {
+      await writeRegenTimestamp().catch(() => {});
       return res.json({ concepts: [], message: 'Geen RAG-bronmappen gevonden voor deze cursus' });
     }
 
@@ -1168,6 +1304,7 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     }
 
     if (!docs || docs.length === 0) {
+      await writeRegenTimestamp().catch(() => {});
       return res.json({ concepts: [], message: 'Geen verwerkte documenten gevonden in RAG-mappen' });
     }
 
@@ -1176,6 +1313,7 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       const allowed = new Set(filterDocIds);
       docIds = docIds.filter((id) => allowed.has(id));
       if (docIds.length === 0) {
+        await writeRegenTimestamp().catch(() => {});
         return res.json({ concepts: [], message: 'Geen geselecteerde documenten gevonden in de RAG-mappen' });
       }
     }
@@ -1192,6 +1330,7 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     }
 
     if (!chunks || chunks.length === 0) {
+      await writeRegenTimestamp().catch(() => {});
       return res.json({ concepts: [], message: 'Geen document-chunks gevonden' });
     }
 
@@ -1256,6 +1395,7 @@ ${combinedText}`;
     }
 
     if (!Array.isArray(extractedConcepts) || extractedConcepts.length === 0) {
+      await writeRegenTimestamp().catch(() => {});
       return res.json({ concepts: [], message: 'Geen begrippen gevonden in LLM-respons' });
     }
 
@@ -1365,6 +1505,8 @@ ${combinedText}`;
     const totalAdded = inserted.length + updatedCount;
 
     console.log(`[extract-concepts] Done for course ${courseId}: ${inserted.length} new, ${updatedCount} updated, ${skipped} already tagged`);
+
+    await writeRegenTimestamp().catch(() => {});
 
     return res.json({
       concepts: inserted,

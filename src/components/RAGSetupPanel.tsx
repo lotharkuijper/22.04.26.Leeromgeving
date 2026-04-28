@@ -295,7 +295,7 @@ export function RAGSetupPanel() {
 
         <div className="p-4">
           {activeSection === 'upload' && ragFolderId && (
-            <UploadSection folderId={ragFolderId} userId={profile?.id ?? ''} />
+            <UploadSection folderId={ragFolderId} userId={profile?.id ?? ''} courseId={activeCourseId ?? undefined} accessToken={session?.access_token ?? undefined} />
           )}
           {activeSection === 'import' && ragFolderId && (
             <ImportSection
@@ -454,7 +454,7 @@ export function RAGSetupPanel() {
   );
 }
 
-function UploadSection({ folderId, userId }: { folderId: string; userId: string }) {
+function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: string; userId: string; courseId?: string; accessToken?: string }) {
   const [items, setItems] = useState<FileUploadItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -504,6 +504,16 @@ function UploadSection({ folderId, userId }: { folderId: string; userId: string 
           }
         );
         setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'done' } : i));
+        if (courseId && accessToken) {
+          fetch('/api/admin/record-doc-mutation', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify({ courseId }),
+          }).catch(err => console.warn('[record-doc-mutation] upload tracking failed:', err));
+        }
       } catch (err) {
         setItems(prev => prev.map(i =>
           i.id === item.id

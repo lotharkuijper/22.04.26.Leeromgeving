@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, Sparkles } from 'lucide-react';
+import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, Sparkles, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
@@ -138,7 +138,7 @@ export function AdminPage() {
   const [regeneratingConcepts, setRegeneratingConcepts] = useState(false);
   const [regenerateResult, setRegenerateResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
-  const [conceptsMeta, setConceptsMeta] = useState<{ ragCount: number; manualCount: number; lastExtraction: string | null } | null>(null);
+  const [conceptsMeta, setConceptsMeta] = useState<{ ragCount: number; manualCount: number; lastExtraction: string | null; lastDocumentChange: string | null; lastSuccessfulRegeneration: string | null } | null>(null);
   const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole } | null>(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
@@ -286,6 +286,8 @@ export function AdminPage() {
       .from('chatbot_prompts')
       .select('*')
       .not('name', 'like', '__rag_settings%')
+      .not('name', 'like', '__doc_mutation_%')
+      .not('name', 'like', '__concepts_regen_%')
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -417,63 +419,6 @@ export function AdminPage() {
       loadUsers();
     }
     setLoading(false);
-  };
-
-  const handleDeleteDocument = async (documentId: string, filePath: string) => {
-    setLoading(true);
-    setDocMsg(null);
-
-    try {
-      const { data: doc, error: fetchError } = await supabase
-        .from('documents')
-        .select('bucket')
-        .eq('id', documentId)
-        .maybeSingle();
-
-      if (fetchError) {
-        console.error('Error fetching document:', fetchError);
-        setDocMsg('Fout bij ophalen document gegevens: ' + fetchError.message);
-        return;
-      }
-
-      const { error: chunksError } = await supabase
-        .from('document_chunks')
-        .delete()
-        .eq('document_id', documentId);
-
-      if (chunksError) {
-        console.error('Error deleting chunks:', chunksError);
-        setDocMsg('Fout bij verwijderen document chunks: ' + chunksError.message);
-        return;
-      }
-
-      const { error: docError } = await supabase
-        .from('documents')
-        .delete()
-        .eq('id', documentId);
-
-      if (docError) {
-        console.error('Error deleting document:', docError);
-        setDocMsg('Fout bij verwijderen document record: ' + docError.message);
-        return;
-      }
-
-      const bucket = (doc?.bucket as string) || 'rag_sources';
-      const { error: storageError } = await supabase.storage
-        .from(bucket)
-        .remove([filePath]);
-
-      if (storageError) {
-        console.error('Error deleting file:', storageError);
-      }
-
-      loadDocuments();
-    } catch (error) {
-      console.error('Delete error:', error);
-      setDocMsg('Fout bij verwijderen: ' + (error as Error).message);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleRetryDocument = async (documentId: string) => {
@@ -959,6 +904,45 @@ const tabGroups = [
                   </button>
                 </div>
               </div>
+
+              {activeCourse && conceptsMeta && conceptsMeta.lastDocumentChange && (() => {
+                const effectiveRegen = [conceptsMeta.lastSuccessfulRegeneration, conceptsMeta.lastExtraction]
+                  .filter(Boolean).sort().reverse()[0] ?? null;
+                return !effectiveRegen || conceptsMeta.lastDocumentChange > effectiveRegen;
+              })() && (
+                <div className="flex items-start justify-between gap-3 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3" data-testid="banner-docs-changed">
+                  <div className="flex items-start gap-2 text-sm text-amber-800">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
+                    <span>
+                      <strong>Documenten gewijzigd</strong> — overweeg de begrippenlijst te hergenereren.{' '}
+                      {conceptsMeta.lastDocumentChange && (
+                        <span className="text-amber-700">
+                          Laatste documentwijziging:{' '}
+                          {new Date(conceptsMeta.lastDocumentChange).toLocaleString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <button
+                    onClick={handleRegenerateConcepts}
+                    disabled={regeneratingConcepts}
+                    className="flex-shrink-0 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    data-testid="button-regenerate-now"
+                  >
+                    {regeneratingConcepts ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Bezig…
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Hergenereer nu
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
 
               {regenerateResult && (
                 <div className="flex items-start gap-2 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-800" data-testid="text-regenerate-result">

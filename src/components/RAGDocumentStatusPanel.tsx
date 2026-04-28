@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, AlertTriangle, Loader2, RefreshCw, FileText, Info } from 'lucide-react';
+import { CheckCircle, AlertTriangle, Loader2, RefreshCw, FileText, Info, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { retryFailedDocument, UploadProgress } from '../services/document-upload.service';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
+import { useAuth } from '../contexts/AuthContext';
 
 interface DocumentWithChunkCount {
   id: string;
@@ -20,11 +21,14 @@ type FilterMode = 'all' | 'failed';
 
 export function RAGDocumentStatusPanel() {
   const { activeCourseId, activeCourseRagFolderIds, activeCourse } = useActiveCourse();
+  const { session } = useAuth();
   const [documents, setDocuments] = useState<DocumentWithChunkCount[]>([]);
   const [loading, setLoading] = useState(false);
   const [retryingDocId, setRetryingDocId] = useState<string | null>(null);
   const [retryProgress, setRetryProgress] = useState<UploadProgress | null>(null);
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeCourseRagFolderIds.length > 0) {
@@ -135,6 +139,33 @@ export function RAGDocumentStatusPanel() {
       } catch {
         // Continue with next document
       }
+    }
+  };
+
+  const handleDeleteDocument = async (doc: DocumentWithChunkCount) => {
+    if (!activeCourseId || !session?.access_token) return;
+    setDeletingDocId(doc.id);
+    try {
+      await supabase.from('document_chunks').delete().eq('document_id', doc.id);
+      await supabase.from('documents').delete().eq('id', doc.id);
+      await supabase.storage.from(doc.bucket || 'rag_sources').remove([doc.filename]);
+
+      fetch('/api/admin/record-doc-mutation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: activeCourseId }),
+      }).catch(err => console.warn('[record-doc-mutation] deletion tracking failed:', err));
+
+      await loadDocuments();
+    } catch (err) {
+      console.error('[RAG PANEL] Delete failed:', err);
+      alert('Fout bij verwijderen: ' + (err instanceof Error ? err.message : 'Onbekende fout'));
+    } finally {
+      setDeletingDocId(null);
+      setDeleteConfirmId(null);
     }
   };
 
@@ -322,6 +353,36 @@ export function RAGDocumentStatusPanel() {
                       <RefreshCw
                         className={`w-4 h-4 ${retryingDocId === doc.id ? 'animate-spin' : ''}`}
                       />
+                    </button>
+                  )}
+
+                  {deleteConfirmId === doc.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleDeleteDocument(doc)}
+                        disabled={deletingDocId === doc.id}
+                        className="px-2 py-1 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                        data-testid={`button-confirm-delete-doc-${doc.id}`}
+                      >
+                        {deletingDocId === doc.id ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Ja'}
+                      </button>
+                      <button
+                        onClick={() => setDeleteConfirmId(null)}
+                        className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                        data-testid={`button-cancel-delete-doc-${doc.id}`}
+                      >
+                        Annuleer
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setDeleteConfirmId(doc.id)}
+                      disabled={deletingDocId !== null || retryingDocId !== null}
+                      className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                      title="Verwijderen"
+                      data-testid={`button-delete-doc-${doc.id}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   )}
                 </div>
