@@ -62,55 +62,73 @@ interface ConceptCardProps {
   onDeleteRequest: (id: string) => void;
   onDeleteConfirm: (id: string) => void;
   onDeleteCancel: () => void;
+  isSelected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }
 
-function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deletingConceptId, onDeleteRequest, onDeleteConfirm, onDeleteCancel }: ConceptCardProps) {
+function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deletingConceptId, onDeleteRequest, onDeleteConfirm, onDeleteCancel, isSelected, onToggleSelect }: ConceptCardProps) {
   return (
-    <div className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50" data-testid={`card-concept-${concept.id}`}>
-      <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="font-semibold text-gray-900">{concept.name}</h3>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
-            {concept.category}
-          </span>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceBg}`}>
-            {sourceLabel}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-          {deleteConfirmId === concept.id ? (
-            <div className="flex items-center gap-1">
-              <span className="text-xs text-red-600">Verwijderen?</span>
-              <button
-                onClick={() => onDeleteConfirm(concept.id)}
-                disabled={deletingConceptId === concept.id}
-                className="px-2 py-0.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-                data-testid={`button-confirm-delete-${concept.id}`}
-              >
-                {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Ja'}
-              </button>
-              <button
-                onClick={onDeleteCancel}
-                className="px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-              >
-                Nee
-              </button>
+    <div
+      className={`p-4 border rounded-lg transition-colors ${isSelected ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
+      data-testid={`card-concept-${concept.id}`}
+    >
+      <div className="flex items-start gap-3">
+        {onToggleSelect && (
+          <input
+            type="checkbox"
+            checked={!!isSelected}
+            onChange={() => onToggleSelect(concept.id)}
+            className="mt-1 w-4 h-4 rounded border-gray-300 text-blue-600 cursor-pointer flex-shrink-0 accent-blue-600"
+            data-testid={`checkbox-concept-${concept.id}`}
+          />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between mb-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="font-semibold text-gray-900">{concept.name}</h3>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
+                {concept.category}
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceBg}`}>
+                {sourceLabel}
+              </span>
             </div>
-          ) : (
-            <button
-              onClick={() => onDeleteRequest(concept.id)}
-              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-              title="Verwijderen"
-              data-testid={`button-delete-${concept.id}`}
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+              {deleteConfirmId === concept.id ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-red-600">Verwijderen?</span>
+                  <button
+                    onClick={() => onDeleteConfirm(concept.id)}
+                    disabled={deletingConceptId === concept.id}
+                    className="px-2 py-0.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                    data-testid={`button-confirm-delete-${concept.id}`}
+                  >
+                    {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Ja'}
+                  </button>
+                  <button
+                    onClick={onDeleteCancel}
+                    className="px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                  >
+                    Nee
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => onDeleteRequest(concept.id)}
+                  className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  title="Verwijderen"
+                  data-testid={`button-delete-${concept.id}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+          {concept.definition && (
+            <p className="text-sm text-gray-600 line-clamp-2">{concept.definition}</p>
           )}
         </div>
       </div>
-      {concept.definition && (
-        <p className="text-sm text-gray-600 line-clamp-2">{concept.definition}</p>
-      )}
     </div>
   );
 }
@@ -138,6 +156,10 @@ export function AdminPage() {
   const [regeneratingConcepts, setRegeneratingConcepts] = useState(false);
   const [regenerateResult, setRegenerateResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  const [selectedConceptIds, setSelectedConceptIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState<string | null>(null);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [conceptsMeta, setConceptsMeta] = useState<{ ragCount: number; manualCount: number; lastExtraction: string | null; lastDocumentChange: string | null; lastSuccessfulRegeneration: string | null } | null>(null);
   const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole } | null>(null);
@@ -525,6 +547,34 @@ export function AdminPage() {
     } finally {
       setRegeneratingConcepts(false);
     }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!bulkDeleteConfirm) {
+      setBulkDeleteConfirm(true);
+      return;
+    }
+    if (!session?.access_token || selectedConceptIds.size === 0) return;
+    setBulkDeleting(true);
+    setBulkDeleteError(null);
+    setBulkDeleteConfirm(false);
+    const ids = Array.from(selectedConceptIds);
+    const results = await Promise.allSettled(
+      ids.map(id =>
+        fetch(`/api/admin/concepts/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        })
+      )
+    );
+    const failed = results.filter(r => r.status === 'rejected').length;
+    if (failed > 0) {
+      setBulkDeleteError(`${failed} van de ${ids.length} begrippen konden niet worden verwijderd.`);
+    }
+    setSelectedConceptIds(new Set());
+    setBulkDeleting(false);
+    await loadConcepts();
+    await loadConceptsMeta();
   };
 
   const handleSavePrompt = async () => {
@@ -1034,6 +1084,76 @@ const tabGroups = [
                 </p>
               </div>
 
+              {/* ── Selectie-toolbar ── */}
+              {(courseConcepts.length > 0 || globalConcepts.length > 0) && (() => {
+                const allIds = [...courseConcepts, ...globalConcepts].map(c => c.id);
+                const allSelected = allIds.length > 0 && allIds.every(id => selectedConceptIds.has(id));
+                const noneSelected = selectedConceptIds.size === 0;
+                return (
+                  <div className="flex flex-wrap items-center gap-3 py-2 border-t border-gray-100 pt-3">
+                    <button
+                      onClick={() => {
+                        setBulkDeleteConfirm(false);
+                        setSelectedConceptIds(allSelected ? new Set() : new Set(allIds));
+                      }}
+                      className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+                      data-testid="button-toggle-select-all"
+                    >
+                      <input
+                        type="checkbox"
+                        readOnly
+                        checked={allSelected}
+                        className="w-4 h-4 rounded border-gray-300 accent-blue-600 pointer-events-none"
+                      />
+                      {allSelected ? 'Niets selecteren' : 'Alles selecteren'}
+                    </button>
+
+                    {!noneSelected && (
+                      <span className="text-sm text-gray-500">{selectedConceptIds.size} geselecteerd</span>
+                    )}
+
+                    {!noneSelected && (
+                      bulkDeleteConfirm ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-red-700 font-medium">
+                            {selectedConceptIds.size} begrip{selectedConceptIds.size !== 1 ? 'pen' : ''} definitief verwijderen?
+                          </span>
+                          <button
+                            onClick={handleBulkDelete}
+                            disabled={bulkDeleting}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+                            data-testid="button-confirm-bulk-delete"
+                          >
+                            {bulkDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                            Ja, verwijder
+                          </button>
+                          <button
+                            onClick={() => setBulkDeleteConfirm(false)}
+                            className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                          >
+                            Annuleren
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={handleBulkDelete}
+                          disabled={bulkDeleting}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors"
+                          data-testid="button-bulk-delete"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          Verwijder geselecteerde ({selectedConceptIds.size})
+                        </button>
+                      )
+                    )}
+
+                    {bulkDeleteError && (
+                      <span className="text-sm text-red-600">{bulkDeleteError}</span>
+                    )}
+                  </div>
+                );
+              })()}
+
               {activeCourse && (
                 <div>
                   <h3 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
@@ -1063,6 +1183,12 @@ const tabGroups = [
                             onDeleteRequest={(id) => { setDeleteConfirmId(id); setDeleteError(null); }}
                             onDeleteConfirm={handleDeleteConcept}
                             onDeleteCancel={() => setDeleteConfirmId(null)}
+                            isSelected={selectedConceptIds.has(concept.id)}
+                            onToggleSelect={(id) => setSelectedConceptIds(prev => {
+                              const next = new Set(prev);
+                              next.has(id) ? next.delete(id) : next.add(id);
+                              return next;
+                            })}
                           />
                         );
                       })}
@@ -1095,6 +1221,12 @@ const tabGroups = [
                         onDeleteRequest={(id) => { setDeleteConfirmId(id); setDeleteError(null); }}
                         onDeleteConfirm={handleDeleteConcept}
                         onDeleteCancel={() => setDeleteConfirmId(null)}
+                        isSelected={selectedConceptIds.has(concept.id)}
+                        onToggleSelect={(id) => setSelectedConceptIds(prev => {
+                          const next = new Set(prev);
+                          next.has(id) ? next.delete(id) : next.add(id);
+                          return next;
+                        })}
                       />
                     ))}
                   </div>

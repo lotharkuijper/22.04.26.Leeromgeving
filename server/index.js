@@ -1,8 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
-import pkg from 'pg';
-const { Pool } = pkg;
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -1866,33 +1864,6 @@ Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op
 
 let promptsHasSection = false;
 
-async function runSectionColumnMigration() {
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    console.warn('[migration] DATABASE_URL niet ingesteld — automatische DDL-migratie overgeslagen');
-    return false;
-  }
-  const pool = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
-  let client;
-  try {
-    client = await pool.connect();
-    await client.query(
-      `ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat'`
-    );
-    await client.query(
-      `UPDATE chatbot_prompts SET section = 'chat' WHERE name NOT LIKE '__rag_settings%' AND section = 'chat'`
-    );
-    console.log('[migration] chatbot_prompts.section kolom succesvol aangemaakt');
-    return true;
-  } catch (err) {
-    console.error('[migration] DDL-migratie mislukt:', err.message);
-    return false;
-  } finally {
-    if (client) client.release();
-    await pool.end();
-  }
-}
-
 async function initChatbotPromptSection() {
   if (!supabaseAdmin) return;
   try {
@@ -1902,17 +1873,15 @@ async function initChatbotPromptSection() {
       .limit(1);
 
     if (detectError && detectError.message?.includes('section')) {
-      console.log('[init] chatbot_prompts.section kolom ontbreekt — automatische migratie starten...');
-      const migrated = await runSectionColumnMigration();
-      if (!migrated) {
-        console.warn(
-          '[init] Automatische migratie mislukt. Voer handmatig uit in Supabase dashboard:\n\n' +
-          "       ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';\n" +
-          "       UPDATE chatbot_prompts SET section = 'chat' WHERE name NOT LIKE '__rag_settings%';\n"
-        );
-        promptsHasSection = false;
-        return;
-      }
+      console.warn(
+        '[init] chatbot_prompts.section kolom ontbreekt.\n' +
+        '       Voer dit SQL uit in het Supabase dashboard om de kolom toe te voegen:\n\n' +
+        "       ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';\n" +
+        "       UPDATE chatbot_prompts SET section = 'chat' WHERE name NOT LIKE '__rag_settings%';\n" +
+        '       Herstart daarna de server om de uitleg-prompt automatisch aan te maken.\n'
+      );
+      promptsHasSection = false;
+      return;
     }
 
     promptsHasSection = true;
