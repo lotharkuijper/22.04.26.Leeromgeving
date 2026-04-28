@@ -968,6 +968,22 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       return res.status(403).json({ error: 'Admin of docent rol vereist' });
     }
 
+    if (isDocent && !isAdmin) {
+      const { data: membership, error: memberErr } = await supabaseAdmin
+        .from('course_members')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('course_id', courseId)
+        .maybeSingle();
+      if (memberErr) {
+        console.error('[extract-concepts] Course membership check error:', memberErr);
+        return res.status(500).json({ error: 'Cursustoestemming kon niet worden gecontroleerd' });
+      }
+      if (!membership) {
+        return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+      }
+    }
+
     if (replace) {
       if (conceptsHasCourseId) {
         const { error: delErr } = await supabaseAdmin
