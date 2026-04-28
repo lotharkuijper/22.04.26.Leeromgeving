@@ -675,12 +675,30 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
     // Diagnose mag door admin én docent uitgevoerd worden
     // (consistent met /api/rag-settings: zelfde gebruikers die drempels mogen aanpassen,
     // mogen ook diagnoseren waarom bepaalde scores gehaald worden).
-    const isAllowed = profile && (
-      profile.role === 'admin' ||
-      profile.role === 'docent' ||
-      profile.email === SUPERUSER_EMAIL
-    );
-    if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    const isDocent = profile && profile.role === 'docent';
+    if (!isAdmin && !isDocent) return res.status(403).json({ error: 'Onvoldoende rechten' });
+
+    // Voor docenten: course-membership controleren wanneer een courseId is opgegeven,
+    // anders kunnen ze willekeurige cursussen aftasten.
+    if (isDocent && !isAdmin) {
+      if (!courseId) {
+        return res.status(403).json({ error: 'Docenten moeten een cursus opgeven om diagnose te draaien' });
+      }
+      const { data: membership, error: memberErr } = await supabaseAdmin
+        .from('course_members')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('course_id', courseId)
+        .maybeSingle();
+      if (memberErr) {
+        console.error('[test-rag-similarity] Course membership check error:', memberErr);
+        return res.status(500).json({ error: 'Cursustoestemming kon niet worden gecontroleerd' });
+      }
+      if (!membership) {
+        return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+      }
+    }
 
     // Bepaal toegestane mappen op basis van cursus (zelfde logica als extract-concepts)
     let allowedFolderIds = null;
