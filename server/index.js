@@ -1787,6 +1787,323 @@ app.delete('/api/journal/:id', async (req, res) => {
   }
 });
 
+// ============================================================
+// Ik Leg Uit – history, save, delete, archive (naar leerdagboek)
+// ============================================================
+
+app.get('/api/explain/history', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data, error } = await supabaseAdmin
+      .from('student_explanations')
+      .select('id, concept_id, version, created_at, concepts(id, name, category)')
+      .eq('student_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[explain/history] query error:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    const items = (data || []).map(r => ({
+      id: r.id,
+      conceptId: r.concept_id,
+      conceptName: r.concepts?.name || '(onbekend begrip)',
+      conceptCategory: r.concepts?.category || null,
+      version: r.version || 1,
+      createdAt: r.created_at,
+    }));
+
+    return res.json({ items });
+  } catch (err) {
+    console.error('[explain/history] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
+app.get('/api/explain/:id', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { id } = req.params;
+    const { data, error } = await supabaseAdmin
+      .from('student_explanations')
+      .select('id, concept_id, explanation_text, feedback, version, created_at, student_id, concepts(id, name, category, definition, key_points)')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Uitleg niet gevonden' });
+    if (data.student_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze uitleg' });
+
+    return res.json({
+      id: data.id,
+      conceptId: data.concept_id,
+      explanationText: data.explanation_text,
+      feedback: data.feedback?.content || (typeof data.feedback === 'string' ? data.feedback : null),
+      version: data.version,
+      createdAt: data.created_at,
+      concept: data.concepts,
+    });
+  } catch (err) {
+    console.error('[explain GET] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
+app.post('/api/explain/save', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { conceptId, explanationText, feedback } = req.body;
+  if (!conceptId || !explanationText) {
+    return res.status(400).json({ error: 'conceptId en explanationText zijn vereist' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    // Bepaal nieuwe versie op basis van bestaande pogingen
+    const { data: existing } = await supabaseAdmin
+      .from('student_explanations')
+      .select('id, version')
+      .eq('concept_id', conceptId)
+      .eq('student_id', user.id);
+
+    const newVersion = existing && existing.length > 0
+      ? Math.max(...existing.map(r => r.version || 1)) + 1
+      : 1;
+
+    // Verwijder oudere uitleg voor dit begrip (oudere uitleg verdwijnt automatisch).
+    // Als dit mislukt MOETEN we stoppen — anders krijgen we duplicaten en blijft oude
+    // uitleg zichtbaar in de "Eerder uitgelegd"-zijbalk.
+    if (existing && existing.length > 0) {
+      const { error: delErr } = await supabaseAdmin
+        .from('student_explanations')
+        .delete()
+        .eq('concept_id', conceptId)
+        .eq('student_id', user.id);
+      if (delErr) {
+        console.error('[explain/save] kon oude uitleg niet verwijderen:', delErr);
+        return res.status(500).json({
+          error: `Kon oudere uitleg niet verwijderen: ${delErr.message}. Nieuwe uitleg niet opgeslagen om duplicaten te voorkomen.`,
+        });
+      }
+    }
+
+    const { data: inserted, error: insertErr } = await supabaseAdmin
+      .from('student_explanations')
+      .insert({
+        concept_id: conceptId,
+        student_id: user.id,
+        explanation_text: explanationText,
+        feedback: feedback ? { content: feedback } : null,
+        version: newVersion,
+      })
+      .select('id')
+      .single();
+
+    if (insertErr) {
+      console.error('[explain/save] insert error:', insertErr);
+      return res.status(500).json({ error: insertErr.message });
+    }
+
+    return res.json({ success: true, id: inserted.id, version: newVersion });
+  } catch (err) {
+    console.error('[explain/save] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
+app.delete('/api/explain/:id', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { id } = req.params;
+    const { data: row, error: fetchErr } = await supabaseAdmin
+      .from('student_explanations')
+      .select('id, student_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!row) return res.status(404).json({ error: 'Uitleg niet gevonden' });
+    if (row.student_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze uitleg' });
+
+    const { error: delErr } = await supabaseAdmin
+      .from('student_explanations')
+      .delete()
+      .eq('id', id);
+
+    if (delErr) return res.status(500).json({ error: delErr.message });
+    console.log(`[explain DELETE] Uitleg ${id} verwijderd door ${user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[explain DELETE] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
+app.post('/api/explain/archive', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { explanationId, generateSummary = true } = req.body;
+  if (!explanationId) return res.status(400).json({ error: 'explanationId is vereist' });
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: row, error: fetchErr } = await supabaseAdmin
+      .from('student_explanations')
+      .select('id, student_id, explanation_text, feedback, version, created_at, concepts(name, category, definition, key_points)')
+      .eq('id', explanationId)
+      .maybeSingle();
+
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!row) return res.status(404).json({ error: 'Uitleg niet gevonden' });
+    if (row.student_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze uitleg' });
+
+    let journalEntryId = null;
+    let summaryFailed = false;
+
+    if (generateSummary) {
+      const apiKey = process.env.GROQ_API_KEY;
+      const conceptName = row.concepts?.name || 'Onbekend begrip';
+      const conceptDef = row.concepts?.definition || '';
+      const keyPoints = Array.isArray(row.concepts?.key_points) ? row.concepts.key_points : [];
+      const feedbackText = row.feedback?.content || (typeof row.feedback === 'string' ? row.feedback : '(geen feedback)');
+
+      const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. De student heeft het begrip "${conceptName}" in eigen woorden uitgelegd en feedback ontvangen. Schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands.
+
+Je verslag bevat:
+1. Een beargumenteerd formatief oordeel over wat de student heeft laten zien en geleerd over dit begrip
+2. Concrete sterke punten én verbeterpunten in de uitleg (eerlijk maar opbouwend)
+3. Een specifieke suggestie voor verdere verdieping of een vervolgstap
+
+Begrip: "${conceptName}"
+Officiële definitie: ${conceptDef || '(niet opgegeven)'}${keyPoints.length > 0 ? `\nKernpunten: ${keyPoints.join('; ')}` : ''}
+
+Uitleg van de student:
+${row.explanation_text}
+
+Feedback van de leerassistent:
+${feedbackText}
+
+Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
+
+      if (apiKey) {
+        try {
+          const groqResp = await fetch(GROQ_API_URL, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'llama-3.3-70b-versatile',
+              messages: [{ role: 'user', content: summaryPrompt }],
+              temperature: 0.5,
+              max_tokens: 600,
+            }),
+          });
+
+          if (groqResp.ok) {
+            const groqData = await groqResp.json();
+            const summaryContent = groqData.choices?.[0]?.message?.content;
+            if (summaryContent) {
+              const { data: entry, error: journalError } = await supabaseAdmin
+                .from('learning_journal_entries')
+                .insert({
+                  user_id: user.id,
+                  title: `Uitleg-reflectie: ${conceptName}`,
+                  content: summaryContent,
+                  activity_type: 'explanation_reflection',
+                })
+                .select('id')
+                .single();
+
+              if (journalError) {
+                console.error('[explain/archive] Journal insert error:', journalError);
+                summaryFailed = true;
+              } else {
+                journalEntryId = entry.id;
+                console.log(`[explain/archive] Journal entry aangemaakt: ${journalEntryId}`);
+              }
+            } else {
+              summaryFailed = true;
+            }
+          } else {
+            console.error('[explain/archive] Groq fout:', groqResp.status, await groqResp.text());
+            summaryFailed = true;
+          }
+        } catch (groqErr) {
+          console.error('[explain/archive] Groq request mislukt:', groqErr.message);
+          summaryFailed = true;
+        }
+      } else {
+        console.warn('[explain/archive] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
+        summaryFailed = true;
+      }
+    }
+
+    // Verwijder de uitleg uit de actieve lijst
+    const { error: delErr } = await supabaseAdmin
+      .from('student_explanations')
+      .delete()
+      .eq('id', explanationId);
+
+    if (delErr) {
+      console.error('[explain/archive] kon uitleg niet verwijderen:', delErr);
+      return res.status(500).json({ error: `Verwijderen mislukt: ${delErr.message}` });
+    }
+
+    return res.json({
+      success: true,
+      journalEntryId,
+      summaryCreated: generateSummary && journalEntryId !== null,
+      summaryFailed: generateSummary && summaryFailed,
+    });
+  } catch (err) {
+    console.error('[explain/archive] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
 app.get('/api/admin/prompts-migration-status', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const authHeader = req.headers['authorization'];
