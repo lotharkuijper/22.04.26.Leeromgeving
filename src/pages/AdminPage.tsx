@@ -593,13 +593,14 @@ export function AdminPage() {
     setDeletingPromptId(null);
   };
 
-  const handleActivatePrompt = async (promptId: string) => {
+  const handleActivatePromptInSection = async (promptId: string, section: 'chat' | 'explain' | 'project') => {
     setLoading(true);
     setPromptMsg(null);
 
     await supabase
       .from('chatbot_prompts')
       .update({ is_active: false })
+      .eq('section', section)
       .neq('id', promptId);
 
     const { error } = await supabase
