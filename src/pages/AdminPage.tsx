@@ -620,7 +620,7 @@ const tabs = [
   { id: 'concepts' as TabType, label: 'Begrippen', icon: BookOpen, show: true },
   { id: 'quiz_validation' as TabType, label: 'Quiz Validatie', icon: ClipboardCheck, show: true },
   { id: 'sharestats_import' as TabType, label: 'ShareStats Import', icon: Download, show: true },
-  { id: 'prompts' as TabType, label: 'Chatbot Prompts', icon: MessageSquareText, show: isAdmin },
+  { id: 'prompts' as TabType, label: 'Chatbot Prompts', icon: MessageSquareText, show: isAdmin || isDocent },
   { id: 'rag_settings' as TabType, label: 'RAG Instellingen', icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'settings' as TabType, label: 'Instellingen', icon: Settings, show: isAdmin },
 ].filter(tab => tab.show);

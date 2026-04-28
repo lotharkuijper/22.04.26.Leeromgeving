@@ -1544,19 +1544,22 @@ app.get('/api/admin/prompts-migration-status', async (req, res) => {
 
 app.get('/api/prompt/explain', async (req, res) => {
   if (!supabaseAdmin || !promptsHasSection) {
-    return res.json({ content: null });
+    return res.json({ content: DEFAULT_EXPLAIN_PROMPT });
   }
   try {
     const { data, error } = await supabaseAdmin
       .from('chatbot_prompts')
       .select('id, content')
       .eq('section', 'explain')
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
     if (error) {
       console.warn('[/api/prompt/explain] Fout bij ophalen:', error.message);
-      return res.json({ content: null });
+      return res.json({ content: DEFAULT_EXPLAIN_PROMPT });
     }
-    return res.json({ id: data?.id ?? null, content: data?.content ?? null });
+    return res.json({ id: data?.id ?? null, content: data?.content ?? DEFAULT_EXPLAIN_PROMPT });
   } catch (err) {
     console.error('[/api/prompt/explain] Exception:', err.message);
     return res.status(500).json({ error: 'Interne serverfout' });
