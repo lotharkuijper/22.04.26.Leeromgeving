@@ -1122,15 +1122,22 @@ const tabs = [
                         <h3 className="text-base font-bold text-gray-900">Projecten</h3>
                         <span className="text-xs text-gray-400">— één prompt per agent, vrij aanpasbaar</span>
                       </div>
-                      <button
-                        onClick={() => setShowNewProjectForm(v => !v)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-                        data-testid="button-add-project-prompt"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Nieuwe agent prompt
-                      </button>
+                      {promptsMigration?.hasSection !== false && (
+                        <button
+                          onClick={() => setShowNewProjectForm(v => !v)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                          data-testid="button-add-project-prompt"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Nieuwe agent prompt
+                        </button>
+                      )}
                     </div>
+                    {promptsMigration?.hasSection === false && (
+                      <p className="text-sm text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3">
+                        Agent prompts aanmaken is beschikbaar nadat de database-migratie hierboven is uitgevoerd.
+                      </p>
+                    )}
 
                     {showNewProjectForm && (
                       <div className="mb-4 p-4 border border-green-200 bg-green-50 rounded-xl space-y-3">
