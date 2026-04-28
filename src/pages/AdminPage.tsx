@@ -1760,7 +1760,7 @@ const tabGroups = [
                         <p className="text-xs text-gray-500 mb-2">Minimale overeenkomst voor RAG-chunks (0.0 – 1.0)</p>
                         <input
                           type="range"
-                          min={0.50}
+                          min={0.10}
                           max={0.95}
                           step={0.01}
                           value={s.similarity_threshold}
@@ -1769,8 +1769,16 @@ const tabGroups = [
                           data-testid={`slider-threshold-${mod}`}
                         />
                         <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                          <span>Breed (0.50)</span><span>Strikt (0.95)</span>
+                          <span>Breed (0.10)</span><span>Strikt (0.95)</span>
                         </div>
+                        {s.similarity_threshold < 0.20 && (
+                          <p
+                            className="mt-1.5 text-xs text-amber-700"
+                            data-testid={`warning-threshold-permissive-${mod}`}
+                          >
+                            Erg permissief — kan irrelevante passages binnenhalen.
+                          </p>
+                        )}
                       </div>
 
                       <div>
