@@ -104,7 +104,7 @@ async function searchChunksServerSide(queryText, threshold, matchCount, allowedF
 const RAG_STRICT_INSTRUCTION = `\n\nSTRIKTE BRONBEPERKING: Gebruik UITSLUITEND de context die hierboven is meegegeven uit het cursusmateriaal. Ga NIET buiten deze bronnen. Als iets niet in de meegeleverde context staat, zeg dan eerlijk: "Dit onderwerp staat niet in het beschikbare cursusmateriaal."`;
 
 async function loadRagSettings(courseId) {
-  if (!supabaseAdmin) return { ...RAG_MODULE_DEFAULTS };
+  if (!supabaseAdmin) return { ...RAG_MODULE_DEFAULTS, extraction: { ...RAG_EXTRACTION_DEFAULTS } };
   const keys = courseId
     ? [`__rag_settings_${courseId}__`, '__rag_settings_global__']
     : ['__rag_settings_global__'];
@@ -446,7 +446,7 @@ app.get('/api/rag-settings', async (req, res) => {
     return res.json(settings);
   } catch (err) {
     console.error('[rag-settings GET] Error:', err.message);
-    return res.json({ ...RAG_MODULE_DEFAULTS });
+    return res.json({ ...RAG_MODULE_DEFAULTS, extraction: { ...RAG_EXTRACTION_DEFAULTS } });
   }
 });
 
