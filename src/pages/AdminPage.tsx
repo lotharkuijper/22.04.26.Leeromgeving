@@ -168,10 +168,19 @@ export function AdminPage() {
     if (activeTab === 'concepts') loadConcepts();
     if (activeTab === 'prompts') {
       loadPrompts();
-      fetch('/api/admin/prompts-migration-status')
-        .then(r => r.ok ? r.json() : null)
-        .then(data => { if (data) setPromptsMigration(data); })
-        .catch(() => {});
+      (async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session?.access_token) return;
+          const r = await fetch('/api/admin/prompts-migration-status', {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (r.ok) {
+            const data = await r.json();
+            setPromptsMigration(data);
+          }
+        } catch {}
+      })();
     }
   }, [activeTab, activeCourseId]);
 

@@ -1534,6 +1534,23 @@ app.delete('/api/journal/:id', async (req, res) => {
 });
 
 app.get('/api/admin/prompts-migration-status', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+    const { data: profile } = await supabaseAdmin.from('profiles').select('role').eq('id', user.id).maybeSingle();
+    if (!profile || !['admin', 'docent'].includes(profile.role)) {
+      return res.status(403).json({ error: 'Geen toegang' });
+    }
+  } catch {
+    return res.status(401).json({ error: 'Authenticatie mislukt' });
+  }
   const sqlToRun = promptsHasSection ? null : [
     "-- Stap 1: kolom toevoegen",
     "ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';",
@@ -1567,7 +1584,7 @@ app.get('/api/prompt/explain', async (req, res) => {
     return res.json({ id: data?.id ?? null, content: data?.content ?? DEFAULT_EXPLAIN_PROMPT });
   } catch (err) {
     console.error('[/api/prompt/explain] Exception:', err.message);
-    return res.status(500).json({ error: 'Interne serverfout' });
+    return res.json({ content: DEFAULT_EXPLAIN_PROMPT });
   }
 });
 
@@ -1606,7 +1623,8 @@ async function initChatbotPromptSection() {
         '[init] chatbot_prompts.section kolom ontbreekt.\n' +
         '       Voer dit SQL uit in het Supabase dashboard om de kolom toe te voegen:\n\n' +
         "       ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';\n" +
-        "       UPDATE chatbot_prompts SET section = 'chat' WHERE section = 'chat';\n"
+        "       UPDATE chatbot_prompts SET section = 'chat' WHERE name NOT LIKE '__rag_settings%';\n" +
+        '       Herstart daarna de server om de uitleg-prompt automatisch aan te maken.\n'
       );
       promptsHasSection = false;
       return;
