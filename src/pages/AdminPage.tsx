@@ -216,6 +216,7 @@ export function AdminPage() {
     if (activeTab === 'users') loadUsers();
     if (activeTab === 'documents') loadDocuments();
     if (activeTab === 'concepts') { loadConcepts(); loadConceptsMeta(); }
+    if (activeTab === 'rag_beheer') { loadConceptsMeta(); }
     if (activeTab === 'prompts') {
       loadPrompts();
       (async () => {
@@ -942,6 +943,44 @@ const tabGroups = [
 
 {activeTab === 'rag_beheer' && (
   <div className="space-y-4">
+    {activeCourse && conceptsMeta && conceptsMeta.lastDocumentChange && (() => {
+      const effectiveRegen = [conceptsMeta.lastSuccessfulRegeneration, conceptsMeta.lastExtraction]
+        .filter(Boolean).sort().reverse()[0] ?? null;
+      return !effectiveRegen || conceptsMeta.lastDocumentChange > effectiveRegen;
+    })() && (
+      <div className="flex items-start justify-between gap-3 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3" data-testid="banner-docs-changed-rag">
+        <div className="flex items-start gap-2 text-sm text-amber-800">
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
+          <span>
+            <strong>Documenten gewijzigd</strong> — overweeg de begrippenlijst te hergenereren.{' '}
+            {conceptsMeta.lastDocumentChange && (
+              <span className="text-amber-700">
+                Laatste documentwijziging:{' '}
+                {new Date(conceptsMeta.lastDocumentChange).toLocaleString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+          </span>
+        </div>
+        <button
+          onClick={handleRegenerateConcepts}
+          disabled={regeneratingConcepts}
+          className="flex-shrink-0 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+          data-testid="button-regenerate-now-rag"
+        >
+          {regeneratingConcepts ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Bezig…
+            </>
+          ) : (
+            <>
+              <RefreshCw className="w-3.5 h-3.5" />
+              Hergenereer nu
+            </>
+          )}
+        </button>
+      </div>
+    )}
     <RAGSetupPanel />
   </div>
 )}
