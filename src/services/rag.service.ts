@@ -230,16 +230,65 @@ export async function checkRAGAvailability(): Promise<{
   }
 }
 
+// Veiligheidsgrenzen voor de prompt naar het taalmodel: boven deze waarden
+// loopt llama-3.3-70b-versatile (Groq) snel tegen context-limieten of TPM-quota
+// aan. De cap geldt naast de gebruiker-instelbare match_count.
+export const RAG_CONTEXT_MAX_CHUNKS = 10;
+export const RAG_CONTEXT_MAX_CHARS = 18000;
+
+export interface FormattedContext {
+  context: string;
+  usedChunks: number;
+  totalChunks: number;
+  truncated: boolean;
+}
+
 export function formatContextFromChunks(chunks: DocumentChunk[]): string {
-  if (chunks.length === 0) {
-    return '';
+  return buildContextWithCap(chunks).context;
+}
+
+export function buildContextWithCap(
+  chunks: DocumentChunk[],
+  maxChunks: number = RAG_CONTEXT_MAX_CHUNKS,
+  maxChars: number = RAG_CONTEXT_MAX_CHARS
+): FormattedContext {
+  const total = chunks.length;
+  if (total === 0) {
+    return { context: '', usedChunks: 0, totalChunks: 0, truncated: false };
   }
 
-  const contextParts = chunks.map((chunk, index) =>
-    `[Bron ${index + 1}: ${chunk.documentTitle}]\n${chunk.content}`
-  );
+  // Aannemen dat searchRelevantChunks al op similarity gesorteerd is (hoogst eerst).
+  const limitN = Math.min(maxChunks, total);
+  const SEP = '\n\n---\n\n';
+  const parts: string[] = [];
+  let runningChars = 0;
+  let used = 0;
+  for (let i = 0; i < limitN; i++) {
+    const chunk = chunks[i];
+    const header = `[Bron ${i + 1}: ${chunk.documentTitle}]\n`;
+    const sepLen = parts.length === 0 ? 0 : SEP.length;
+    const headroom = maxChars - runningChars - sepLen - header.length;
+    if (headroom <= 0) {
+      // Geen ruimte meer voor de header van deze chunk — stoppen.
+      break;
+    }
+    // Trim chunk-inhoud zo nodig zodat we ook de eerste (mogelijk grote) chunk
+    // strikt onder maxChars houden.
+    const content = chunk.content.length > headroom
+      ? chunk.content.slice(0, Math.max(0, headroom - 20)) + '…[ingekort]'
+      : chunk.content;
+    const part = header + content;
+    parts.push(part);
+    runningChars += part.length + sepLen;
+    used += 1;
+  }
 
-  return contextParts.join('\n\n---\n\n');
+  return {
+    context: parts.join(SEP),
+    usedChunks: used,
+    totalChunks: total,
+    truncated: used < total,
+  };
 }
 
 export async function validateQuizQuestion(

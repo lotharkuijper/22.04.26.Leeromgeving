@@ -8,6 +8,61 @@ export interface LLMResponse {
   error?: string;
 }
 
+export class LLMError extends Error {
+  status: number;
+  code?: string;
+  rawMessage: string;
+  constructor(message: string, status: number, code?: string, rawMessage?: string) {
+    super(message);
+    this.name = 'LLMError';
+    this.status = status;
+    this.code = code;
+    this.rawMessage = rawMessage ?? message;
+  }
+}
+
+export function llmErrorToDutch(err: unknown): { title: string; detail?: string } {
+  if (err instanceof LLMError) {
+    const code = err.code ?? '';
+    const raw = (err.rawMessage || err.message || '').toLowerCase();
+    if (code === 'context_length_exceeded' || raw.includes('context') && raw.includes('length')) {
+      return {
+        title: 'De prompt is te lang geworden voor het taalmodel.',
+        detail: 'Probeer de RAG-drempel iets hoger te zetten of het aantal passages (match_count) te verlagen, zodat er minder cursusmateriaal wordt meegestuurd.',
+      };
+    }
+    if (code === 'rate_limit_exceeded' || err.status === 429 || raw.includes('rate limit')) {
+      return {
+        title: 'Het taalmodel staat tijdelijk onder druk (rate limit).',
+        detail: 'Wacht een halve minuut en probeer het opnieuw.',
+      };
+    }
+    if (err.status === 503) {
+      return {
+        title: 'De chatbot is niet (volledig) geconfigureerd.',
+        detail: err.rawMessage || 'Controleer of de GROQ_API_KEY beschikbaar is.',
+      };
+    }
+    if (err.status >= 500) {
+      return {
+        title: 'Het taalmodel reageert niet (serverfout).',
+        detail: err.rawMessage || `HTTP ${err.status}`,
+      };
+    }
+    if (code === 'invalid_request_error' || (err.status >= 400 && err.status < 500)) {
+      return {
+        title: 'Het taalmodel weigerde het verzoek.',
+        detail: err.rawMessage || `HTTP ${err.status}`,
+      };
+    }
+    return { title: 'Er ging iets mis bij het taalmodel.', detail: err.rawMessage };
+  }
+  if (err instanceof Error) {
+    return { title: 'Er ging iets mis bij het taalmodel.', detail: err.message };
+  }
+  return { title: 'Er ging iets mis bij het taalmodel.' };
+}
+
 async function callChatAPI(body: object): Promise<any> {
   const response = await fetch('/api/chat', {
     method: 'POST',
@@ -17,8 +72,10 @@ async function callChatAPI(body: object): Promise<any> {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    const errorMsg = errorData.error?.message || errorData.error || `API Error: ${response.status}`;
-    throw new Error(errorMsg);
+    const errObj = errorData?.error;
+    const rawMsg = (errObj && (errObj.message || errObj)) || errorData?.message || `API Error: ${response.status}`;
+    const code = errObj && typeof errObj === 'object' ? errObj.code : undefined;
+    throw new LLMError(typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg), response.status, code, typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg));
   }
 
   return response.json();
@@ -131,26 +188,20 @@ Geef gestructureerde feedback met:
     evaluationPrompt += `\n\nWees constructief en moedigend, maar ook specifiek en nuttig.`;
   }
 
-  try {
-    const data = await callChatAPI({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: evaluationPrompt }],
-      temperature: 0.3,
-      max_tokens: 1500,
-      skipSystemPrompt: true,
-      ...(systemPrompt ? { systemPromptOverride: systemPrompt } : {}),
-    });
+  const data = await callChatAPI({
+    model: 'llama-3.3-70b-versatile',
+    messages: [{ role: 'user', content: evaluationPrompt }],
+    temperature: 0.3,
+    max_tokens: 1500,
+    skipSystemPrompt: true,
+    ...(systemPrompt ? { systemPromptOverride: systemPrompt } : {}),
+  });
 
-    return {
-      content: data.choices[0]?.message?.content || 'Geen feedback gegenereerd',
-    };
-  } catch (error: any) {
-    console.error('Error evaluating explanation:', error);
-    return {
-      content: 'Er is een fout opgetreden bij het evalueren van je uitleg.',
-      error: error.message,
-    };
+  const content = data.choices[0]?.message?.content;
+  if (!content) {
+    throw new LLMError('Het taalmodel gaf een lege reactie terug.', 502, 'empty_response', 'empty content');
   }
+  return { content };
 }
 
 export interface QuizQuestion {

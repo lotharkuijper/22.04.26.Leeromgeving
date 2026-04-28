@@ -231,6 +231,14 @@ app.post('/api/chat', async (req, res) => {
 
     const data = await response.json();
     if (!response.ok) {
+      const promptChars = JSON.stringify(finalMessages).length;
+      const errCode = data?.error?.code || data?.error?.type || 'unknown';
+      // Log de volledige Groq error-body (afgekapt op 2000 tekens om logs niet
+      // op te blazen) zodat we exact zien wat Groq teruggaf.
+      const bodyStr = (() => {
+        try { return JSON.stringify(data); } catch { return String(data); }
+      })();
+      console.error(`[/api/chat] Groq error status=${response.status} code=${errCode} promptChars=${promptChars} body=${bodyStr.length > 2000 ? bodyStr.slice(0, 2000) + '…[truncated]' : bodyStr}`);
       return res.status(response.status).json(data);
     }
     return res.json(data);

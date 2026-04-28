@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
-import { evaluateExplanation } from '../services/llm.service';
-import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
+import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
+import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import type { Database } from '../lib/database.types';
@@ -53,6 +53,8 @@ export function ExplainPage() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'epidemiologie' | 'biostatistiek'>('all');
   const [profileTimeout, setProfileTimeout] = useState(false);
   const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number }>>([]);
+  const [contextStats, setContextStats] = useState<{ used: number; total: number } | null>(null);
+  const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [conceptSource, setConceptSource] = useState<'course' | 'global' | 'empty' | null>(null);
   const [conceptsLoading, setConceptsLoading] = useState(false);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
@@ -144,6 +146,8 @@ export function ExplainPage() {
       }
       setExplanation(data.explanationText || '');
       setFeedback(data.feedback || null);
+      setFeedbackError(null);
+      setContextStats(null);
       setRetrievedSources([]);
       setActiveExplanationId(item.id);
     } catch (err) {
@@ -172,6 +176,8 @@ export function ExplainPage() {
         setActiveExplanationId(null);
         setExplanation('');
         setFeedback(null);
+        setFeedbackError(null);
+        setContextStats(null);
       }
       await loadHistory();
     } catch (err: any) {
@@ -202,6 +208,8 @@ export function ExplainPage() {
         setActiveExplanationId(null);
         setExplanation('');
         setFeedback(null);
+        setFeedbackError(null);
+        setContextStats(null);
       }
       await loadHistory();
       if (generateSummary && result.summaryFailed) {
@@ -266,6 +274,8 @@ export function ExplainPage() {
 
     setLoading(true);
     setFeedback(null);
+    setFeedbackError(null);
+    setContextStats(null);
     setRetrievedSources([]);
 
     try {
@@ -287,20 +297,36 @@ export function ExplainPage() {
       }));
       setRetrievedSources(sources);
 
-      const context = chunks.length > 0 ? formatContextFromChunks(chunks) : undefined;
+      const built = chunks.length > 0
+        ? buildContextWithCap(chunks)
+        : { context: '', usedChunks: 0, totalChunks: 0, truncated: false };
+      const context = built.context.length > 0 ? built.context : undefined;
+      setContextStats({ used: built.usedChunks, total: built.totalChunks });
+      if (built.truncated) {
+        console.log(`[EXPLAIN] Context capped: using ${built.usedChunks}/${built.totalChunks} chunks (${built.context.length} chars)`);
+      }
       console.log(`[EXPLAIN] Found ${chunks.length} relevant chunks from RAG`);
 
       console.log('[EXPLAIN] Evaluating explanation for concept:', selectedConcept.name);
-      const response = await evaluateExplanation(
-        selectedConcept.name,
-        explanation,
-        selectedConcept.definition || '',
-        selectedConcept.key_points || [],
-        context,
-        sources,
-        ragSettings.explain.rag_strict_mode,
-        explainSystemPrompt ?? undefined
-      );
+      let response;
+      try {
+        response = await evaluateExplanation(
+          selectedConcept.name,
+          explanation,
+          selectedConcept.definition || '',
+          selectedConcept.key_points || [],
+          context,
+          sources,
+          ragSettings.explain.rag_strict_mode,
+          explainSystemPrompt ?? undefined
+        );
+      } catch (llmErr) {
+        console.error('[EXPLAIN] LLM evaluation failed:', llmErr);
+        setFeedbackError(llmErrorToDutch(llmErr));
+        // Bewust géén /api/explain/save aanroepen: we willen geen "fout-feedback"
+        // versies in de geschiedenis vervuilen.
+        return;
+      }
 
       console.log('[EXPLAIN] Received feedback from LLM');
       setFeedback(response.content);
@@ -328,7 +354,10 @@ export function ExplainPage() {
       }
     } catch (error) {
       console.error('[EXPLAIN] Error submitting explanation:', error);
-      alert('Er is een fout opgetreden bij het indienen van je uitleg. Probeer het opnieuw.');
+      setFeedbackError({
+        title: 'Er is een fout opgetreden bij het indienen van je uitleg.',
+        detail: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setLoading(false);
     }
@@ -472,6 +501,8 @@ export function ExplainPage() {
                     setSelectedConcept(concept);
                     setExplanation('');
                     setFeedback(null);
+                    setFeedbackError(null);
+                    setContextStats(null);
                   }}
                   className={`w-full text-left p-3 rounded-lg transition-all ${
                     selectedConcept?.id === concept.id
@@ -655,12 +686,79 @@ export function ExplainPage() {
                 </div>
               </div>
 
+              {feedbackError && (
+                <div
+                  className="bg-red-50 border border-red-200 rounded-2xl p-6"
+                  data-testid="block-feedback-error"
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-lg font-semibold text-red-900 mb-1">
+                        Feedback kon niet gegenereerd worden
+                      </h3>
+                      <p className="text-red-800 mb-2" data-testid="text-feedback-error-title">
+                        {feedbackError.title}
+                      </p>
+                      {feedbackError.detail && (
+                        <details className="mb-3 group" data-testid="details-feedback-error">
+                          <summary className="text-sm text-red-700 cursor-pointer select-none hover:underline">
+                            Technische details
+                          </summary>
+                          <p
+                            className="mt-2 text-xs text-red-700 bg-red-100/60 border border-red-200 rounded-md px-3 py-2 whitespace-pre-wrap font-mono"
+                            data-testid="text-feedback-error-detail"
+                          >
+                            {feedbackError.detail}
+                          </p>
+                        </details>
+                      )}
+                      <p className="text-xs text-red-700 mb-4">
+                        Je uitleg is <strong>niet</strong> opgeslagen in je geschiedenis. Pas eventueel je uitleg aan en probeer het opnieuw.
+                      </p>
+                      <button
+                        onClick={handleSubmitExplanation}
+                        disabled={loading}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed font-medium text-sm"
+                        data-testid="button-retry-feedback"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                        Probeer opnieuw
+                      </button>
+                    </div>
+                  </div>
+                  {retrievedSources.length > 0 && (
+                    <div className="mt-5 pt-4 border-t border-red-200">
+                      {contextStats && contextStats.total > 0 && (
+                        <p
+                          className="text-xs text-red-700 mb-2"
+                          data-testid="text-context-stats-error"
+                        >
+                          {contextStats.used === contextStats.total
+                            ? `Alle ${contextStats.total} gevonden passages waren beschikbaar voor de evaluatie.`
+                            : `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`}
+                        </p>
+                      )}
+                      <SourceList sources={retrievedSources} />
+                    </div>
+                  )}
+                </div>
+              )}
+
               {feedback && (
                 <div className="bg-white rounded-2xl border border-gray-200 p-6">
                   <h3 className="text-xl font-bold text-gray-900 mb-4">Feedback</h3>
                   <div className="prose max-w-none text-gray-700 whitespace-pre-wrap">
                     {feedback}
                   </div>
+                  {contextStats && contextStats.total > 0 && contextStats.used < contextStats.total && (
+                    <p
+                      className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2"
+                      data-testid="text-context-stats"
+                    >
+                      Let op: {contextStats.used} van {contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.
+                    </p>
+                  )}
                   <SourceList sources={retrievedSources} />
                 </div>
               )}
