@@ -73,7 +73,31 @@ export async function evaluateExplanation(
   ragStrictMode?: boolean,
   systemPrompt?: string
 ): Promise<LLMResponse> {
-  let evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
+  let evaluationPrompt: string;
+
+  if (systemPrompt) {
+    evaluationPrompt = `Begrip: "${concept}"
+
+Officiële definitie:
+${definition}
+
+Kernpunten die beoordeeld worden:
+${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
+
+    if (ragContext) {
+      evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
+      if (ragStrictMode) evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
+    } else if (ragStrictMode) {
+      evaluationPrompt += `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten gevonden voor dit begrip. Geef dit duidelijk aan in je feedback.`;
+    }
+
+    evaluationPrompt += `\n\nUitleg van de student:\n${explanation}`;
+
+    if (retrievedSources && retrievedSources.length > 0) {
+      evaluationPrompt += `\n\nBeschikbare bronnen uit cursusmateriaal: ${retrievedSources.map(s => s.title).join(', ')}. Verwijs ernaar als dat relevant is.`;
+    }
+  } else {
+    evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
 
 Officiële definitie:
 ${definition}
@@ -81,19 +105,18 @@ ${definition}
 Kernpunten die genoemd zouden moeten worden:
 ${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
 
-  if (ragContext) {
-    evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
-  }
-  if (ragStrictMode) {
     if (ragContext) {
-      evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
-    } else {
-      evaluationPrompt += `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten gevonden voor dit begrip. Geef dit duidelijk aan in je feedback.`;
+      evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
     }
-  }
+    if (ragStrictMode) {
+      if (ragContext) {
+        evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
+      } else {
+        evaluationPrompt += `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten gevonden voor dit begrip. Geef dit duidelijk aan in je feedback.`;
+      }
+    }
 
-  evaluationPrompt += `\n\nUitleg van de student:
-${explanation}
+    evaluationPrompt += `\n\nUitleg van de student:\n${explanation}
 
 Geef gestructureerde feedback met:
 1. Wat de student goed heeft gedaan (specifieke punten)
@@ -101,11 +124,12 @@ Geef gestructureerde feedback met:
 3. Eventuele misconcepties die gecorrigeerd moeten worden
 4. Concrete suggesties voor verbetering`;
 
-  if (retrievedSources && retrievedSources.length > 0) {
-    evaluationPrompt += `\n\nJe hebt toegang tot de volgende bronnen uit het cursusmateriaal: ${retrievedSources.map(s => s.title).join(', ')}. Verwijs naar deze bronnen als dat relevant is.`;
-  }
+    if (retrievedSources && retrievedSources.length > 0) {
+      evaluationPrompt += `\n\nJe hebt toegang tot de volgende bronnen uit het cursusmateriaal: ${retrievedSources.map(s => s.title).join(', ')}. Verwijs naar deze bronnen als dat relevant is.`;
+    }
 
-  evaluationPrompt += `\n\nWees constructief en moedigend, maar ook specifiek en nuttig.`;
+    evaluationPrompt += `\n\nWees constructief en moedigend, maar ook specifiek en nuttig.`;
+  }
 
   try {
     const data = await callChatAPI({

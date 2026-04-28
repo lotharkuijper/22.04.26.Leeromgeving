@@ -1534,11 +1534,16 @@ app.delete('/api/journal/:id', async (req, res) => {
 });
 
 app.get('/api/admin/prompts-migration-status', async (req, res) => {
-  const sqlToRun =
-    "ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';";
+  const sqlToRun = promptsHasSection ? null : [
+    "-- Stap 1: kolom toevoegen",
+    "ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';",
+    "",
+    "-- Stap 2: bestaande rijen op 'chat' zetten",
+    "UPDATE chatbot_prompts SET section = 'chat' WHERE name NOT LIKE '__rag_settings%';",
+  ].join('\n');
   return res.json({
     hasSection: promptsHasSection,
-    sqlToRun: promptsHasSection ? null : sqlToRun,
+    sqlToRun,
   });
 });
 

@@ -978,7 +978,7 @@ const tabs = [
                   <code className="block bg-yellow-100 border border-yellow-300 rounded-lg px-3 py-2 text-xs font-mono text-yellow-900 select-all whitespace-pre-wrap">
                     {promptsMigration.sqlToRun}
                   </code>
-                  <p className="text-xs text-yellow-700">Na het uitvoeren van de SQL: herstart de server om de sectie-indeling te activeren.</p>
+                  <p className="text-xs text-yellow-700">Na het uitvoeren van de SQL: herstart de server. De uitleg-prompt wordt dan automatisch aangemaakt en de sectie-indeling wordt geactiveerd.</p>
                 </div>
               )}
 
@@ -1046,25 +1046,28 @@ const tabs = [
                       <span className="text-xs text-gray-400">— één systeem-prompt voor de chatbot</span>
                     </div>
                     <div className="space-y-2">
-                      {prompts.filter(p => (p.section ?? 'chat') === 'chat').map(prompt => (
-                        <div key={prompt.id} className="flex items-start justify-between p-4 border border-blue-100 bg-blue-50 rounded-xl">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-gray-900 text-sm">{prompt.name}</p>
-                            <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-mono">{prompt.content}</p>
+                      {(() => {
+                        const chatPool = prompts.filter(p => (p.section ?? 'chat') === 'chat');
+                        const activeChatPrompt = chatPool.find(p => p.is_active) || chatPool[0] || null;
+                        return activeChatPrompt ? (
+                          <div key={activeChatPrompt.id} className="flex items-start justify-between p-4 border border-blue-100 bg-blue-50 rounded-xl">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-gray-900 text-sm">{activeChatPrompt.name}</p>
+                              <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-mono">{activeChatPrompt.content}</p>
+                            </div>
+                            <button
+                              onClick={() => { setEditingPrompt(activeChatPrompt); setPromptContent(activeChatPrompt.content); setEditingPromptName(activeChatPrompt.name); }}
+                              className="ml-4 p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors flex-shrink-0"
+                              title="Bewerken"
+                              data-testid={`button-edit-chat-${activeChatPrompt.id}`}
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
                           </div>
-                          <button
-                            onClick={() => { setEditingPrompt(prompt); setPromptContent(prompt.content); setEditingPromptName(prompt.name); }}
-                            className="ml-4 p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors flex-shrink-0"
-                            title="Bewerken"
-                            data-testid={`button-edit-chat-${prompt.id}`}
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                      {prompts.filter(p => (p.section ?? 'chat') === 'chat').length === 0 && (
-                        <p className="text-sm text-gray-400 italic">Geen chat-prompt gevonden. Herstart de server om de standaard-prompt aan te maken.</p>
-                      )}
+                        ) : (
+                          <p className="text-sm text-gray-400 italic">Geen chat-prompt gevonden. Herstart de server om de standaard-prompt aan te maken.</p>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -1076,25 +1079,28 @@ const tabs = [
                       <span className="text-xs text-gray-400">— evaluatietoon en -structuur voor studentuitleg</span>
                     </div>
                     <div className="space-y-2">
-                      {prompts.filter(p => p.section === 'explain').map(prompt => (
-                        <div key={prompt.id} className="flex items-start justify-between p-4 border border-purple-100 bg-purple-50 rounded-xl">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-gray-900 text-sm">{prompt.name}</p>
-                            <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-mono">{prompt.content}</p>
+                      {(() => {
+                        const explainPool = prompts.filter(p => p.section === 'explain');
+                        const activeExplainPrompt = explainPool.find(p => p.is_active) || explainPool[0] || null;
+                        return activeExplainPrompt ? (
+                          <div key={activeExplainPrompt.id} className="flex items-start justify-between p-4 border border-purple-100 bg-purple-50 rounded-xl">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-gray-900 text-sm">{activeExplainPrompt.name}</p>
+                              <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-mono">{activeExplainPrompt.content}</p>
+                            </div>
+                            <button
+                              onClick={() => { setEditingPrompt(activeExplainPrompt); setPromptContent(activeExplainPrompt.content); setEditingPromptName(activeExplainPrompt.name); }}
+                              className="ml-4 p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-100 rounded-lg transition-colors flex-shrink-0"
+                              title="Bewerken"
+                              data-testid={`button-edit-explain-${activeExplainPrompt.id}`}
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
                           </div>
-                          <button
-                            onClick={() => { setEditingPrompt(prompt); setPromptContent(prompt.content); setEditingPromptName(prompt.name); }}
-                            className="ml-4 p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-100 rounded-lg transition-colors flex-shrink-0"
-                            title="Bewerken"
-                            data-testid={`button-edit-explain-${prompt.id}`}
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                      {prompts.filter(p => p.section === 'explain').length === 0 && (
-                        <p className="text-sm text-gray-400 italic">Geen uitleg-prompt gevonden. Herstart de server om de standaard-prompt aan te maken.</p>
-                      )}
+                        ) : (
+                          <p className="text-sm text-gray-400 italic">Geen uitleg-prompt gevonden. Voer de migratie-SQL uit en herstart de server om de standaard-prompt aan te maken.</p>
+                        );
+                      })()}
                     </div>
                   </div>
 
