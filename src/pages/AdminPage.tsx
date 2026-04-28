@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown } from 'lucide-react';
+import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
@@ -23,6 +23,7 @@ interface ChatbotPrompt {
   name: string;
   content: string;
   is_active: boolean;
+  section?: 'chat' | 'explain' | 'project';
   created_at: string;
   updated_at: string;
 }
@@ -140,6 +141,13 @@ export function AdminPage() {
   const [promptMsg, setPromptMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<ChatbotPrompt | null>(null);
   const [promptContent, setPromptContent] = useState('');
+  const [editingPromptName, setEditingPromptName] = useState('');
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectContent, setNewProjectContent] = useState('');
+  const [showNewProjectForm, setShowNewProjectForm] = useState(false);
+  const [deletingPromptId, setDeletingPromptId] = useState<string | null>(null);
+  const [confirmDeletePromptId, setConfirmDeletePromptId] = useState<string | null>(null);
+  const [promptsMigration, setPromptsMigration] = useState<{ hasSection: boolean; sqlToRun: string | null } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -158,7 +166,13 @@ export function AdminPage() {
     if (activeTab === 'users') loadUsers();
     if (activeTab === 'documents') loadDocuments();
     if (activeTab === 'concepts') loadConcepts();
-    if (activeTab === 'prompts') loadPrompts();
+    if (activeTab === 'prompts') {
+      loadPrompts();
+      fetch('/api/admin/prompts-migration-status')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data) setPromptsMigration(data); })
+        .catch(() => {});
+    }
   }, [activeTab, activeCourseId]);
 
   useEffect(() => {
@@ -504,12 +518,17 @@ export function AdminPage() {
     setLoading(true);
     setPromptMsg(null);
 
+    const updateFields: Record<string, string> = {
+      content: promptContent,
+      updated_at: new Date().toISOString(),
+    };
+    if (editingPrompt.section === 'project' && editingPromptName.trim()) {
+      updateFields.name = editingPromptName.trim();
+    }
+
     const { error } = await supabase
       .from('chatbot_prompts')
-      .update({
-        content: promptContent,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updateFields)
       .eq('id', editingPrompt.id);
 
     if (error) {
@@ -519,9 +538,50 @@ export function AdminPage() {
       setPromptMsg({ type: 'success', text: 'Prompt succesvol bijgewerkt.' });
       setEditingPrompt(null);
       setPromptContent('');
+      setEditingPromptName('');
       loadPrompts();
     }
     setLoading(false);
+  };
+
+  const handleCreateProjectPrompt = async () => {
+    if (!newProjectName.trim()) return;
+    setLoading(true);
+    setPromptMsg(null);
+    const { error } = await supabase
+      .from('chatbot_prompts')
+      .insert({
+        name: newProjectName.trim(),
+        content: newProjectContent.trim() || 'Beschrijf hier de rol van deze agent...',
+        is_active: false,
+        section: 'project',
+      });
+    if (error) {
+      setPromptMsg({ type: 'error', text: 'Fout bij aanmaken: ' + error.message });
+    } else {
+      setPromptMsg({ type: 'success', text: 'Agent prompt aangemaakt.' });
+      setNewProjectName('');
+      setNewProjectContent('');
+      setShowNewProjectForm(false);
+      loadPrompts();
+    }
+    setLoading(false);
+  };
+
+  const handleDeleteProjectPrompt = async (promptId: string) => {
+    setDeletingPromptId(promptId);
+    const { error } = await supabase
+      .from('chatbot_prompts')
+      .delete()
+      .eq('id', promptId);
+    if (error) {
+      setPromptMsg({ type: 'error', text: 'Fout bij verwijderen: ' + error.message });
+    } else {
+      setPromptMsg({ type: 'success', text: 'Prompt verwijderd.' });
+      setConfirmDeletePromptId(null);
+      loadPrompts();
+    }
+    setDeletingPromptId(null);
   };
 
   const handleActivatePrompt = async (promptId: string) => {
@@ -906,8 +966,21 @@ const tabs = [
           {activeTab === 'sharestats_import' && <ShareStatsImportPanel />}
 
           {activeTab === 'prompts' && (
-            <div className="space-y-4">
-              <p className="text-gray-600">Beheer de systeem prompts voor de chatbot</p>
+            <div className="space-y-6">
+              <p className="text-gray-600">Beheer de systeem prompts per sectie van de leeromgeving.</p>
+
+              {promptsMigration && !promptsMigration.hasSection && (
+                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl space-y-2">
+                  <p className="text-sm font-semibold text-yellow-900">Eenmalige database-migratie vereist</p>
+                  <p className="text-sm text-yellow-800">
+                    Om sectie-beheer in te schakelen, voer je dit SQL eenmalig uit in het Supabase dashboard (SQL Editor):
+                  </p>
+                  <code className="block bg-yellow-100 border border-yellow-300 rounded-lg px-3 py-2 text-xs font-mono text-yellow-900 select-all whitespace-pre-wrap">
+                    {promptsMigration.sqlToRun}
+                  </code>
+                  <p className="text-xs text-yellow-700">Na het uitvoeren van de SQL: herstart de server om de sectie-indeling te activeren.</p>
+                </div>
+              )}
 
               {promptMsg && (
                 <div className={`rounded-lg px-4 py-2 text-sm ${promptMsg.type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
@@ -916,84 +989,225 @@ const tabs = [
               )}
 
               {editingPrompt ? (
-                <div className="bg-white border border-gray-200 rounded-lg p-6">
-                  <h3 className="text-lg font-bold text-gray-900 mb-4">
-                    Bewerk Prompt: {editingPrompt.name}
+                <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                  <h3 className="text-lg font-bold text-gray-900 mb-1">
+                    {editingPrompt.section === 'project' ? 'Bewerk Agent Prompt' : editingPrompt.section === 'explain' ? 'Bewerk Uitleg Prompt' : 'Bewerk Chat Prompt'}
                   </h3>
+                  <p className="text-sm text-gray-500 mb-4">{editingPrompt.name}</p>
+
+                  {editingPrompt.section === 'project' && (
+                    <div className="mb-3">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Naam van de agent</label>
+                      <input
+                        type="text"
+                        value={editingPromptName}
+                        onChange={e => setEditingPromptName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
+                        placeholder="Naam van de agent prompt..."
+                        data-testid="input-prompt-name"
+                      />
+                    </div>
+                  )}
+
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Inhoud</label>
                   <textarea
                     value={promptContent}
                     onChange={(e) => setPromptContent(e.target.value)}
-                    rows={12}
+                    rows={14}
                     className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none font-mono text-sm"
                     placeholder="Voer de systeem prompt in..."
+                    data-testid="textarea-prompt-content"
                   />
                   <div className="flex gap-3 mt-4">
                     <button
                       onClick={handleSavePrompt}
                       disabled={loading}
-                      className="px-6 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg disabled:opacity-50"
+                      className="px-6 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-sm disabled:opacity-50"
+                      data-testid="button-save-prompt"
                     >
                       {loading ? 'Opslaan...' : 'Opslaan'}
                     </button>
                     <button
-                      onClick={() => {
-                        setEditingPrompt(null);
-                        setPromptContent('');
-                      }}
+                      onClick={() => { setEditingPrompt(null); setPromptContent(''); setEditingPromptName(''); }}
                       className="px-6 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all"
+                      data-testid="button-cancel-prompt"
                     >
                       Annuleren
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {prompts.map((prompt) => (
-                    <div
-                      key={prompt.id}
-                      className={`p-4 border rounded-lg ${
-                        prompt.is_active
-                          ? 'border-green-300 bg-green-50'
-                          : 'border-gray-200 bg-white hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <h3 className="font-semibold text-gray-900">{prompt.name}</h3>
-                            {prompt.is_active && (
-                              <span className="px-2 py-1 text-xs font-semibold bg-green-600 text-white rounded-full">
-                                Actief
-                              </span>
-                            )}
+                <div className="space-y-8">
+                  {/* ── Chat ── */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <MessageSquareText className="w-5 h-5 text-blue-600" />
+                      <h3 className="text-base font-bold text-gray-900">Chat</h3>
+                      <span className="text-xs text-gray-400">— één systeem-prompt voor de chatbot</span>
+                    </div>
+                    <div className="space-y-2">
+                      {prompts.filter(p => (p.section ?? 'chat') === 'chat').map(prompt => (
+                        <div key={prompt.id} className="flex items-start justify-between p-4 border border-blue-100 bg-blue-50 rounded-xl">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-gray-900 text-sm">{prompt.name}</p>
+                            <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-mono">{prompt.content}</p>
                           </div>
-                          <p className="text-sm text-gray-600 line-clamp-2">{prompt.content}</p>
-                        </div>
-                        <div className="flex gap-2 ml-4">
                           <button
-                            onClick={() => {
-                              setEditingPrompt(prompt);
-                              setPromptContent(prompt.content);
-                            }}
-                            className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            onClick={() => { setEditingPrompt(prompt); setPromptContent(prompt.content); setEditingPromptName(prompt.name); }}
+                            className="ml-4 p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors flex-shrink-0"
                             title="Bewerken"
+                            data-testid={`button-edit-chat-${prompt.id}`}
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
-                          {!prompt.is_active && (
-                            <button
-                              onClick={() => handleActivatePrompt(prompt.id)}
-                              disabled={loading}
-                              className="p-2 text-gray-600 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50"
-                              title="Activeren"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                            </button>
-                          )}
+                        </div>
+                      ))}
+                      {prompts.filter(p => (p.section ?? 'chat') === 'chat').length === 0 && (
+                        <p className="text-sm text-gray-400 italic">Geen chat-prompt gevonden. Herstart de server om de standaard-prompt aan te maken.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ── Ik Leg Uit ── */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <Sparkles className="w-5 h-5 text-purple-600" />
+                      <h3 className="text-base font-bold text-gray-900">Ik Leg Uit</h3>
+                      <span className="text-xs text-gray-400">— evaluatietoon en -structuur voor studentuitleg</span>
+                    </div>
+                    <div className="space-y-2">
+                      {prompts.filter(p => p.section === 'explain').map(prompt => (
+                        <div key={prompt.id} className="flex items-start justify-between p-4 border border-purple-100 bg-purple-50 rounded-xl">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-gray-900 text-sm">{prompt.name}</p>
+                            <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-mono">{prompt.content}</p>
+                          </div>
+                          <button
+                            onClick={() => { setEditingPrompt(prompt); setPromptContent(prompt.content); setEditingPromptName(prompt.name); }}
+                            className="ml-4 p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-100 rounded-lg transition-colors flex-shrink-0"
+                            title="Bewerken"
+                            data-testid={`button-edit-explain-${prompt.id}`}
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                      {prompts.filter(p => p.section === 'explain').length === 0 && (
+                        <p className="text-sm text-gray-400 italic">Geen uitleg-prompt gevonden. Herstart de server om de standaard-prompt aan te maken.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ── Projecten ── */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <GraduationCap className="w-5 h-5 text-green-600" />
+                        <h3 className="text-base font-bold text-gray-900">Projecten</h3>
+                        <span className="text-xs text-gray-400">— één prompt per agent, vrij aanpasbaar</span>
+                      </div>
+                      <button
+                        onClick={() => setShowNewProjectForm(v => !v)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                        data-testid="button-add-project-prompt"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Nieuwe agent prompt
+                      </button>
+                    </div>
+
+                    {showNewProjectForm && (
+                      <div className="mb-4 p-4 border border-green-200 bg-green-50 rounded-xl space-y-3">
+                        <p className="text-sm font-medium text-green-900">Nieuwe agent prompt aanmaken</p>
+                        <input
+                          type="text"
+                          value={newProjectName}
+                          onChange={e => setNewProjectName(e.target.value)}
+                          placeholder="Naam van de agent (bijv. 'Onderzoeksassistent')"
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 outline-none"
+                          data-testid="input-new-project-name"
+                        />
+                        <textarea
+                          value={newProjectContent}
+                          onChange={e => setNewProjectContent(e.target.value)}
+                          rows={5}
+                          placeholder="Beschrijf de rol en instructies van deze agent..."
+                          className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 outline-none font-mono"
+                          data-testid="textarea-new-project-content"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleCreateProjectPrompt}
+                            disabled={loading || !newProjectName.trim()}
+                            className="px-4 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                            data-testid="button-create-project-prompt"
+                          >
+                            {loading ? 'Aanmaken...' : 'Aanmaken'}
+                          </button>
+                          <button
+                            onClick={() => { setShowNewProjectForm(false); setNewProjectName(''); setNewProjectContent(''); }}
+                            className="px-4 py-1.5 text-sm bg-white text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                            data-testid="button-cancel-new-project"
+                          >
+                            Annuleren
+                          </button>
                         </div>
                       </div>
+                    )}
+
+                    <div className="space-y-2">
+                      {prompts.filter(p => p.section === 'project').map(prompt => (
+                        <div key={prompt.id} className="flex items-start justify-between p-4 border border-gray-200 bg-white rounded-xl hover:bg-gray-50 transition-colors">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-gray-900 text-sm">{prompt.name}</p>
+                            <p className="text-xs text-gray-500 mt-1 line-clamp-2 font-mono">{prompt.content}</p>
+                          </div>
+                          <div className="flex gap-1 ml-4 flex-shrink-0">
+                            <button
+                              onClick={() => { setEditingPrompt(prompt); setPromptContent(prompt.content); setEditingPromptName(prompt.name); }}
+                              className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Bewerken"
+                              data-testid={`button-edit-project-${prompt.id}`}
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            {confirmDeletePromptId === prompt.id ? (
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-red-600 font-medium">Verwijderen?</span>
+                                <button
+                                  onClick={() => handleDeleteProjectPrompt(prompt.id)}
+                                  disabled={deletingPromptId === prompt.id}
+                                  className="px-2 py-1 text-xs bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"
+                                  data-testid={`button-confirm-delete-prompt-${prompt.id}`}
+                                >
+                                  {deletingPromptId === prompt.id ? '...' : 'Ja'}
+                                </button>
+                                <button
+                                  onClick={() => setConfirmDeletePromptId(null)}
+                                  className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200"
+                                  data-testid={`button-cancel-delete-prompt-${prompt.id}`}
+                                >
+                                  Nee
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setConfirmDeletePromptId(prompt.id)}
+                                className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Verwijderen"
+                                data-testid={`button-delete-project-${prompt.id}`}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {prompts.filter(p => p.section === 'project').length === 0 && !showNewProjectForm && (
+                        <p className="text-sm text-gray-400 italic">Nog geen agent prompts aangemaakt. Klik op "Nieuwe agent prompt" om te beginnen.</p>
+                      )}
                     </div>
-                  ))}
+                  </div>
                 </div>
               )}
             </div>

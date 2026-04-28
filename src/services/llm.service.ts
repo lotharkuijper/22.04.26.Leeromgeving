@@ -70,7 +70,8 @@ export async function evaluateExplanation(
   keyPoints: string[],
   ragContext?: string,
   retrievedSources?: Array<{ title: string; similarity: number }>,
-  ragStrictMode?: boolean
+  ragStrictMode?: boolean,
+  systemPrompt?: string
 ): Promise<LLMResponse> {
   let evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
 
@@ -113,6 +114,7 @@ Geef gestructureerde feedback met:
       temperature: 0.3,
       max_tokens: 1500,
       skipSystemPrompt: true,
+      ...(systemPrompt ? { systemPromptOverride: systemPrompt } : {}),
     });
 
     return {

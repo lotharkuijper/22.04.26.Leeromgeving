@@ -99,29 +99,38 @@ app.post('/api/chat', async (req, res) => {
     max_tokens,
     skipSystemPrompt = false,
     ragStrictMode = false,
+    systemPromptOverride,
   } = req.body;
 
   const userMessages = Array.isArray(messages) ? messages.filter(m => m.role !== 'system') : [];
 
   let finalMessages;
   if (skipSystemPrompt) {
-    finalMessages = userMessages;
+    if (systemPromptOverride) {
+      finalMessages = [{ role: 'system', content: systemPromptOverride }, ...userMessages];
+    } else {
+      finalMessages = userMessages;
+    }
   } else {
     let systemPromptContent = FALLBACK_SYSTEM_PROMPT;
     if (supabaseAdmin) {
       try {
-        const { data: promptData, error: promptError } = await supabaseAdmin
+        let promptQuery = supabaseAdmin
           .from('chatbot_prompts')
           .select('content')
           .eq('is_active', true)
-          .maybeSingle();
+          .not('name', 'like', '__rag_settings%');
+        if (promptsHasSection) {
+          promptQuery = promptQuery.eq('section', 'chat');
+        }
+        const { data: promptData, error: promptError } = await promptQuery.maybeSingle();
         if (promptError) {
           console.warn('[/api/chat] Prompt ophalen mislukt, fallback gebruikt:', promptError.message);
         } else if (promptData?.content) {
           systemPromptContent = promptData.content;
-          console.log('[/api/chat] Actieve prompt uit database geladen');
+          console.log('[/api/chat] Actieve chat-prompt uit database geladen');
         } else {
-          console.warn('[/api/chat] Geen actieve prompt in database — fallback gebruikt');
+          console.warn('[/api/chat] Geen actieve chat-prompt in database — fallback gebruikt');
         }
       } catch (err) {
         console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
@@ -1524,6 +1533,36 @@ app.delete('/api/journal/:id', async (req, res) => {
   }
 });
 
+app.get('/api/admin/prompts-migration-status', async (req, res) => {
+  const sqlToRun =
+    "ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';";
+  return res.json({
+    hasSection: promptsHasSection,
+    sqlToRun: promptsHasSection ? null : sqlToRun,
+  });
+});
+
+app.get('/api/prompt/explain', async (req, res) => {
+  if (!supabaseAdmin || !promptsHasSection) {
+    return res.json({ content: null });
+  }
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('id, content')
+      .eq('section', 'explain')
+      .maybeSingle();
+    if (error) {
+      console.warn('[/api/prompt/explain] Fout bij ophalen:', error.message);
+      return res.json({ content: null });
+    }
+    return res.json({ id: data?.id ?? null, content: data?.content ?? null });
+  } catch (err) {
+    console.error('[/api/prompt/explain] Exception:', err.message);
+    return res.status(500).json({ error: 'Interne serverfout' });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -1534,7 +1573,75 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+const DEFAULT_EXPLAIN_PROMPT = `Je bent een kritische en constructieve tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je evalueert uitleg van studenten over begrippen en geeft gestructureerde, constructieve feedback.
+
+Geef je feedback in vier onderdelen:
+1. Wat de student goed heeft gedaan (noem specifieke sterke punten)
+2. Wat ontbreekt of onduidelijk is (wees concreet)
+3. Eventuele misconcepties die gecorrigeerd moeten worden
+4. Concrete suggesties voor verbetering
+
+Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student in de gezondheidswetenschappen.`;
+
+let promptsHasSection = false;
+
+async function initChatbotPromptSection() {
+  if (!supabaseAdmin) return;
+  try {
+    const { error: detectError } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('section')
+      .limit(1);
+
+    if (detectError && detectError.message?.includes('section')) {
+      console.warn(
+        '[init] chatbot_prompts.section kolom ontbreekt.\n' +
+        '       Voer dit SQL uit in het Supabase dashboard om de kolom toe te voegen:\n\n' +
+        "       ALTER TABLE chatbot_prompts ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'chat';\n" +
+        "       UPDATE chatbot_prompts SET section = 'chat' WHERE section = 'chat';\n"
+      );
+      promptsHasSection = false;
+      return;
+    }
+
+    promptsHasSection = true;
+
+    await supabaseAdmin
+      .from('chatbot_prompts')
+      .update({ section: 'chat' })
+      .not('name', 'like', '__rag_settings%')
+      .not('section', 'in', '("explain","project")');
+
+    const { data: existingExplain } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('id')
+      .eq('section', 'explain')
+      .maybeSingle();
+
+    if (!existingExplain) {
+      const { error: insertError } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .insert({
+          name: 'Uitleg evaluatie prompt',
+          content: DEFAULT_EXPLAIN_PROMPT,
+          is_active: true,
+          section: 'explain',
+        });
+      if (insertError) {
+        console.warn('[init] Explain prompt aanmaken mislukt:', insertError.message);
+      } else {
+        console.log('[init] Standaard uitleg-prompt aangemaakt');
+      }
+    }
+
+    console.log('[init] chatbot_prompts sectie-migratie voltooid (section kolom beschikbaar)');
+  } catch (err) {
+    console.warn('[init] initChatbotPromptSection exception:', err.message);
+  }
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[API Server] Running on port ${PORT}`);
   detectConceptsCourseIdColumn();
+  initChatbotPromptSection();
 });

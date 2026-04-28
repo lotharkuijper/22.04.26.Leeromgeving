@@ -47,6 +47,7 @@ export function ExplainPage() {
   const [conceptSource, setConceptSource] = useState<'course' | 'global' | 'empty' | null>(null);
   const [conceptsLoading, setConceptsLoading] = useState(false);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
+  const [explainSystemPrompt, setExplainSystemPrompt] = useState<string | null>(null);
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
@@ -54,6 +55,13 @@ export function ExplainPage() {
       if (data) setRagSettings(data);
     }).catch(() => {});
   }, [activeCourse]);
+
+  useEffect(() => {
+    fetch('/api/prompt/explain')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.content) setExplainSystemPrompt(data.content); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -156,7 +164,8 @@ export function ExplainPage() {
         selectedConcept.key_points || [],
         context,
         sources,
-        ragSettings.explain.rag_strict_mode
+        ragSettings.explain.rag_strict_mode,
+        explainSystemPrompt ?? undefined
       );
 
       console.log('[EXPLAIN] Received feedback from LLM');
