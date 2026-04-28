@@ -106,10 +106,12 @@ export async function searchRelevantChunks(
 
     console.log(`[RAG] Allowed folder IDs: ${allowedFolderIds.length}`);
 
+    // Vraag de top kandidaten op zonder drempel zodat we altijd de hoogste
+    // beschikbare similarity-score kunnen rapporteren bij geen match.
     const { data: allChunks, error } = await supabase.rpc('match_document_chunks', {
       query_embedding: embedding,
-      match_threshold: matchThreshold,
-      match_count: matchCount * 3,
+      match_threshold: 0,
+      match_count: Math.max(matchCount * 3, 15),
     });
 
     if (error) {
@@ -118,11 +120,11 @@ export async function searchRelevantChunks(
     }
 
     if (!allChunks || allChunks.length === 0) {
-      console.warn('[RAG] No matching chunks found for query');
+      console.warn('[RAG] match_document_chunks returned no rows at all');
       return [];
     }
 
-    console.log(`[RAG] Found ${allChunks.length} matching chunks`);
+    console.log(`[RAG] RPC returned ${allChunks.length} candidate chunks (top score: ${(allChunks[0]?.similarity ?? 0).toFixed(3)})`);
 
     const { data: documents } = await supabase
       .from('documents')
@@ -139,11 +141,26 @@ export async function searchRelevantChunks(
         .map((doc) => doc.id) || []
     );
 
-    const filteredChunks = (allChunks as Array<{ id: string; document_id: string; content: string; document_title: string; similarity: number; metadata: unknown }>)
-      .filter((chunk) => allowedDocIds.has(chunk.document_id))
-      .slice(0, matchCount);
+    const inAllowedFolders = (allChunks as Array<{ id: string; document_id: string; content: string; document_title: string; similarity: number; metadata: unknown }>)
+      .filter((chunk) => allowedDocIds.has(chunk.document_id));
 
-    console.log(`[RAG] Returning ${filteredChunks.length} filtered chunks`);
+    const aboveThreshold = inAllowedFolders.filter((c) => c.similarity >= matchThreshold);
+
+    if (aboveThreshold.length === 0) {
+      const maxAllowed = inAllowedFolders.length > 0
+        ? Math.max(...inAllowedFolders.map((c) => c.similarity))
+        : 0;
+      console.warn(
+        `[RAG] Geen chunks boven drempel ${matchThreshold.toFixed(2)} ` +
+        `(beste score in toegestane mappen: ${maxAllowed.toFixed(3)}, kandidaten: ${inAllowedFolders.length}). ` +
+        `Overweeg de drempel te verlagen.`
+      );
+      return [];
+    }
+
+    const filteredChunks = aboveThreshold.slice(0, matchCount);
+
+    console.log(`[RAG] Returning ${filteredChunks.length} chunks (scores: ${filteredChunks.map((c) => c.similarity.toFixed(3)).join(', ')})`);
 
     return filteredChunks.map((chunk) => ({
       id: chunk.id,

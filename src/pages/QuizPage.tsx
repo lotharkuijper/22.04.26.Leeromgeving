@@ -43,7 +43,7 @@ interface RagSettings {
 
 const RAG_DEFAULTS: RagSettings = {
   chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
-  explain: { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: true  },
+  explain: { similarity_threshold: 0.50, match_count: 5, rag_strict_mode: true  },
   quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
   project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
 };

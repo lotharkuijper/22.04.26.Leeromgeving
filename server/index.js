@@ -38,10 +38,68 @@ Regels:
 
 const RAG_MODULE_DEFAULTS = {
   chat:    { similarity_threshold: 0.70, match_count: 5,  rag_strict_mode: false },
-  explain: { similarity_threshold: 0.70, match_count: 5,  rag_strict_mode: true  },
+  explain: { similarity_threshold: 0.50, match_count: 5,  rag_strict_mode: true  },
   quiz:    { similarity_threshold: 0.65, match_count: 5,  rag_strict_mode: true  },
   project: { similarity_threshold: 0.60, match_count: 7,  rag_strict_mode: false },
 };
+
+const RAG_EXTRACTION_DEFAULTS = {
+  similarity_threshold: 0.55,
+  min_evidence_chunks: 1,
+};
+
+// allowedFolderIds semantiek:
+//   null / undefined  → geen folderfilter (alle chunks)
+//   []                → expliciet geen toegang (geen resultaten)
+//   [id, id, ...]     → alleen chunks uit deze folders
+async function searchChunksServerSide(queryText, threshold, matchCount, allowedFolderIds) {
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!openaiKey || !supabaseAdmin) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+
+  // Expliciet lege toegestane mappen → geen toegang
+  if (Array.isArray(allowedFolderIds) && allowedFolderIds.length === 0) {
+    return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+  }
+
+  try {
+    const embRes = await fetch(OPENAI_EMBEDDINGS_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: [queryText] }),
+    });
+    if (!embRes.ok) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+    const embData = await embRes.json();
+    const embedding = embData.data?.[0]?.embedding;
+    if (!embedding) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+
+    const { data: allChunks, error } = await supabaseAdmin.rpc('match_document_chunks', {
+      query_embedding: embedding,
+      match_threshold: 0,
+      match_count: Math.max(matchCount * 3, 15),
+    });
+    if (error || !allChunks) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+
+    let candidate = allChunks;
+    if (Array.isArray(allowedFolderIds) && allowedFolderIds.length > 0) {
+      const docIds = [...new Set(allChunks.map(c => c.document_id))];
+      const { data: docs } = await supabaseAdmin
+        .from('documents')
+        .select('id, folder_id')
+        .in('id', docIds);
+      const allowedDocIds = new Set((docs || []).filter(d => allowedFolderIds.includes(d.folder_id)).map(d => d.id));
+      candidate = allChunks.filter(c => allowedDocIds.has(c.document_id));
+    }
+
+    return {
+      matched: candidate.filter(c => c.similarity >= threshold).slice(0, matchCount),
+      maxScore: candidate.length > 0 ? Math.max(...candidate.map(c => c.similarity)) : 0,
+      candidatesInAllowed: candidate.length,
+    };
+  } catch (err) {
+    console.error('[searchChunksServerSide] Error:', err.message);
+    return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+  }
+}
 
 const RAG_STRICT_INSTRUCTION = `\n\nSTRIKTE BRONBEPERKING: Gebruik UITSLUITEND de context die hierboven is meegegeven uit het cursusmateriaal. Ga NIET buiten deze bronnen. Als iets niet in de meegeleverde context staat, zeg dan eerlijk: "Dit onderwerp staat niet in het beschikbare cursusmateriaal."`;
 
@@ -63,11 +121,12 @@ async function loadRagSettings(courseId) {
         for (const mod of Object.keys(RAG_MODULE_DEFAULTS)) {
           merged[mod] = { ...RAG_MODULE_DEFAULTS[mod], ...(parsed[mod] || {}) };
         }
+        merged.extraction = { ...RAG_EXTRACTION_DEFAULTS, ...(parsed.extraction || {}) };
         return merged;
       } catch { /* fall through to next key */ }
     }
   }
-  return { ...RAG_MODULE_DEFAULTS };
+  return { ...RAG_MODULE_DEFAULTS, extraction: { ...RAG_EXTRACTION_DEFAULTS } };
 }
 
 let conceptsHasCourseId = false;
@@ -428,7 +487,7 @@ app.put('/api/rag-settings', async (req, res) => {
         if (m.similarity_threshold !== undefined) {
           const parsed = parseFloat(m.similarity_threshold);
           if (isNaN(parsed)) return res.status(400).json({ error: `similarity_threshold voor ${mod} is geen geldig getal` });
-          m.similarity_threshold = Math.max(0.50, Math.min(0.95, parsed));
+          m.similarity_threshold = Math.max(0.30, Math.min(0.95, parsed));
         }
         if (m.match_count !== undefined) {
           const parsed = parseInt(m.match_count);
@@ -440,6 +499,20 @@ app.put('/api/rag-settings', async (req, res) => {
         }
       }
     }
+    // Aparte validatie voor extraction (andere shape: similarity_threshold + min_evidence_chunks)
+    if (settings.extraction) {
+      const e = settings.extraction;
+      if (e.similarity_threshold !== undefined) {
+        const parsed = parseFloat(e.similarity_threshold);
+        if (isNaN(parsed)) return res.status(400).json({ error: 'similarity_threshold voor extraction is geen geldig getal' });
+        e.similarity_threshold = Math.max(0.0, Math.min(0.95, parsed));
+      }
+      if (e.min_evidence_chunks !== undefined) {
+        const parsed = parseInt(e.min_evidence_chunks);
+        if (isNaN(parsed)) return res.status(400).json({ error: 'min_evidence_chunks is geen geldig getal' });
+        e.min_evidence_chunks = Math.max(0, Math.min(10, parsed));
+      }
+    }
 
     const settingsKey = courseId ? `__rag_settings_${courseId}__` : '__rag_settings_global__';
 
@@ -447,18 +520,25 @@ app.put('/api/rag-settings', async (req, res) => {
     const { data: existingRow } = await supabaseAdmin
       .from('chatbot_prompts').select('id, content').eq('name', settingsKey).maybeSingle();
 
-    let mergedSettings = { ...RAG_MODULE_DEFAULTS };
+    let mergedSettings = { ...RAG_MODULE_DEFAULTS, extraction: { ...RAG_EXTRACTION_DEFAULTS } };
     if (existingRow?.content) {
       try {
         const prev = JSON.parse(existingRow.content);
         for (const mod of Object.keys(RAG_MODULE_DEFAULTS)) {
           if (prev[mod]) mergedSettings[mod] = { ...RAG_MODULE_DEFAULTS[mod], ...prev[mod] };
         }
+        if (prev.extraction) {
+          mergedSettings.extraction = { ...RAG_EXTRACTION_DEFAULTS, ...prev.extraction };
+        }
       } catch { /* negeer parse-fouten, gebruik defaults */ }
     }
     // Schrijf de inkomende modules over de bestaande settings heen
     for (const mod of MODULES) {
       if (settings[mod]) mergedSettings[mod] = { ...mergedSettings[mod], ...settings[mod] };
+    }
+    // Schrijf inkomende extractie-instellingen over de bestaande heen
+    if (settings.extraction) {
+      mergedSettings.extraction = { ...mergedSettings.extraction, ...settings.extraction };
     }
 
     const content = JSON.stringify(mergedSettings);
@@ -564,6 +644,94 @@ app.delete('/api/rag-settings/:courseId', async (req, res) => {
     return res.json({ success: true });
   } catch (err) {
     console.error('[rag-settings DELETE] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Diagnose-endpoint: zoek de top-N chunks voor een willekeurige zoekterm,
+// zonder drempel — handig om te kalibreren wat een realistische drempelwaarde is.
+app.post('/api/admin/test-rag-similarity', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { courseId, query } = req.body;
+  if (!query || typeof query !== 'string' || !query.trim()) {
+    return res.status(400).json({ error: 'query (zoekterm) is vereist' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+    // Diagnose-endpoint is admin-only: kan alle chunks zien zonder drempel
+    const isAllowed = profile && (
+      profile.role === 'admin' ||
+      profile.email === SUPERUSER_EMAIL
+    );
+    if (!isAllowed) return res.status(403).json({ error: 'Alleen admins mogen RAG-diagnose uitvoeren' });
+
+    // Bepaal toegestane mappen op basis van cursus (zelfde logica als extract-concepts)
+    let allowedFolderIds = null;
+    if (courseId) {
+      const { data: assignments } = await supabaseAdmin
+        .from('course_folder_assignments')
+        .select('folder_id')
+        .eq('course_id', courseId);
+
+      const assignedFolderIds = (assignments || []).map(a => a.folder_id);
+      if (assignedFolderIds.length > 0) {
+        const { data: ragFolders } = await supabaseAdmin
+          .from('document_folders')
+          .select('id')
+          .in('id', assignedFolderIds)
+          .eq('folder_type', 'rag_sources');
+        allowedFolderIds = (ragFolders || []).map(f => f.id);
+      } else {
+        allowedFolderIds = [];
+      }
+    }
+
+    // Haal top-N kandidaten op zonder drempel
+    const result = await searchChunksServerSide(query.trim(), 0, 10, allowedFolderIds);
+
+    if (!result || !result.matched) {
+      return res.json({ query: query.trim(), chunks: [], maxScore: 0 });
+    }
+
+    // Verrijk met document-titels
+    const chunkDocIds = [...new Set(result.matched.map(c => c.document_id))];
+    let docTitleMap = {};
+    if (chunkDocIds.length > 0) {
+      const { data: docs } = await supabaseAdmin
+        .from('documents')
+        .select('id, title')
+        .in('id', chunkDocIds);
+      docTitleMap = Object.fromEntries((docs || []).map(d => [d.id, d.title]));
+    }
+
+    return res.json({
+      query: query.trim(),
+      maxScore: result.maxScore,
+      candidatesInAllowedFolders: result.candidatesInAllowed,
+      chunks: result.matched.map(c => ({
+        id: c.id,
+        documentId: c.document_id,
+        documentTitle: docTitleMap[c.document_id] || c.document_title || 'Onbekend',
+        similarity: c.similarity,
+        contentPreview: (c.content || '').slice(0, 220),
+      })),
+    });
+  } catch (err) {
+    console.error('[test-rag-similarity] Error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -1398,13 +1566,53 @@ ${combinedText}`;
     }
 
     const validCategories = ['epidemiologie', 'biostatistiek'];
-    const validConcepts = extractedConcepts.filter(
+    const rawValidConcepts = extractedConcepts.filter(
       (c) => c.name && c.category && validCategories.includes(c.category) && c.definition
     );
+
+    // VERIFICATIE-STAP: vergelijk elk LLM-kandidaat-begrip met RAG-chunks
+    // (eigen instellingen, los van chat/explain/quiz/project)
+    const allSettings = await loadRagSettings(courseId);
+    const extractionSettings = allSettings.extraction || RAG_EXTRACTION_DEFAULTS;
+    const verifyThreshold = extractionSettings.similarity_threshold;
+    const minEvidence = extractionSettings.min_evidence_chunks;
+
+    console.log(`[extract-concepts] Verificatie: ${rawValidConcepts.length} kandidaten met drempel ${verifyThreshold.toFixed(2)} en min ${minEvidence} bewijschunks`);
+
+    const verificationResults = await Promise.all(
+      rawValidConcepts.map(async (c) => {
+        const result = await searchChunksServerSide(c.name, verifyThreshold, 10, ragFolderIds);
+        return {
+          concept: c,
+          matchedCount: result?.matched?.length || 0,
+          maxScore: result?.maxScore || 0,
+          candidates: result?.candidatesInAllowed || 0,
+        };
+      })
+    );
+
+    const validConcepts = [];
+    const rejectedConcepts = [];
+    for (const r of verificationResults) {
+      if (r.matchedCount >= minEvidence) {
+        validConcepts.push(r.concept);
+      } else {
+        rejectedConcepts.push(r);
+      }
+    }
+
+    console.log(`[extract-concepts] Verificatie klaar: ${validConcepts.length} geaccepteerd, ${rejectedConcepts.length} afgewezen`);
+    if (rejectedConcepts.length > 0) {
+      const sample = rejectedConcepts.slice(0, 8).map(r =>
+        `"${r.concept.name}" (max=${r.maxScore.toFixed(3)}, kandidaten=${r.candidates})`
+      ).join(', ');
+      console.log(`[extract-concepts] Voorbeeld afgewezen: ${sample}`);
+    }
 
     let inserted = [];
     let updatedCount = 0;
     let skipped = 0;
+    const verificationRejected = rejectedConcepts.length;
 
     if (conceptsHasCourseId) {
       const { data: existingForCourse } = await supabaseAdmin
@@ -1502,15 +1710,20 @@ ${combinedText}`;
 
     const totalAdded = inserted.length + updatedCount;
 
-    console.log(`[extract-concepts] Done for course ${courseId}: ${inserted.length} new, ${updatedCount} updated, ${skipped} already tagged`);
+    console.log(`[extract-concepts] Done for course ${courseId}: ${inserted.length} new, ${updatedCount} updated, ${skipped} already tagged, ${verificationRejected} afgewezen door verificatie`);
 
     await writeRegenTimestamp().catch(() => {});
+
+    const verifMsg = verificationRejected > 0
+      ? ` (${verificationRejected} kandidaten afgewezen door RAG-verificatie)`
+      : '';
 
     return res.json({
       concepts: inserted,
       updated: updatedCount,
       skipped,
-      message: `${totalAdded} begrippen toegevoegd/bijgewerkt voor deze cursus`,
+      verificationRejected,
+      message: `${totalAdded} begrippen toegevoegd/bijgewerkt voor deze cursus${verifMsg}`,
     });
   } catch (err) {
     console.error('[extract-concepts] Unexpected error:', err);

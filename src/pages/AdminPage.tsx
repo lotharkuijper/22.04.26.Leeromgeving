@@ -36,19 +36,34 @@ interface RagModuleSettings {
   rag_strict_mode: boolean;
 }
 
+interface RagExtractionSettings {
+  similarity_threshold: number;
+  min_evidence_chunks: number;
+}
+
 interface RagSettingsConfig {
   chat: RagModuleSettings;
   explain: RagModuleSettings;
   quiz: RagModuleSettings;
   project: RagModuleSettings;
+  extraction: RagExtractionSettings;
 }
 
 const RAG_ADMIN_DEFAULTS: RagSettingsConfig = {
   chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
-  explain: { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: true  },
+  explain: { similarity_threshold: 0.50, match_count: 5, rag_strict_mode: true  },
   quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
   project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
+  extraction: { similarity_threshold: 0.55, min_evidence_chunks: 1 },
 };
+
+interface RagDiagnosticChunk {
+  id: string;
+  documentId: string;
+  documentTitle: string;
+  similarity: number;
+  contentPreview: string;
+}
 
 type ConceptCategory = 'epidemiologie' | 'biostatistiek';
 type UserRole = 'student' | 'docent' | 'admin';
@@ -187,6 +202,15 @@ export function AdminPage() {
   const [allCourses, setAllCourses] = useState<Array<{ id: string; name: string }>>([]);
   const [coursesWithOverrides, setCoursesWithOverrides] = useState<Set<string>>(new Set());
   const [ragDeletingOverride, setRagDeletingOverride] = useState(false);
+  const [diagnosticQuery, setDiagnosticQuery] = useState('');
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<{
+    query: string;
+    chunks: RagDiagnosticChunk[];
+    maxScore: number;
+    candidatesInAllowedFolders?: number;
+  } | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeTab === 'users') loadUsers();
@@ -410,11 +434,48 @@ export function AdminPage() {
     }
   };
 
-  const updateRagModule = (mod: keyof RagSettingsConfig, field: keyof RagModuleSettings, value: number | boolean) => {
+  const updateRagModule = (mod: 'chat' | 'explain' | 'quiz' | 'project', field: keyof RagModuleSettings, value: number | boolean) => {
     setRagSettingsState(prev => ({
       ...prev,
       [mod]: { ...prev[mod], [field]: value },
     }));
+  };
+
+  const updateRagExtraction = (field: keyof RagExtractionSettings, value: number) => {
+    setRagSettingsState(prev => ({
+      ...prev,
+      extraction: { ...prev.extraction, [field]: value },
+    }));
+  };
+
+  const runDiagnostic = async () => {
+    if (!session?.access_token || !diagnosticQuery.trim()) return;
+    setDiagnosticLoading(true);
+    setDiagnosticError(null);
+    setDiagnosticResult(null);
+    try {
+      const res = await fetch('/api/admin/test-rag-similarity', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          courseId: ragSelectedCourseId || undefined,
+          query: diagnosticQuery.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDiagnosticError(data.error || `Serverfout ${res.status}`);
+      } else {
+        setDiagnosticResult(data);
+      }
+    } catch (err: any) {
+      setDiagnosticError(err.message || 'Onbekende fout');
+    } finally {
+      setDiagnosticLoading(false);
+    }
   };
 
   const handleChangeUserRole = async (userId: string, newRole: UserRole) => {
@@ -1578,6 +1639,70 @@ const tabGroups = [
                 </div>
               )}
 
+              <div className="border border-purple-200 rounded-xl p-5 space-y-4 bg-purple-50">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-purple-600" />
+                      Begrippenextractie
+                    </h3>
+                    <p className="text-xs text-gray-600 mt-1 max-w-2xl">
+                      Wanneer de AI de begrippenlijst hergenereert, wordt elk kandidaat-begrip
+                      gecontroleerd tegen het cursusmateriaal. Begrippen zonder voldoende bewijs
+                      worden afgewezen. Strikter = minder maar relevantere begrippen.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Verificatie-drempel (<span className="font-mono">{ragSettingsState.extraction.similarity_threshold.toFixed(2)}</span>)
+                    </label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Minimale overeenkomst per kandidaat-begrip. Tip: bij text-embedding-3-small
+                      scoren goede matches typisch tussen 0.45 en 0.65.
+                    </p>
+                    <input
+                      type="range"
+                      min={0.0}
+                      max={0.95}
+                      step={0.01}
+                      value={ragSettingsState.extraction.similarity_threshold}
+                      onChange={e => updateRagExtraction('similarity_threshold', parseFloat(e.target.value))}
+                      className="w-full accent-purple-600"
+                      data-testid="slider-threshold-extraction"
+                    />
+                    <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                      <span>Geen filter (0.00)</span><span>Strikt (0.95)</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Min. bewijschunks (<span className="font-mono">{ragSettingsState.extraction.min_evidence_chunks}</span>)
+                    </label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Hoeveel chunks moeten boven de drempel scoren om het begrip te accepteren?
+                      Hoger = strikter.
+                    </p>
+                    <input
+                      type="range"
+                      min={0}
+                      max={5}
+                      step={1}
+                      value={ragSettingsState.extraction.min_evidence_chunks}
+                      onChange={e => updateRagExtraction('min_evidence_chunks', parseInt(e.target.value))}
+                      className="w-full accent-purple-600"
+                      data-testid="slider-min-evidence-extraction"
+                    />
+                    <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                      <span>0 (geen filter)</span><span>5 (zeer strikt)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {(['chat', 'explain', 'quiz', 'project'] as const).map(mod => {
                 const labels: Record<string, string> = { chat: 'Chat', explain: 'Begrippen uitleggen', quiz: 'Quiz', project: 'Project' };
                 const s = ragSettingsState[mod];
@@ -1665,6 +1790,103 @@ const tabGroups = [
                   <RefreshCw className="w-4 h-4" />
                   Herladen
                 </button>
+              </div>
+
+              {/* Diagnose: test drempelwaarde */}
+              <div className="border border-gray-200 rounded-xl p-5 space-y-4 bg-white mt-6">
+                <div>
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <Search className="w-4 h-4 text-gray-600" />
+                    Diagnose: test drempelwaarde
+                  </h3>
+                  <p className="text-xs text-gray-600 mt-1 max-w-2xl">
+                    Type een zoekterm (bijvoorbeeld een begripsnaam) om te zien welke chunks worden
+                    gevonden — zonder drempel toe te passen. Zo kun je inschatten welke drempel
+                    realistisch is voor jouw cursusmateriaal.
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={diagnosticQuery}
+                    onChange={e => setDiagnosticQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !diagnosticLoading) runDiagnostic(); }}
+                    placeholder="bijv. Cross-over onderzoek"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                    data-testid="input-diagnostic-query"
+                  />
+                  <button
+                    onClick={runDiagnostic}
+                    disabled={diagnosticLoading || !diagnosticQuery.trim()}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 text-sm font-medium"
+                    data-testid="button-run-diagnostic"
+                  >
+                    {diagnosticLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                    Test
+                  </button>
+                </div>
+
+                {diagnosticError && (
+                  <div className="flex items-center gap-2 p-3 rounded-lg text-sm bg-red-50 text-red-700 border border-red-200">
+                    <XCircle className="w-4 h-4" />
+                    {diagnosticError}
+                  </div>
+                )}
+
+                {diagnosticResult && (
+                  <div className="space-y-3" data-testid="diagnostic-results">
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700">
+                      <span>Resultaat voor <strong>"{diagnosticResult.query}"</strong>:</span>
+                      <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-mono">
+                        Beste score: {diagnosticResult.maxScore.toFixed(3)}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
+                        {diagnosticResult.chunks.length} chunks teruggegeven
+                      </span>
+                      {diagnosticResult.candidatesInAllowedFolders !== undefined && (
+                        <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
+                          ({diagnosticResult.candidatesInAllowedFolders} kandidaten in toegestane mappen)
+                        </span>
+                      )}
+                    </div>
+
+                    {diagnosticResult.chunks.length === 0 ? (
+                      <div className="text-sm text-gray-500 italic">
+                        Geen chunks gevonden. Controleer of de cursus RAG-mappen heeft toegewezen.
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {diagnosticResult.chunks.map((chunk, idx) => (
+                          <div
+                            key={chunk.id}
+                            className="border border-gray-200 rounded-lg p-3 bg-gray-50"
+                            data-testid={`diagnostic-chunk-${idx}`}
+                          >
+                            <div className="flex items-start justify-between gap-2 mb-1">
+                              <span className="text-xs font-medium text-gray-600 truncate">
+                                #{idx + 1} · {chunk.documentTitle}
+                              </span>
+                              <span
+                                className={`text-xs font-mono px-2 py-0.5 rounded-full flex-shrink-0 ${
+                                  chunk.similarity >= 0.6
+                                    ? 'bg-green-100 text-green-700'
+                                    : chunk.similarity >= 0.45
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-red-100 text-red-700'
+                                }`}
+                                data-testid={`diagnostic-score-${idx}`}
+                              >
+                                {chunk.similarity.toFixed(3)}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 line-clamp-2">{chunk.contentPreview}…</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
