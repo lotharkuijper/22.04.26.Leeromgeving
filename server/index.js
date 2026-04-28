@@ -918,6 +918,101 @@ app.get('/api/folder-type', async (req, res) => {
   }
 });
 
+app.get('/api/admin/concepts-meta', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header required' });
+  }
+
+  const { courseId } = req.query;
+  if (!courseId) {
+    return res.status(400).json({ error: 'courseId is required' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('role, email')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      return res.status(403).json({ error: 'Could not verify user role' });
+    }
+
+    const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
+    const isDocent = profile.role === 'docent';
+    if (!isAdmin && !isDocent) {
+      return res.status(403).json({ error: 'Admin of docent rol vereist' });
+    }
+
+    if (isDocent && !isAdmin) {
+      const { data: membership, error: memberErr } = await supabaseAdmin
+        .from('course_members')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('course_id', courseId)
+        .maybeSingle();
+      if (memberErr) {
+        console.error('[concepts-meta] Course membership check error:', memberErr);
+        return res.status(500).json({ error: 'Cursustoestemming kon niet worden gecontroleerd' });
+      }
+      if (!membership) {
+        return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+      }
+    }
+
+    const courseMarker = `[RAG-geëxtraheerd uit cursusmateriaal]`;
+
+    let query = supabaseAdmin
+      .from('concepts')
+      .select('id, key_points, extraction_method, extracted_at, created_at')
+      .or(`course_id.eq.${courseId},key_points.cs.{"course_id:${courseId}"}`);
+
+    const { data: concepts, error: conceptsError } = await query;
+
+    if (conceptsError) {
+      console.error('[concepts-meta] query error:', conceptsError);
+      return res.status(500).json({ error: conceptsError.message });
+    }
+
+    const all = concepts || [];
+    const ragConcepts = all.filter(c => (c.key_points || []).includes(courseMarker));
+    const manualConcepts = all.filter(c => !(c.key_points || []).includes(courseMarker));
+
+    let lastExtraction = null;
+    for (const c of ragConcepts) {
+      const ts = c.extracted_at || c.created_at;
+      if (ts && (!lastExtraction || ts > lastExtraction)) {
+        lastExtraction = ts;
+      }
+    }
+
+    return res.json({
+      ragCount: ragConcepts.length,
+      manualCount: manualConcepts.length,
+      lastExtraction,
+    });
+  } catch (err) {
+    console.error('[concepts-meta] Unexpected error:', err);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.post('/api/admin/extract-concepts', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });

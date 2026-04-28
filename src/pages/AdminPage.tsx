@@ -138,6 +138,7 @@ export function AdminPage() {
   const [regeneratingConcepts, setRegeneratingConcepts] = useState(false);
   const [regenerateResult, setRegenerateResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  const [conceptsMeta, setConceptsMeta] = useState<{ ragCount: number; manualCount: number; lastExtraction: string | null } | null>(null);
   const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole } | null>(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
@@ -168,7 +169,7 @@ export function AdminPage() {
   useEffect(() => {
     if (activeTab === 'users') loadUsers();
     if (activeTab === 'documents') loadDocuments();
-    if (activeTab === 'concepts') loadConcepts();
+    if (activeTab === 'concepts') { loadConcepts(); loadConceptsMeta(); }
     if (activeTab === 'prompts') {
       loadPrompts();
       (async () => {
@@ -255,6 +256,28 @@ export function AdminPage() {
       }
     } catch (err) {
       console.error('Error loading concepts:', err);
+    }
+  };
+
+  const loadConceptsMeta = async () => {
+    if (!session?.access_token || !activeCourseId) {
+      setConceptsMeta(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/concepts-meta?courseId=${activeCourseId}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) {
+        console.error('Error loading concepts meta:', await res.text());
+        setConceptsMeta(null);
+        return;
+      }
+      const data = await res.json();
+      setConceptsMeta(data);
+    } catch (err) {
+      console.error('Error loading concepts meta:', err);
+      setConceptsMeta(null);
     }
   };
 
@@ -498,6 +521,7 @@ export function AdminPage() {
       setAddConceptDefinition('');
       setAddConceptCategory('epidemiologie');
       await loadConcepts();
+      await loadConceptsMeta();
       setTimeout(() => setAddConceptSuccess(false), 3000);
     }
     setAddConceptLoading(false);
@@ -518,6 +542,7 @@ export function AdminPage() {
       }
       setDeleteConfirmId(null);
       await loadConcepts();
+      await loadConceptsMeta();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Onbekende fout');
     } finally {
@@ -549,6 +574,7 @@ export function AdminPage() {
         message: data.message || '',
       });
       await loadConcepts();
+      await loadConceptsMeta();
     } catch (err) {
       setRegenerateError(err instanceof Error ? err.message : 'Onbekende fout');
     } finally {
@@ -850,6 +876,24 @@ const tabs = [
                       <Globe className="w-4 h-4" />
                       Alle begrippen (geen actieve cursus)
                     </p>
+                  )}
+                  {activeCourse && conceptsMeta && (
+                    <div className="flex flex-wrap items-center gap-2 mt-2" data-testid="text-concepts-meta">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium" data-testid="badge-rag-count">
+                        {conceptsMeta.ragCount} AI-geëxtraheerd
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium" data-testid="badge-manual-count">
+                        {conceptsMeta.manualCount} handmatig
+                      </span>
+                      <span className="text-xs text-gray-500" data-testid="text-last-extraction">
+                        {conceptsMeta.lastExtraction
+                          ? `Laatste extractie: ${new Date(conceptsMeta.lastExtraction).toLocaleString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                          : 'Nog nooit hergegenereerd'}
+                      </span>
+                    </div>
+                  )}
+                  {activeCourse && !conceptsMeta && (
+                    <p className="text-xs text-gray-400 mt-2" data-testid="text-last-extraction">Nog nooit hergegenereerd</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
