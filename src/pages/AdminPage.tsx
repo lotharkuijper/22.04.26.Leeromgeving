@@ -695,6 +695,13 @@ const tabs = [
   { id: 'settings' as TabType, label: 'Instellingen', icon: Settings, show: isAdmin },
 ].filter(tab => tab.show);
 
+const tabGroups = [
+  { label: 'Cursusinhoud', ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
+  { label: 'Leeromgeving', ids: ['prompts', 'quiz_validation'] },
+  { label: 'Systeem', ids: ['users', 'sharestats_import', 'settings'] },
+].map(g => ({ label: g.label, items: tabs.filter(t => g.ids.includes(t.id)) }))
+ .filter(g => g.items.length > 0);
+
 
   if (!isDocent && !isAdmin) {
     return (
@@ -737,30 +744,55 @@ const tabs = [
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-200 overflow-visible">
-        <div className="border-b border-gray-200">
-          <div className="flex overflow-x-auto">
-            {tabs.map(tab => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-6 py-4 font-medium transition-all whitespace-nowrap ${
-                    activeTab === tab.id
-                      ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`}
-                >
-                  <Icon className="w-5 h-5" />
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
+      <div className="flex flex-col md:flex-row gap-4 items-start">
+
+        {/* Mobiel: dropdown */}
+        <div className="md:hidden w-full">
+          <select
+            value={activeTab}
+            onChange={e => setActiveTab(e.target.value as TabType)}
+            className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 shadow-sm"
+            data-testid="select-admin-tab-mobile"
+          >
+            {tabs.map(tab => (
+              <option key={tab.id} value={tab.id}>{tab.label}</option>
+            ))}
+          </select>
         </div>
 
-        <div className="p-6">
+        {/* Desktop: verticale zijbalk */}
+        <nav className="hidden md:block w-52 flex-shrink-0 bg-white rounded-2xl border border-gray-200 overflow-hidden self-start sticky top-4">
+          {tabGroups.map((group, gi) => (
+            <div key={group.label} className={gi > 0 ? 'border-t border-gray-100' : ''}>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 pt-4 pb-1">
+                {group.label}
+              </p>
+              {group.items.map(tab => {
+                const Icon = tab.icon;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    data-testid={`nav-${tab.id}`}
+                    className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium transition-all text-left ${
+                      activeTab === tab.id
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 flex-shrink-0" />
+                    {tab.label}
+                  </button>
+                );
+              })}
+              {gi === tabGroups.length - 1 && <div className="pb-2" />}
+            </div>
+          ))}
+        </nav>
+
+        {/* Inhoudspaneel */}
+        <div className="flex-1 bg-white rounded-2xl border border-gray-200 min-w-0">
+          <div className="p-6">
           {activeTab === 'users' && (
             <div className="space-y-4">
               {roleMsg && (
@@ -1538,6 +1570,7 @@ const tabs = [
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
 
