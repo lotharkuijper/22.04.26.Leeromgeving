@@ -132,6 +132,32 @@ export async function evaluateExplanation(
 ): Promise<LLMResponse> {
   let evaluationPrompt: string;
 
+  // Bouw bron-instructie blok: genummerde lijst met vast verwijsformaat
+  // [1]/[2]/[3] én een marker voor info buiten cursusmateriaal. Wordt ALTIJD
+  // toegevoegd, ook bij 0 bronnen — juist dan is het URL-verbod en de marker
+  // het belangrijkst om hallucinatie te beteugelen.
+  const buildSourcesBlock = (srcs: Array<{ title: string; similarity: number }>): string => {
+    if (!srcs || srcs.length === 0) {
+      return `\n\nBronnen uit het cursusmateriaal die je tot je beschikking hebt:
+(geen relevante cursusbronnen gevonden voor dit begrip)
+
+Verwijsregels (volg deze STRIKT):
+- Er zijn geen cursusbronnen waarnaar je kunt verwijzen — gebruik daarom GEEN [1], [2] of soortgelijke nummers.
+- Gebruik in je feedback géén URL's, weblinks, DOI's of verwijzingen naar externe boeken/artikelen.
+- Omdat je geen cursusmateriaal hebt, bestaat je feedback per definitie uit algemene kennis. Markeer iedere zin die op zo'n algemene kennis steunt met "(buiten cursusmateriaal)" aan het einde van die zin.`;
+    }
+    const numbered = srcs.map((s, i) => `[${i + 1}] ${s.title}`).join('\n');
+    return `\n\nBronnen uit het cursusmateriaal die je tot je beschikking hebt:
+${numbered}
+
+Verwijsregels (volg deze STRIKT):
+- Verwijs in je feedback naar een bron met exact de notatie [1], [2] of [3] direct na de zin waar je die bron gebruikt.
+- Gebruik géén andere verwijsvormen (geen titels, geen URL's, geen voetnoten, geen DOI's).
+- Als je in je feedback informatie noemt die NIET uit deze bronnen komt maar uit algemene kennis, markeer die zin dan met "(buiten cursusmateriaal)" aan het einde van die zin.`;
+  };
+
+  const sourcesBlock = buildSourcesBlock(retrievedSources ?? []);
+
   if (systemPrompt) {
     evaluationPrompt = `Begrip: "${concept}"
 
@@ -149,10 +175,7 @@ ${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
     }
 
     evaluationPrompt += `\n\nUitleg van de student:\n${explanation}`;
-
-    if (retrievedSources && retrievedSources.length > 0) {
-      evaluationPrompt += `\n\nBeschikbare bronnen uit cursusmateriaal: ${retrievedSources.map(s => s.title).join(', ')}. Verwijs ernaar als dat relevant is.`;
-    }
+    evaluationPrompt += sourcesBlock;
   } else {
     evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
 
@@ -181,10 +204,7 @@ Geef gestructureerde feedback met:
 3. Eventuele misconcepties die gecorrigeerd moeten worden
 4. Concrete suggesties voor verbetering`;
 
-    if (retrievedSources && retrievedSources.length > 0) {
-      evaluationPrompt += `\n\nJe hebt toegang tot de volgende bronnen uit het cursusmateriaal: ${retrievedSources.map(s => s.title).join(', ')}. Verwijs naar deze bronnen als dat relevant is.`;
-    }
-
+    evaluationPrompt += sourcesBlock;
     evaluationPrompt += `\n\nWees constructief en moedigend, maar ook specifiek en nuttig.`;
   }
 

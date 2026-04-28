@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
-import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
+import { searchRelevantChunks, buildContextWithCap, dedupeSourcesByDocument } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import type { Database } from '../lib/database.types';
@@ -53,7 +53,6 @@ export function ExplainPage() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'epidemiologie' | 'biostatistiek'>('all');
   const [profileTimeout, setProfileTimeout] = useState(false);
   const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number }>>([]);
-  const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [conceptSource, setConceptSource] = useState<'course' | 'global' | 'empty' | null>(null);
   const [conceptsLoading, setConceptsLoading] = useState(false);
@@ -147,7 +146,6 @@ export function ExplainPage() {
       setExplanation(data.explanationText || '');
       setFeedback(data.feedback || null);
       setFeedbackError(null);
-      setContextStats(null);
       setRetrievedSources([]);
       setActiveExplanationId(item.id);
     } catch (err) {
@@ -177,7 +175,6 @@ export function ExplainPage() {
         setExplanation('');
         setFeedback(null);
         setFeedbackError(null);
-        setContextStats(null);
       }
       await loadHistory();
     } catch (err: any) {
@@ -209,7 +206,6 @@ export function ExplainPage() {
         setExplanation('');
         setFeedback(null);
         setFeedbackError(null);
-        setContextStats(null);
       }
       await loadHistory();
       if (generateSummary && result.summaryFailed) {
@@ -275,7 +271,6 @@ export function ExplainPage() {
     setLoading(true);
     setFeedback(null);
     setFeedbackError(null);
-    setContextStats(null);
     setRetrievedSources([]);
 
     try {
@@ -291,21 +286,23 @@ export function ExplainPage() {
         activeCourse
       );
 
-      const sources = chunks.map(chunk => ({
+      const allSources = chunks.map(chunk => ({
         title: chunk.documentTitle,
-        similarity: chunk.similarity
+        similarity: chunk.similarity,
       }));
-      setRetrievedSources(sources);
+      // Studenten zien per bron-document maximaal de top 3 (de meest relevante
+      // hoofdstukken). Alle chunks gaan nog wel mee als context naar het LLM.
+      const displaySources = dedupeSourcesByDocument(allSources, 3);
+      setRetrievedSources(displaySources);
 
       const built = chunks.length > 0
         ? buildContextWithCap(chunks)
         : { context: '', usedChunks: 0, totalChunks: 0, truncated: false, charTrimmed: false };
       const context = built.context.length > 0 ? built.context : undefined;
-      setContextStats({ used: built.usedChunks, total: built.totalChunks, charTrimmed: built.charTrimmed });
       if (built.truncated) {
         console.log(`[EXPLAIN] Context capped: using ${built.usedChunks}/${built.totalChunks} chunks (${built.context.length} chars)`);
       }
-      console.log(`[EXPLAIN] Found ${chunks.length} relevant chunks from RAG`);
+      console.log(`[EXPLAIN] Found ${chunks.length} relevant chunks from RAG (showing top ${displaySources.length} unieke documenten)`);
 
       console.log('[EXPLAIN] Evaluating explanation for concept:', selectedConcept.name);
       let response;
@@ -316,7 +313,7 @@ export function ExplainPage() {
           selectedConcept.definition || '',
           selectedConcept.key_points || [],
           context,
-          sources,
+          displaySources,
           ragSettings.explain.rag_strict_mode,
           explainSystemPrompt ?? undefined
         );
@@ -502,7 +499,6 @@ export function ExplainPage() {
                     setExplanation('');
                     setFeedback(null);
                     setFeedbackError(null);
-                    setContextStats(null);
                   }}
                   className={`w-full text-left p-3 rounded-lg transition-all ${
                     selectedConcept?.id === concept.id
@@ -729,19 +725,7 @@ export function ExplainPage() {
                   </div>
                   {retrievedSources.length > 0 && (
                     <div className="mt-5 pt-4 border-t border-red-200">
-                      {contextStats && contextStats.total > 0 && (
-                        <p
-                          className="text-xs text-red-700 mb-2"
-                          data-testid="text-context-stats-error"
-                        >
-                          {contextStats.used < contextStats.total
-                            ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
-                            : contextStats.charTrimmed
-                              ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
-                              : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor de evaluatie.`}
-                        </p>
-                      )}
-                      <SourceList sources={retrievedSources} />
+                      <SourceList sources={retrievedSources} showSimilarity={false} />
                     </div>
                   )}
                 </div>
@@ -753,17 +737,21 @@ export function ExplainPage() {
                   <div className="prose max-w-none text-gray-700 whitespace-pre-wrap">
                     {feedback}
                   </div>
-                  {contextStats && contextStats.total > 0 && (contextStats.used < contextStats.total || contextStats.charTrimmed) && (
-                    <p
-                      className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2"
-                      data-testid="text-context-stats"
+                  {/\(buiten\s+(?:het\s+|dit\s+|de\s+)?cursusmateriaal\)/i.test(feedback) && (
+                    <div
+                      className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"
+                      data-testid="notice-external-knowledge"
                     >
-                      {contextStats.used < contextStats.total
-                        ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`
-                        : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
-                    </p>
+                      <div className="flex items-start gap-2 mb-1">
+                        <AlertCircle className="w-4 h-4 text-amber-700 mt-0.5 flex-shrink-0" />
+                        <h4 className="text-sm font-semibold text-amber-900">Aanvulling buiten je cursusmateriaal</h4>
+                      </div>
+                      <p className="text-sm text-amber-800">
+                        Een deel van deze feedback (gemarkeerd met "(buiten cursusmateriaal)") is gebaseerd op algemene kennis van het taalmodel en niet op je cursusbestanden. Vooral bij die zinnen is het verstandig om met je docent te overleggen voordat je het overneemt in een tentamen of opdracht.
+                      </p>
+                    </div>
                   )}
-                  <SourceList sources={retrievedSources} />
+                  <SourceList sources={retrievedSources} showSimilarity={false} />
                 </div>
               )}
             </>

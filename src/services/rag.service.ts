@@ -250,6 +250,26 @@ export function formatContextFromChunks(chunks: DocumentChunk[]): string {
   return buildContextWithCap(chunks).context;
 }
 
+// Reduceer een (mogelijk lange) lijst chunk-niveau bronnen tot maximaal `topN`
+// unieke documenten. Per documentnaam wordt de hoogste similarity behouden,
+// resterende worden verwijderd. Sortering: hoogste similarity eerst.
+export function dedupeSourcesByDocument<T extends { title: string; similarity: number }>(
+  sources: T[],
+  topN: number = 3
+): T[] {
+  if (sources.length === 0 || topN <= 0) return [];
+  const bestPerDoc = new Map<string, T>();
+  for (const src of sources) {
+    const existing = bestPerDoc.get(src.title);
+    if (!existing || src.similarity > existing.similarity) {
+      bestPerDoc.set(src.title, src);
+    }
+  }
+  return Array.from(bestPerDoc.values())
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, topN);
+}
+
 export function buildContextWithCap(
   chunks: DocumentChunk[],
   maxChunks: number = RAG_CONTEXT_MAX_CHUNKS,
