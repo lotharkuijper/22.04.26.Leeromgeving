@@ -1804,6 +1804,12 @@ const tabGroups = [
                     gevonden — zonder drempel toe te passen. Zo kun je inschatten welke drempel
                     realistisch is voor jouw cursusmateriaal.
                   </p>
+                  {!isAdmin && !ragSelectedCourseId && (
+                    <p className="text-xs text-amber-700 mt-2 flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-md w-fit">
+                      <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                      Kies eerst een cursus hierboven — diagnose vereist een cursusselectie voor docenten.
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex gap-2">
