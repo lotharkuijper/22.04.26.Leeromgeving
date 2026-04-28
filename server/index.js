@@ -1416,6 +1416,114 @@ app.delete('/api/admin/concepts/:id', async (req, res) => {
   }
 });
 
+// ─── Journal routes (admin-client om RLS te omzeilen) ────────────────────────
+
+app.get('/api/journal', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data, error } = await supabaseAdmin
+      .from('learning_journal_entries')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err) {
+    console.error('[journal GET] Fout:', err.message);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
+app.patch('/api/journal/:id', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+
+    const { id } = req.params;
+    const { title, content, activity_type } = req.body;
+
+    // Controleer eigenaar tenzij admin
+    if (!isAdmin) {
+      const { data: entry } = await supabaseAdmin
+        .from('learning_journal_entries').select('user_id').eq('id', id).maybeSingle();
+      if (!entry || entry.user_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze notitie' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('learning_journal_entries')
+      .update({ title, content, activity_type, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data);
+  } catch (err) {
+    console.error('[journal PATCH] Fout:', err.message);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
+app.delete('/api/journal/:id', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+
+    const { id } = req.params;
+
+    // Controleer eigenaar tenzij admin
+    if (!isAdmin) {
+      const { data: entry } = await supabaseAdmin
+        .from('learning_journal_entries').select('user_id').eq('id', id).maybeSingle();
+      if (!entry || entry.user_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze notitie' });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('learning_journal_entries')
+      .delete()
+      .eq('id', id);
+
+    if (error) return res.status(500).json({ error: error.message });
+    console.log(`[journal DELETE] Notitie ${id} verwijderd door ${user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[journal DELETE] Fout:', err.message);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',

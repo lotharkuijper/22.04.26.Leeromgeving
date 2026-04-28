@@ -28,18 +28,20 @@ export function FeedbackPage() {
     loadEntries();
   }, []);
 
+  const getAuthHeader = async (): Promise<string> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session ? `Bearer ${session.access_token}` : '';
+  };
+
   const loadEntries = async () => {
-    const { data, error } = await supabase
-      .from('learning_journal_entries')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error loading entries:', error);
-      return;
+    try {
+      const auth = await getAuthHeader();
+      const res = await fetch('/api/journal', { headers: { Authorization: auth } });
+      if (!res.ok) { console.error('Error loading entries:', await res.text()); return; }
+      setEntries(await res.json());
+    } catch (err) {
+      console.error('Error loading entries:', err);
     }
-
-    setEntries(data || []);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -48,41 +50,38 @@ export function FeedbackPage() {
 
     setLoading(true);
 
-    if (editingEntry) {
-      const { error } = await supabase
-        .from('learning_journal_entries')
-        .update({
-          title,
-          content,
-          activity_type: activityType,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', editingEntry.id);
+    try {
+      const auth = await getAuthHeader();
 
-      if (error) {
-        console.error('Error updating entry:', error);
-        alert('Er is een fout opgetreden bij het bijwerken van je dagboek');
-      } else {
-        resetForm();
-        loadEntries();
-      }
-    } else {
-      const { error } = await supabase
-        .from('learning_journal_entries')
-        .insert({
-          user_id: profile.id,
-          title,
-          content,
-          activity_type: activityType,
+      if (editingEntry) {
+        const res = await fetch(`/api/journal/${editingEntry.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: auth },
+          body: JSON.stringify({ title, content, activity_type: activityType }),
         });
-
-      if (error) {
-        console.error('Error creating entry:', error);
-        alert('Er is een fout opgetreden bij het opslaan van je dagboek');
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          console.error('Error updating entry:', err);
+          alert('Er is een fout opgetreden bij het bijwerken van je dagboek');
+        } else {
+          resetForm();
+          loadEntries();
+        }
       } else {
-        resetForm();
-        loadEntries();
+        const { error } = await supabase
+          .from('learning_journal_entries')
+          .insert({ user_id: profile.id, title, content, activity_type: activityType });
+
+        if (error) {
+          console.error('Error creating entry:', error);
+          alert('Er is een fout opgetreden bij het opslaan van je dagboek');
+        } else {
+          resetForm();
+          loadEntries();
+        }
       }
+    } catch (err) {
+      console.error('Error submitting entry:', err);
     }
 
     setLoading(false);
@@ -98,17 +97,23 @@ export function FeedbackPage() {
 
   const handleDelete = async (entryId: string) => {
     setDeleteError(null);
-    const { error } = await supabase
-      .from('learning_journal_entries')
-      .delete()
-      .eq('id', entryId);
-
-    if (error) {
-      console.error('Error deleting entry:', error);
+    try {
+      const auth = await getAuthHeader();
+      const res = await fetch(`/api/journal/${entryId}`, {
+        method: 'DELETE',
+        headers: { Authorization: auth },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Error deleting entry:', err);
+        setDeleteError('Verwijderen mislukt. Probeer het opnieuw.');
+      } else {
+        setDeleteConfirmId(null);
+        loadEntries();
+      }
+    } catch (err) {
+      console.error('Error deleting entry:', err);
       setDeleteError('Verwijderen mislukt. Probeer het opnieuw.');
-    } else {
-      setDeleteConfirmId(null);
-      loadEntries();
     }
   };
 
