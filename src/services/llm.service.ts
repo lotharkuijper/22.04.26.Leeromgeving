@@ -176,6 +176,7 @@ ${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
 
     evaluationPrompt += `\n\nUitleg van de student:\n${explanation}`;
     evaluationPrompt += sourcesBlock;
+    evaluationPrompt += `\n\nAanspraakvorm (volg STRIKT in jouw feedback): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT formuleringen als "de student", "deze student" of "de student heeft" — schrijf alsof je de feedback één-op-één tegen de student geeft.`;
   } else {
     evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
 
@@ -198,10 +199,12 @@ ${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
 
     evaluationPrompt += `\n\nUitleg van de student:\n${explanation}
 
+Aanspraakvorm (volg STRIKT in jouw feedback): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT formuleringen als "de student", "deze student" of "de student heeft" — schrijf alsof je de feedback één-op-één tegen de student geeft.
+
 Geef gestructureerde feedback met:
-1. Wat de student goed heeft gedaan (specifieke punten)
-2. Wat ontbreekt of onduidelijk is
-3. Eventuele misconcepties die gecorrigeerd moeten worden
+1. Wat je goed hebt gedaan (specifieke punten in jouw uitleg)
+2. Wat ontbreekt of onduidelijk is in jouw uitleg
+3. Eventuele misconcepties bij jou die gecorrigeerd moeten worden
 4. Concrete suggesties voor verbetering`;
 
     evaluationPrompt += sourcesBlock;

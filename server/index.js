@@ -312,23 +312,27 @@ app.post('/api/chat/archive', async (req, res) => {
 
         const chatText = msgs
           .filter(m => m.role !== 'system')
-          .map(m => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content}`)
+          .map(m => `${m.role === 'user' ? 'Jij' : 'Tutor'}: ${m.content}`)
           .join('\n\n');
 
         const sourcesText = ragSources.size > 0
           ? `\n\nGebruikte cursusbronnen in dit gesprek: ${[...ragSources].join(', ')}`
           : '';
 
-        const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Analyseer het volgende studiegesprek en schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands.
+        const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Analyseer het volgende studiegesprek en schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
+
+Aanspraakvorm (volg STRIKT):
+- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
+- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
 
 Je verslag bevat:
-1. Een beargumenteerd formatief oordeel over wat de student heeft laten zien en geleerd
-2. Concrete sterke punten én verbeterpunten (eerlijk maar opbouwend)
+1. Een beargumenteerd formatief oordeel over wat jij hebt laten zien en geleerd
+2. Concrete sterke punten én verbeterpunten in jouw bijdrage (eerlijk maar opbouwend)
 3. Een specifieke suggestie voor verdere verdieping, bij voorkeur met verwijzing naar beschikbare cursusbronnen${sourcesText}
 
 Gesprekstitel: "${conversation.title}"
 
-Gesprek:
+Gesprek (regels gemarkeerd met "Jij:" zijn de student aan wie je het verslag richt):
 ${chatText}
 
 Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
@@ -2253,17 +2257,21 @@ app.post('/api/explain/archive', async (req, res) => {
       const keyPoints = Array.isArray(row.concepts?.key_points) ? row.concepts.key_points : [];
       const feedbackText = row.feedback?.content || (typeof row.feedback === 'string' ? row.feedback : '(geen feedback)');
 
-      const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. De student heeft het begrip "${conceptName}" in eigen woorden uitgelegd en feedback ontvangen. Schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands.
+      const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft het begrip "${conceptName}" in eigen woorden uitgelegd en feedback ontvangen van de leerassistent. Schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
+
+Aanspraakvorm (volg STRIKT):
+- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
+- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
 
 Je verslag bevat:
-1. Een beargumenteerd formatief oordeel over wat de student heeft laten zien en geleerd over dit begrip
-2. Concrete sterke punten én verbeterpunten in de uitleg (eerlijk maar opbouwend)
+1. Een beargumenteerd formatief oordeel over wat jij hebt laten zien en geleerd over dit begrip
+2. Concrete sterke punten én verbeterpunten in jouw uitleg (eerlijk maar opbouwend)
 3. Een specifieke suggestie voor verdere verdieping of een vervolgstap
 
 Begrip: "${conceptName}"
 Officiële definitie: ${conceptDef || '(niet opgegeven)'}${keyPoints.length > 0 ? `\nKernpunten: ${keyPoints.join('; ')}` : ''}
 
-Uitleg van de student:
+Jouw uitleg:
 ${row.explanation_text}
 
 Feedback van de leerassistent:
@@ -2411,12 +2419,30 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-const DEFAULT_EXPLAIN_PROMPT = `Je bent een kritische en constructieve tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je evalueert uitleg van studenten over begrippen en geeft gestructureerde, constructieve feedback.
+// Oude default — bewaard voor automatische DB-sync naar de nieuwe stijl in
+// initChatbotPromptSection. Records die LETTERLIJK gelijk zijn aan deze
+// tekst worden zonder vragen bijgewerkt; aangepaste records worden niet
+// aangeraakt en getriggeren een waarschuwing in de console.
+const OLD_DEFAULT_EXPLAIN_PROMPT_V1 = `Je bent een kritische en constructieve tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je evalueert uitleg van studenten over begrippen en geeft gestructureerde, constructieve feedback.
 
 Geef je feedback in vier onderdelen:
 1. Wat de student goed heeft gedaan (noem specifieke sterke punten)
 2. Wat ontbreekt of onduidelijk is (wees concreet)
 3. Eventuele misconcepties die gecorrigeerd moeten worden
+4. Concrete suggesties voor verbetering
+
+Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student in de gezondheidswetenschappen.`;
+
+const DEFAULT_EXPLAIN_PROMPT = `Je bent een kritische en constructieve tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je evalueert uitleg van studenten over begrippen en geeft gestructureerde, constructieve feedback rechtstreeks aan de student.
+
+Aanspraakvorm (volg STRIKT):
+- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
+- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
+
+Geef je feedback in vier onderdelen:
+1. Wat je goed hebt gedaan (noem specifieke sterke punten in jouw uitleg)
+2. Wat ontbreekt of onduidelijk is in jouw uitleg (wees concreet)
+3. Eventuele misconcepties bij jou die gecorrigeerd moeten worden
 4. Concrete suggesties voor verbetering
 
 Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student in de gezondheidswetenschappen.`;
@@ -2471,6 +2497,40 @@ async function initChatbotPromptSection() {
       } else {
         console.log('[init] Standaard uitleg-prompt aangemaakt');
       }
+    }
+
+    // Eenmalige sync naar de tweede-persoon stijl: records die nog letterlijk
+    // de oude default bevatten worden stil bijgewerkt; aangepaste records
+    // worden NIET overschreven maar krijgen een waarschuwing.
+    try {
+      const { data: explainRecords, error: listErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('id, name, content')
+        .eq('section', 'explain');
+      if (listErr) {
+        console.warn('[init] Uitleg-prompt sync overgeslagen:', listErr.message);
+      } else if (Array.isArray(explainRecords)) {
+        for (const rec of explainRecords) {
+          if (rec.content === OLD_DEFAULT_EXPLAIN_PROMPT_V1) {
+            const { error: updErr } = await supabaseAdmin
+              .from('chatbot_prompts')
+              .update({ content: DEFAULT_EXPLAIN_PROMPT })
+              .eq('id', rec.id);
+            if (updErr) {
+              console.warn(`[init] Sync uitleg-prompt "${rec.name}" mislukt:`, updErr.message);
+            } else {
+              console.log(`[init] Uitleg-prompt "${rec.name}" automatisch bijgewerkt naar tweede-persoon stijl`);
+            }
+          } else if (/\b(de|deze) student\b/i.test(rec.content)) {
+            console.warn(
+              `[init] LET OP: aangepaste uitleg-prompt "${rec.name}" (id ${rec.id}) bevat nog "de student" / "deze student".\n` +
+              '       Open de admin-UI (Prompts → sectie "explain") en pas de tekst aan zodat de student direct met "je"/"jij" wordt aangesproken.'
+            );
+          }
+        }
+      }
+    } catch (syncErr) {
+      console.warn('[init] Uitleg-prompt sync exception:', syncErr.message);
     }
 
     console.log('[init] chatbot_prompts sectie-migratie voltooid (section kolom beschikbaar)');
