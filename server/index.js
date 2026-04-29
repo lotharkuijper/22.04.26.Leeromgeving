@@ -2533,6 +2533,39 @@ async function initChatbotPromptSection() {
       console.warn('[init] Uitleg-prompt sync exception:', syncErr.message);
     }
 
+    // Idem voor de chat system prompt(s). De huidige FALLBACK_SYSTEM_PROMPT
+    // bevat geen derde-persoonsverwijzingen naar "de student", dus er valt
+    // niets te auto-syncen. Wat wél nuttig is: een rapportage zodat de
+    // superuser weet of zijn admin-aangepaste chat-prompts nog
+    // "de student" / "deze student" bevatten — anders blijft de chat-tutor
+    // dat overnemen in zijn antwoorden.
+    try {
+      const { data: chatRecords, error: chatListErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('id, name, content')
+        .eq('section', 'chat');
+      if (chatListErr) {
+        console.warn('[init] Chat-prompt rapportage overgeslagen:', chatListErr.message);
+      } else if (Array.isArray(chatRecords)) {
+        let chatThirdPerson = 0;
+        for (const rec of chatRecords) {
+          if (/\b(de|deze) student\b/i.test(rec.content)) {
+            chatThirdPerson++;
+            console.warn(
+              `[init] LET OP: chat-prompt "${rec.name}" (id ${rec.id}) bevat nog "de student" / "deze student".\n` +
+              '       Open de admin-UI (Prompts → sectie "chat") en pas de tekst aan zodat de chat-tutor de student direct met "je"/"jij" aanspreekt.'
+            );
+          }
+        }
+        console.log(
+          `[init] Chat-prompts gecontroleerd: ${chatRecords.length} record(s), ` +
+          `${chatThirdPerson} met derde-persoonsverwijzingen naar de student.`
+        );
+      }
+    } catch (chatSyncErr) {
+      console.warn('[init] Chat-prompt rapportage exception:', chatSyncErr.message);
+    }
+
     console.log('[init] chatbot_prompts sectie-migratie voltooid (section kolom beschikbaar)');
   } catch (err) {
     console.warn('[init] initChatbotPromptSection exception:', err.message);
