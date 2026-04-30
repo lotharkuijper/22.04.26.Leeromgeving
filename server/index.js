@@ -2907,9 +2907,466 @@ async function initChatbotPromptSection() {
   }
 }
 
+// =============================================================================
+// Task #57 — Beheer voor 3 quiz-bronnen (RAG, ItemBank, LLM-creatief)
+// =============================================================================
+
+// Defensieve schema-detectie voor de tabellen uit migratie
+// 20260430160000_quiz_sources_management.sql. De server blijft draaien als
+// de migratie nog niet is toegepast; endpoints geven dan een 503 met
+// duidelijke uitleg.
+let quizSourcesSchemaReady = false;
+async function detectQuizSourcesSchema() {
+  if (!supabaseAdmin) return;
+  try {
+    const checks = await Promise.all([
+      supabaseAdmin.from('concept_itembank_sections').select('id').limit(1),
+      supabaseAdmin.from('concept_rag_sources').select('id').limit(1),
+      supabaseAdmin.from('quiz_sources_mix').select('course_id').limit(1),
+      supabaseAdmin.from('quiz_questions').select('exsection_path').limit(1),
+    ]);
+    const firstError = checks.find(c => c.error);
+    quizSourcesSchemaReady = !firstError;
+    if (firstError) {
+      console.warn('[init] quiz_sources schema NIET gevonden:', firstError.error.message);
+      console.warn('[init] Pas migratie 20260430160000_quiz_sources_management.sql toe in Supabase.');
+    } else {
+      console.log('[init] quiz_sources schema beschikbaar.');
+    }
+  } catch (e) {
+    quizSourcesSchemaReady = false;
+    console.warn('[init] quiz_sources schema detectie mislukt:', e.message);
+  }
+}
+
+// Helper: vereis admin/docent. Geeft op fout een response en `null` terug.
+async function requireAdminOrDocent(req, res) {
+  if (!supabaseAdmin) {
+    res.status(503).json({ error: 'Admin client niet beschikbaar' });
+    return null;
+  }
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    res.status(401).json({ error: 'Authorization header vereist' });
+    return null;
+  }
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error } = await callerClient.auth.getUser();
+    if (error || !user) {
+      res.status(401).json({ error: 'Niet geauthenticeerd' });
+      return null;
+    }
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (!profile || !['admin', 'docent'].includes(profile.role)) {
+      res.status(403).json({ error: 'Geen toegang' });
+      return null;
+    }
+    return { user, role: profile.role };
+  } catch (err) {
+    res.status(401).json({ error: 'Authenticatie mislukt: ' + err.message });
+    return null;
+  }
+}
+
+// ---- Quiz-prompt templates --------------------------------------------------
+// Vier prompts die expliciet beheerd worden in chatbot_prompts onder section
+// 'quiz'. De keys (name) zijn stabiel; de inhoud kan vrij worden aangepast.
+const QUIZ_PROMPT_DEFAULTS = {
+  quiz_generate_strict: `Je bent een tentamenmaker voor epidemiologie en biostatistiek aan de VU Amsterdam. Je formuleert vragen UITSLUITEND op basis van het meegeleverde cursusmateriaal. Verzin geen feiten die niet in de context staan. Spreek de student aan met "je"/"jij"/"jouw".`,
+  quiz_generate_blended: `Je bent een tentamenmaker voor epidemiologie en biostatistiek aan de VU Amsterdam. Je gebruikt het meegeleverde cursusmateriaal als hoofdbron, maar mag dit aanvullen met algemeen geaccepteerde kennis uit het vakgebied. Maak helder onderscheid tussen wat in de context staat en wat algemene vakkennis is. Spreek de student aan met "je"/"jij"/"jouw".`,
+  quiz_generate_creative: `Je bent een creatieve tentamenmaker voor epidemiologie en biostatistiek aan de VU Amsterdam. Je formuleert toepassingsvragen, casusvragen en transferopdrachten die studenten uitdagen om de leerstof in nieuwe contexten toe te passen. Gebruik realistische scenario's uit gezondheidsonderzoek. Spreek de student aan met "je"/"jij"/"jouw".`,
+  quiz_evaluate_open: `Je bent een kritische maar constructieve beoordelaar van open antwoorden voor epidemiologie en biostatistiek. Je geeft feedback in vier punten: (1) wat goed is, (2) wat ontbreekt, (3) misconcepties, (4) concrete verbeterpunten. Spreek de student direct aan met "je"/"jij"/"jouw" — gebruik NOOIT "de student" of "deze student".`,
+};
+
+async function initQuizPromptDefaults() {
+  if (!supabaseAdmin || !promptsHasSection) return;
+  for (const [name, content] of Object.entries(QUIZ_PROMPT_DEFAULTS)) {
+    try {
+      const { data: existing } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('id')
+        .eq('name', name)
+        .maybeSingle();
+      if (!existing) {
+        const { error } = await supabaseAdmin.from('chatbot_prompts').insert({
+          name,
+          content,
+          is_active: true,
+          section: 'quiz',
+        });
+        if (error) {
+          console.warn(`[init] Quiz-prompt "${name}" aanmaken mislukt:`, error.message);
+        } else {
+          console.log(`[init] Quiz-prompt "${name}" aangemaakt`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[init] Quiz-prompt "${name}" init exception:`, err.message);
+    }
+  }
+}
+
+// ---- Endpoints: quiz-prompts -----------------------------------------------
+app.get('/api/admin/quiz-prompts', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!promptsHasSection) {
+    return res.json({ prompts: [], warning: 'chatbot_prompts.section ontbreekt — voer de section-migratie uit.' });
+  }
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('id, name, content, is_active, updated_at')
+      .eq('section', 'quiz')
+      .order('name', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ prompts: data || [], defaults: QUIZ_PROMPT_DEFAULTS });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/quiz-prompts/:name', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  const { name } = req.params;
+  const { content, is_active } = req.body || {};
+  if (!Object.prototype.hasOwnProperty.call(QUIZ_PROMPT_DEFAULTS, name)) {
+    return res.status(400).json({ error: `Onbekende quiz-prompt: ${name}` });
+  }
+  if (typeof content !== 'string' || content.trim().length < 10) {
+    return res.status(400).json({ error: 'content is verplicht en minimaal 10 tekens' });
+  }
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('id')
+      .eq('name', name)
+      .maybeSingle();
+    if (existing) {
+      const { error } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ content, is_active: is_active !== false })
+        .eq('id', existing.id);
+      if (error) return res.status(500).json({ error: error.message });
+    } else {
+      const { error } = await supabaseAdmin.from('chatbot_prompts').insert({
+        name, content, is_active: is_active !== false, section: 'quiz',
+      });
+      if (error) return res.status(500).json({ error: error.message });
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoints: itembank-mappings (concept ↔ exsection_path) ----------------
+app.get('/api/admin/itembank-mappings/:courseId', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
+  }
+  const { courseId } = req.params;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('concept_itembank_sections')
+      .select('id, concept_id, course_id, exsection_path, created_at')
+      .or(`course_id.eq.${courseId},course_id.is.null`);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ mappings: data || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/itembank-mappings/:courseId', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
+  }
+  const { courseId } = req.params;
+  const { mappings } = req.body || {};
+  if (!Array.isArray(mappings)) {
+    return res.status(400).json({ error: 'mappings moet een array zijn' });
+  }
+  // Vervang alle mappings voor deze cursus.
+  try {
+    await supabaseAdmin
+      .from('concept_itembank_sections')
+      .delete()
+      .eq('course_id', courseId);
+    const rows = mappings
+      .filter(m => m && m.concept_id && Array.isArray(m.exsection_path) && m.exsection_path.length > 0)
+      .map(m => ({
+        concept_id: m.concept_id,
+        course_id: courseId,
+        exsection_path: m.exsection_path,
+        created_by: auth.user.id,
+      }));
+    if (rows.length > 0) {
+      const { error } = await supabaseAdmin.from('concept_itembank_sections').insert(rows);
+      if (error) return res.status(500).json({ error: error.message });
+    }
+    return res.json({ success: true, saved: rows.length });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Lijst van unieke exsection_path-waarden in de database — handig voor de
+// docent-UI om uit te kiezen.
+app.get('/api/admin/itembank-sections', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
+  }
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('exsection_path, topic, subtopic')
+      .eq('source', 'sharestats')
+      .not('exsection_path', 'is', null);
+    if (error) return res.status(500).json({ error: error.message });
+    const seen = new Map();
+    for (const row of data || []) {
+      const path = Array.isArray(row.exsection_path) ? row.exsection_path : [];
+      if (path.length === 0) continue;
+      const key = path.join(' / ');
+      const entry = seen.get(key) || { exsection_path: path, count: 0, topic: row.topic, subtopic: row.subtopic };
+      entry.count += 1;
+      seen.set(key, entry);
+    }
+    const sections = [...seen.values()].sort((a, b) => a.exsection_path.join('/').localeCompare(b.exsection_path.join('/')));
+    return res.json({ sections });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoints: concept ↔ primaire RAG-folder -------------------------------
+app.get('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
+  }
+  const { courseId } = req.params;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('concept_rag_sources')
+      .select('id, concept_id, course_id, folder_id, created_at')
+      .eq('course_id', courseId);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ sources: data || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
+  }
+  const { courseId } = req.params;
+  const { sources } = req.body || {};
+  if (!Array.isArray(sources)) {
+    return res.status(400).json({ error: 'sources moet een array zijn' });
+  }
+  try {
+    await supabaseAdmin
+      .from('concept_rag_sources')
+      .delete()
+      .eq('course_id', courseId);
+    const rows = sources
+      .filter(s => s && s.concept_id && s.folder_id)
+      .map(s => ({
+        concept_id: s.concept_id,
+        course_id: courseId,
+        folder_id: s.folder_id,
+        created_by: auth.user.id,
+      }));
+    if (rows.length > 0) {
+      const { error } = await supabaseAdmin.from('concept_rag_sources').insert(rows);
+      if (error) return res.status(500).json({ error: error.message });
+    }
+    return res.json({ success: true, saved: rows.length });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoints: bronnen-mix per cursus --------------------------------------
+function normalizeMix(mix) {
+  let r = Math.max(0, Math.min(100, parseInt(mix?.pct_rag, 10) || 0));
+  let i = Math.max(0, Math.min(100, parseInt(mix?.pct_itembank, 10) || 0));
+  let l = Math.max(0, Math.min(100, parseInt(mix?.pct_llm, 10) || 0));
+  const sum = r + i + l;
+  if (sum === 0) return { pct_rag: 50, pct_itembank: 0, pct_llm: 50 };
+  if (sum !== 100) {
+    // Schaal naar 100 met afronding; corrigeer rest op de grootste.
+    r = Math.round((r * 100) / sum);
+    i = Math.round((i * 100) / sum);
+    l = 100 - r - i;
+  }
+  return { pct_rag: r, pct_itembank: i, pct_llm: l };
+}
+
+app.get('/api/quiz-sources-mix/:courseId', async (req, res) => {
+  // Lezen mag iedere geauthenticeerde gebruiker (RLS staat dat toe).
+  if (!quizSourcesSchemaReady) {
+    return res.json({ mix: { pct_rag: 50, pct_itembank: 0, pct_llm: 50 }, schema_ready: false });
+  }
+  const { courseId } = req.params;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('quiz_sources_mix')
+      .select('pct_rag, pct_itembank, pct_llm, updated_at')
+      .eq('course_id', courseId)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({
+      mix: data ? { pct_rag: data.pct_rag, pct_itembank: data.pct_itembank, pct_llm: data.pct_llm } : { pct_rag: 50, pct_itembank: 0, pct_llm: 50 },
+      schema_ready: true,
+      updated_at: data?.updated_at,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/quiz-sources-mix/:courseId', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
+  }
+  const { courseId } = req.params;
+  const normalized = normalizeMix(req.body || {});
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from('quiz_sources_mix')
+      .select('course_id')
+      .eq('course_id', courseId)
+      .maybeSingle();
+    if (existing) {
+      const { error } = await supabaseAdmin
+        .from('quiz_sources_mix')
+        .update({ ...normalized, updated_at: new Date().toISOString(), updated_by: auth.user.id })
+        .eq('course_id', courseId);
+      if (error) return res.status(500).json({ error: error.message });
+    } else {
+      const { error } = await supabaseAdmin
+        .from('quiz_sources_mix')
+        .insert({ course_id: courseId, ...normalized, updated_by: auth.user.id });
+      if (error) return res.status(500).json({ error: error.message });
+    }
+    return res.json({ success: true, mix: normalized });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoint: itembank-vragen ophalen voor quiz ----------------------------
+// Geeft een lijst itembank-vragen terug die matchen op de mappings van de
+// gegeven concepten binnen een cursus. De client doet de mix-coördinatie.
+app.post('/api/quiz/itembank-questions', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const { courseId, conceptIds = [], limit = 5 } = req.body || {};
+  if (!courseId || !Array.isArray(conceptIds) || conceptIds.length === 0) {
+    return res.status(400).json({ error: 'courseId en niet-lege conceptIds vereist' });
+  }
+  if (!quizSourcesSchemaReady) {
+    return res.json({ questions: [], schema_ready: false });
+  }
+  try {
+    // Mappings ophalen voor de concepten.
+    const { data: mappings, error: mapErr } = await supabaseAdmin
+      .from('concept_itembank_sections')
+      .select('concept_id, exsection_path, course_id')
+      .in('concept_id', conceptIds)
+      .or(`course_id.eq.${courseId},course_id.is.null`);
+    if (mapErr) return res.status(500).json({ error: mapErr.message });
+
+    const sectionPaths = (mappings || [])
+      .map(m => Array.isArray(m.exsection_path) ? m.exsection_path : null)
+      .filter(p => p && p.length > 0);
+
+    if (sectionPaths.length === 0) {
+      return res.json({ questions: [], reason: 'no_mappings' });
+    }
+
+    // Trek items met overlappende exsection_path. We halen kandidaten op met
+    // het breedste segment (eerste segment) en filteren in JS op exact prefix-
+    // match — dat is robuust ongeacht hoe de docent het pad heeft samengesteld.
+    const firstSegments = [...new Set(sectionPaths.map(p => p[0]))];
+    const { data: candidates, error: qErr } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('id, question_text, answer_options, correct_answer, explanation, sharestats_id, exsection_path, topic, subtopic')
+      .eq('source', 'sharestats')
+      .overlaps('exsection_path', firstSegments)
+      .limit(500);
+    if (qErr) return res.status(500).json({ error: qErr.message });
+
+    const matches = (candidates || []).filter(q => {
+      const qPath = Array.isArray(q.exsection_path) ? q.exsection_path : [];
+      return sectionPaths.some(target => {
+        if (qPath.length < target.length) return false;
+        for (let i = 0; i < target.length; i++) {
+          if (qPath[i] !== target[i]) return false;
+        }
+        return true;
+      });
+    });
+
+    // Shuffle en limiteer.
+    for (let i = matches.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [matches[i], matches[j]] = [matches[j], matches[i]];
+    }
+    const picked = matches.slice(0, Math.max(1, Math.min(limit, 50)));
+
+    // Normaliseer naar het frontend-format.
+    const questions = picked.map(q => ({
+      id: `itembank-${q.id}`,
+      type: 'mcq',
+      source: 'itembank',
+      sharestats_id: q.sharestats_id,
+      question: q.question_text,
+      options: q.answer_options || {},
+      correctAnswer: q.correct_answer,
+      explanation: q.explanation || '',
+      exsection_path: q.exsection_path,
+    }));
+
+    return res.json({ questions, total_candidates: matches.length });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[API Server] Running on port ${PORT}`);
   detectConceptsCourseIdColumn();
   detectQuizAttemptsSchema();
+  detectQuizSourcesSchema();
   initChatbotPromptSection();
+  // Wacht kort tot promptsHasSection geinitialiseerd is alvorens quiz-prompts
+  // aan te maken (initChatbotPromptSection draait async).
+  setTimeout(() => { initQuizPromptDefaults(); }, 2000);
 });

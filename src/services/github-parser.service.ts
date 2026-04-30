@@ -10,8 +10,19 @@ export interface ShareStatsRepositoryStructure {
   itemsByTopic: Map<string, GitHubFileInfo[]>;
 }
 
-const REPO_OWNER = 'ShareStats';
-const REPO_NAME = 'itembank';
+let REPO_OWNER = 'ShareStats';
+let REPO_NAME = 'itembank';
+
+// Maakt de doel-repository configureerbaar op runtime, zodat docenten een
+// alternatieve itembank-fork kunnen gebruiken zonder code-aanpassing.
+export function setItembankRepo(owner: string, repo: string): void {
+  if (owner) REPO_OWNER = owner;
+  if (repo) REPO_NAME = repo;
+}
+
+export function getItembankRepo(): { owner: string; repo: string } {
+  return { owner: REPO_OWNER, repo: REPO_NAME };
+}
 
 export async function fetchGitHubDirectory(path: string = ''): Promise<GitHubFileInfo[]> {
   const apiPath = `repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}`;

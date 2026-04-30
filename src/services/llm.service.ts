@@ -231,12 +231,17 @@ Geef gestructureerde feedback met:
 
 export type QuestionType = 'mcq' | 'open' | 'casus';
 
+// Bron-tag op een quizvraag, gebruikt door de mix-aware generator om aan
+// studenten te tonen waar elke vraag vandaan komt.
+export type QuizSource = 'rag' | 'itembank' | 'llm';
+
 export interface MCQQuestion {
   type: 'mcq';
   question: string;
   options: string[];
   correctAnswer: number;
   explanation: string;
+  source?: QuizSource;
 }
 
 export interface OpenQuestion {
@@ -244,6 +249,7 @@ export interface OpenQuestion {
   question: string;
   modelAnswer: string;
   rubric: string;
+  source?: QuizSource;
 }
 
 export interface CasusQuestion {
@@ -252,6 +258,7 @@ export interface CasusQuestion {
   question: string;
   modelAnswer: string;
   rubric: string;
+  source?: QuizSource;
 }
 
 export type QuizQuestion = MCQQuestion | OpenQuestion | CasusQuestion;

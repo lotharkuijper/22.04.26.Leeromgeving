@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { getShareStatsRepository, getRmdFileInFolder } from './github-parser.service';
+import { getShareStatsRepository, getRmdFileInFolder, setItembankRepo } from './github-parser.service';
 import { parseShareStatsItem } from './rmd-parser.service';
 import { validateQuizQuestion } from './quiz-validation.service';
 
@@ -24,21 +24,48 @@ export interface ImportProgress {
 
 export type ImportProgressCallback = (progress: ImportProgress) => void;
 
+const DEFAULT_REPO_URL = 'https://github.com/ShareStats/itembank';
+
+// Parseert een GitHub-repo-URL naar owner/repo. Geeft `null` bij ongeldige URL.
+export function parseRepoUrl(url: string): { owner: string; repo: string } | null {
+  if (!url) return null;
+  const match = url.match(/github\.com[/:]([^/]+)\/([^/.\s]+)/i);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2].replace(/\.git$/i, '') };
+}
+
+// Parseert "Descriptive statistics/Summary Statistics/Measures of Location/Mean"
+// naar een array van segmenten zonder lege strings, getrimd.
+export function parseExsectionPath(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split('/').map(s => s.trim()).filter(s => s.length > 0);
+}
+
 export async function importQuestionsFromShareStats(
   repositoryUrl: string,
   topics: string[],
   onProgress?: ImportProgressCallback
-): Promise<{ imported: number; skipped: number; errors: number }> {
+): Promise<{ imported: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
   let imported = 0;
   let skipped = 0;
   let errors = 0;
+  const skippedReasons: Record<string, number> = {
+    not_dutch: 0,
+    not_mchoice: 0,
+    already_imported: 0,
+    no_rmd: 0,
+    parse_failed: 0,
+  };
 
   try {
-    onProgress?.({
-      stage: 'fetching',
-      progress: 0,
-      message: 'Repository structuur ophalen...',
-    });
+    // Configureer parser zodat de juiste repo gefetcht wordt.
+    const parsedRepo = parseRepoUrl(repositoryUrl);
+    if (!parsedRepo) {
+      throw new Error(`Ongeldige GitHub-repo-URL: ${repositoryUrl}`);
+    }
+    setItembankRepo(parsedRepo.owner, parsedRepo.repo);
+
+    onProgress?.({ stage: 'fetching', progress: 0, message: 'Repository structuur ophalen...' });
 
     const repoStructure = await getShareStatsRepository(topics.length > 0 ? topics : undefined);
 
@@ -62,16 +89,18 @@ export async function importQuestionsFromShareStats(
           const folderName = item.name;
           const folderPath = item.path;
 
+          // Filter 1: alleen Nederlandse items (-nl)
           const languageSegment = folderName.split('-')[3];
           if (languageSegment !== 'nl') {
             skipped++;
+            skippedReasons.not_dutch++;
             processedItems++;
             continue;
           }
 
           onProgress?.({
             stage: 'parsing',
-            progress: 10 + (processedItems / totalItems) * 40,
+            progress: 10 + (processedItems / Math.max(totalItems, 1)) * 40,
             message: `Verwerken: ${folderName}`,
             questionsProcessed: processedItems,
             totalQuestions: totalItems,
@@ -79,20 +108,30 @@ export async function importQuestionsFromShareStats(
 
           const rmdContent = await getRmdFileInFolder(folderPath);
           if (!rmdContent) {
-            console.warn(`Geen Rmd bestand gevonden in ${folderPath}`);
-            errors++;
+            skipped++;
+            skippedReasons.no_rmd++;
             processedItems++;
             continue;
           }
 
           const parsedItem = parseShareStatsItem(folderName, rmdContent);
           if (!parsedItem) {
-            console.warn(`Kon item niet parsen: ${folderName}`);
-            errors++;
+            skipped++;
+            skippedReasons.parse_failed++;
             processedItems++;
             continue;
           }
 
+          // Filter 2: alleen meerkeuze-items (extype: mchoice)
+          const extype = (parsedItem.question.metaInformation?.extype || '').toLowerCase().trim();
+          if (extype !== 'mchoice') {
+            skipped++;
+            skippedReasons.not_mchoice++;
+            processedItems++;
+            continue;
+          }
+
+          // Bestaande items overslaan op basis van sharestats_id (folderName).
           const { data: existingQuestion } = await supabase
             .from('quiz_questions')
             .select('id')
@@ -101,6 +140,7 @@ export async function importQuestionsFromShareStats(
 
           if (existingQuestion) {
             skipped++;
+            skippedReasons.already_imported++;
             processedItems++;
             continue;
           }
@@ -116,9 +156,17 @@ export async function importQuestionsFromShareStats(
             }
           });
 
+          // Geen juist antwoord gevonden? Sla over (corrupte item).
+          if (!correctAnswer) {
+            skipped++;
+            skippedReasons.parse_failed++;
+            processedItems++;
+            continue;
+          }
+
           onProgress?.({
             stage: 'validating',
-            progress: 50 + (processedItems / totalItems) * 30,
+            progress: 50 + (processedItems / Math.max(totalItems, 1)) * 30,
             message: `Valideren: ${folderName}`,
             questionsProcessed: processedItems,
             totalQuestions: totalItems,
@@ -129,14 +177,17 @@ export async function importQuestionsFromShareStats(
             parsedItem.question.solution
           );
 
-          const { error: insertError } = await supabase.from('quiz_questions').insert({
+          // Exsection-pad: hiërarchie waarmee mapping op cursus-begrippen werkt.
+          const exsectionPath = parseExsectionPath(parsedItem.question.metaInformation?.exsection);
+
+          const insertPayload: Record<string, any> = {
             question_text: parsedItem.question.question,
             answer_options: answerOptions,
             correct_answer: correctAnswer,
             explanation: parsedItem.question.solution,
             source: 'sharestats',
             sharestats_id: folderName,
-            topic: topic,
+            topic,
             subtopic: parsedItem.subtopic,
             language: parsedItem.language,
             institution: parsedItem.institution,
@@ -144,11 +195,35 @@ export async function importQuestionsFromShareStats(
             difficulty: 'intermediate',
             validation_status: validation.isValid ? 'validated' : 'not_validated',
             validation_score: validation.similarityScore,
-          });
+            exsection_path: exsectionPath.length > 0 ? exsectionPath : null,
+            source_repo: repositoryUrl,
+          };
+
+          const { error: insertError } = await supabase
+            .from('quiz_questions')
+            .insert(insertPayload);
 
           if (insertError) {
-            console.error(`Fout bij opslaan vraag ${folderName}:`, insertError);
-            errors++;
+            // Defensief: als de migratie nog niet is toegepast, mist
+            // exsection_path/source_repo. Probeer nog een keer zonder die kolommen.
+            const isMissingCol = /column .* does not exist|schema cache/i.test(insertError.message || '');
+            if (isMissingCol) {
+              delete insertPayload.exsection_path;
+              delete insertPayload.source_repo;
+              delete insertPayload.source_commit_sha;
+              const { error: retryError } = await supabase
+                .from('quiz_questions')
+                .insert(insertPayload);
+              if (retryError) {
+                console.error(`Insert mislukte na retry voor ${folderName}:`, retryError);
+                errors++;
+              } else {
+                imported++;
+              }
+            } else {
+              console.error(`Fout bij opslaan vraag ${folderName}:`, insertError);
+              errors++;
+            }
           } else {
             imported++;
           }
@@ -170,7 +245,7 @@ export async function importQuestionsFromShareStats(
       totalQuestions: totalItems,
     });
 
-    return { imported, skipped, errors };
+    return { imported, skipped, skippedReasons, errors };
   } catch (error) {
     console.error('Fout bij importeren ShareStats vragen:', error);
     onProgress?.({
@@ -183,41 +258,84 @@ export async function importQuestionsFromShareStats(
 }
 
 export async function syncShareStatsQuestions(
+  repositoryUrl?: string,
   onProgress?: ImportProgressCallback
-): Promise<{ newQuestions: number; updatedQuestions: number }> {
-  const result = await importQuestionsFromShareStats(
-    'https://github.com/ShareStats/itembank',
-    [],
-    onProgress
-  );
+): Promise<{ imported: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
+  const url = repositoryUrl || (await getShareStatsConfig()).repositoryUrl || DEFAULT_REPO_URL;
+  const result = await importQuestionsFromShareStats(url, [], onProgress);
 
-  return {
-    newQuestions: result.imported,
-    updatedQuestions: 0,
-  };
+  // Update last_synced_at in config.
+  try {
+    await saveShareStatsConfig({ repositoryUrl: url, lastSyncedAt: new Date().toISOString() });
+  } catch (err) {
+    console.warn('Kon last_synced_at niet opslaan:', err);
+  }
+
+  return result;
 }
 
+const CONFIG_KEY = '__quiz_itembank_config__';
+
 export async function getShareStatsConfig(): Promise<{
-  repositoryUrl?: string;
+  repositoryUrl: string;
   lastSyncedAt?: string;
-  autoSync: boolean;
 }> {
-  return {
-    repositoryUrl: 'https://github.com/ShareStats/itembank',
-    lastSyncedAt: undefined,
-    autoSync: false,
-  };
+  try {
+    const { data } = await supabase
+      .from('chatbot_prompts')
+      .select('content')
+      .eq('name', CONFIG_KEY)
+      .maybeSingle();
+
+    if (data?.content) {
+      try {
+        const parsed = JSON.parse(data.content);
+        return {
+          repositoryUrl: parsed.repositoryUrl || DEFAULT_REPO_URL,
+          lastSyncedAt: parsed.lastSyncedAt,
+        };
+      } catch {
+        // val terug op default
+      }
+    }
+  } catch (err) {
+    console.warn('getShareStatsConfig: kon config niet ophalen:', err);
+  }
+  return { repositoryUrl: DEFAULT_REPO_URL };
 }
 
 export async function saveShareStatsConfig(config: {
   repositoryUrl: string;
-  autoSync: boolean;
+  lastSyncedAt?: string;
 }): Promise<void> {
-  console.log('ShareStats config:', config);
+  const payload = {
+    name: CONFIG_KEY,
+    content: JSON.stringify({
+      repositoryUrl: config.repositoryUrl,
+      lastSyncedAt: config.lastSyncedAt,
+    }),
+    is_active: true,
+  };
+
+  // Upsert via select+insert/update. (chatbot_prompts heeft een unique op name.)
+  const { data: existing } = await supabase
+    .from('chatbot_prompts')
+    .select('id')
+    .eq('name', CONFIG_KEY)
+    .maybeSingle();
+
+  if (existing) {
+    await supabase
+      .from('chatbot_prompts')
+      .update({ content: payload.content, is_active: true })
+      .eq('id', existing.id);
+  } else {
+    await supabase.from('chatbot_prompts').insert(payload);
+  }
 }
 
 export async function validateQuestionAgainstCourseware(
-  questionId: string
+  _questionId: string
 ): Promise<{
   isValid: boolean;
   similarityScore: number;

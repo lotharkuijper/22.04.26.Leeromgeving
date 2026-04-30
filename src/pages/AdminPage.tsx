@@ -10,6 +10,7 @@ import { retryFailedDocument, UploadProgress } from '../services/document-upload
 import { QuizValidationPanel } from '../components/QuizValidationPanel';
 import { RAGSetupPanel } from '../components/RAGSetupPanel';
 import { ShareStatsImportPanel } from '../components/ShareStatsImportPanel';
+import { QuizSourcesAdminPanel } from '../components/QuizSourcesAdminPanel';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 
 import FileManager from '../pages/FileManager';
@@ -28,7 +29,7 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'quiz_validation' | 'sharestats_import' | 'prompts' | 'rag_settings' | 'settings';
+type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'quiz_validation' | 'sharestats_import' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings';
 
 interface RagModuleSettings {
   similarity_threshold: number;
@@ -747,6 +748,7 @@ const tabs = [
   { id: 'concepts' as TabType, label: 'Begrippen', icon: BookOpen, show: true },
   { id: 'quiz_validation' as TabType, label: 'Quiz Validatie', icon: ClipboardCheck, show: true },
   { id: 'sharestats_import' as TabType, label: 'ShareStats Import', icon: Download, show: true },
+  { id: 'quiz_sources' as TabType, label: 'Quiz-bronnen', icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'prompts' as TabType, label: 'Chatbot Prompts', icon: MessageSquareText, show: isAdmin || isDocent },
   { id: 'rag_settings' as TabType, label: 'RAG Instellingen', icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'settings' as TabType, label: 'Instellingen', icon: Settings, show: isAdmin },
@@ -754,7 +756,7 @@ const tabs = [
 
 const tabGroups = [
   { label: 'Cursusinhoud', ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
-  { label: 'Leeromgeving', ids: ['prompts', 'quiz_validation'] },
+  { label: 'Leeromgeving', ids: ['prompts', 'quiz_validation', 'quiz_sources'] },
   { label: 'Systeem', ids: ['users', 'sharestats_import', 'settings'] },
 ].map(g => ({ label: g.label, items: tabs.filter(t => g.ids.includes(t.id)) }))
  .filter(g => g.items.length > 0);
@@ -1338,6 +1340,8 @@ const tabGroups = [
           {activeTab === 'quiz_validation' && <QuizValidationPanel />}
 
           {activeTab === 'sharestats_import' && <ShareStatsImportPanel />}
+
+          {activeTab === 'quiz_sources' && <QuizSourcesAdminPanel />}
 
           {activeTab === 'prompts' && (
             <div className="space-y-6">

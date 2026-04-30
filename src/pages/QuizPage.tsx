@@ -3,7 +3,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import {
-  generateQuiz,
   evaluateOpenAnswer,
   evaluateCasusAnswer,
   llmErrorToDutch,
@@ -13,7 +12,9 @@ import {
   type MCQQuestion,
   type OpenQuestion,
   type CasusQuestion,
+  type QuizSource,
 } from '../services/llm.service';
+import { generateMixedQuiz, fetchSourceMix, distributeMix, SOURCE_LABELS, SOURCE_COLORS, type SourceMix, type MixCounts } from '../services/quiz-mix.service';
 import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
 import { getQuizTopics, type QuizTopic } from '../services/quiz-topic.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
@@ -153,6 +154,10 @@ export function QuizPage() {
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
 
+  // Bronnen-mix per cursus (Task #57)
+  const [sourceMix, setSourceMix] = useState<SourceMix>({ pct_rag: 50, pct_itembank: 0, pct_llm: 50 });
+  const [lastMixCounts, setLastMixCounts] = useState<MixCounts | null>(null);
+
   // Resultatenlijst
   const [attempts, setAttempts] = useState<QuizAttemptRow[]>([]);
   const [attemptsLoading, setAttemptsLoading] = useState(false);
@@ -178,6 +183,10 @@ export function QuizPage() {
   // blijven gebruikers die de pagina bezoeken voordat AuthContext klaar is
   // hangen op een lege onderwerpenlijst.
   useEffect(() => { void loadTopics(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [activeCourse, profile?.id]);
+  useEffect(() => {
+    if (!activeCourse) return;
+    void fetchSourceMix(activeCourse).then(setSourceMix);
+  }, [activeCourse]);
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
@@ -301,20 +310,31 @@ export function QuizPage() {
       }
 
       let generated: QuizQuestion[];
+      let mixCounts: MixCounts = { rag: 0, itembank: 0, llm: 0 };
       try {
-        generated = await generateQuiz(
+        const result = await generateMixedQuiz({
+          courseId: activeCourse,
+          conceptIds: selectedTopics.map(t => t.id),
           topicNames,
           difficulty,
           questionType,
           numQuestions,
           ragContext,
-          ragSettings.quiz.rag_strict_mode,
-        );
+          ragStrictMode: ragSettings.quiz.rag_strict_mode,
+          mix: sourceMix,
+        });
+        generated = result.questions;
+        mixCounts = result.counts;
       } catch (llmErr) {
-        console.error('[QUIZ] LLM call failed:', llmErr);
+        console.error('[QUIZ] Mixed quiz generation failed:', llmErr);
         setFeedbackError(llmErrorToDutch(llmErr));
         return;
       }
+      if (generated.length === 0) {
+        setFeedbackError({ title: 'Er konden geen vragen worden samengesteld uit de geselecteerde bronnen.' });
+        return;
+      }
+      setLastMixCounts(mixCounts);
 
       // Initialiseer antwoorden in de juiste shape
       const init: QuizAnswer[] = generated.map(q => {
@@ -752,6 +772,44 @@ export function QuizPage() {
               <RAGStatusIndicator strictMode={ragSettings.quiz.rag_strict_mode} />
             </div>
 
+            {/* Bronnen-mix preview */}
+            {(() => {
+              const planned = distributeMix(numQuestions, sourceMix, questionType);
+              const items: Array<{ key: QuizSource; n: number }> = [
+                { key: 'rag', n: planned.rag },
+                { key: 'itembank', n: planned.itembank },
+                { key: 'llm', n: planned.llm },
+              ].filter(x => x.n > 0);
+              if (items.length === 0) return null;
+              return (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3" data-testid="block-mix-preview">
+                  <div className="text-xs font-semibold text-gray-700 mb-2">Bronnen voor deze quiz</div>
+                  <div className="flex flex-wrap gap-2">
+                    {items.map(it => (
+                      <span
+                        key={it.key}
+                        className={`text-xs px-2 py-1 rounded-full border ${SOURCE_COLORS[it.key]}`}
+                        data-testid={`badge-mix-${it.key}`}
+                      >
+                        {SOURCE_LABELS[it.key]}: {it.n}
+                      </span>
+                    ))}
+                  </div>
+                  {questionType !== 'mcq' && sourceMix.pct_itembank > 0 && (
+                    <p className="text-xs text-gray-500 mt-2">
+                      ItemBank bevat alleen meerkeuzevragen — voor open vragen en casussen wordt deze bron overgeslagen.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+
+            {lastMixCounts && (lastMixCounts.itembank > 0 || lastMixCounts.rag > 0 || lastMixCounts.llm > 0) && (
+              <div className="text-xs text-gray-600" data-testid="text-last-mix-counts">
+                Vorige quiz bevatte: {lastMixCounts.rag} cursus · {lastMixCounts.itembank} ItemBank · {lastMixCounts.llm} creatief
+              </div>
+            )}
+
             {setupValidationError && (
               <p className="text-sm text-red-600" data-testid="text-setup-validation-error">
                 {setupValidationError}
@@ -961,6 +1019,14 @@ export function QuizPage() {
               {currentQuestion + 1}
             </div>
             <div className="flex-1">
+              {(currentQ as MCQQuestion).source && (
+                <span
+                  className={`inline-block text-xs px-2 py-0.5 rounded-full border mb-2 ${SOURCE_COLORS[(currentQ as MCQQuestion).source as QuizSource]}`}
+                  data-testid={`badge-source-${(currentQ as MCQQuestion).source}`}
+                >
+                  {SOURCE_LABELS[(currentQ as MCQQuestion).source as QuizSource]}
+                </span>
+              )}
               <h2 className="text-xl font-semibold text-gray-900" data-testid="text-current-question">{currentQ.question}</h2>
             </div>
           </div>
