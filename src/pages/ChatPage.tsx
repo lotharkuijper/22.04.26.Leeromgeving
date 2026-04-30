@@ -2,8 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
-import { sendChatMessage, type Message } from '../services/llm.service';
-import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
+import { sendChatMessage, llmErrorToDutch, type Message } from '../services/llm.service';
+import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
 import { SourceList } from '../components/SourceList';
 import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
@@ -54,6 +54,9 @@ export function ChatPage() {
   const [archiveDialog, setArchiveDialog] = useState<{ conversationId: string; title: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
+  const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
+  const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
+  const [pendingRetry, setPendingRetry] = useState<{ history: Message[]; isFirstMessage: boolean } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -86,6 +89,9 @@ export function ChatPage() {
   useEffect(() => {
     if (currentConversationId) {
       loadMessages(currentConversationId);
+      setFeedbackError(null);
+      setContextStats(null);
+      setPendingRetry(null);
     }
   }, [currentConversationId]);
 
@@ -220,70 +226,61 @@ export function ChatPage() {
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!input.trim() || !currentConversationId || !profile) return;
+  const sendToAssistant = async (history: Message[], isFirstMessage: boolean) => {
+    if (!currentConversationId || !profile) return;
 
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: input,
-      timestamp: new Date().toISOString()
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
     setLoading(true);
+    setFeedbackError(null);
+    setContextStats(null);
+
+    const userContent = history[history.length - 1]?.content ?? '';
 
     try {
-      await supabase.from('messages').insert({
-        conversation_id: currentConversationId,
-        role: 'user',
-        content: userMessage.content
-      });
-
       console.log('[CHAT] Searching for relevant RAG chunks...');
-      let chunks = [];
-try {
-  chunks = await searchRelevantChunks(
-    userMessage.content,
-    ragSettings.chat.similarity_threshold,
-    ragSettings.chat.match_count,
-    'general',
-    profile?.role || 'student',
-    activeCourse
-  );
+      let chunks: Awaited<ReturnType<typeof searchRelevantChunks>> = [];
+      try {
+        chunks = await searchRelevantChunks(
+          userContent,
+          ragSettings.chat.similarity_threshold,
+          ragSettings.chat.match_count,
+          'general',
+          profile?.role || 'student',
+          activeCourse
+        );
+        if (chunks.length === 0) {
+          console.log('[CHAT] No RAG documents available, using LLM without context');
+        } else {
+          console.log(`[CHAT] Found ${chunks.length} relevant chunks from RAG`);
+        }
+      } catch (ragError) {
+        console.warn('[CHAT] RAG search failed, continuing without context:', ragError);
+      }
 
-  if (chunks.length === 0) {
-    console.log('[CHAT] No RAG documents available, using LLM without context');
-    if (typeof setRagAvailable === "function") {
-      setRagAvailable(false);
-    }
-  } else {
-    console.log(`[CHAT] Found ${chunks.length} relevant chunks from RAG`);
-    if (typeof setRagAvailable === "function") {
-      setRagAvailable(true);
-    }
-  }
-
-} catch (ragError) {
-  console.warn('[CHAT] RAG search failed, continuing without context:', ragError);
-  if (typeof setRagAvailable === "function") {
-    setRagAvailable(false);
-  }
-}
-
-      const context = chunks.length > 0 ? formatContextFromChunks(chunks) : undefined;
-
-      const conversationHistory: Message[] = messages
-        .slice(-10)
-        .map(msg => ({ role: msg.role, content: msg.content }));
+      const built = chunks.length > 0
+        ? buildContextWithCap(chunks)
+        : { context: '', usedChunks: 0, totalChunks: 0, truncated: false, charTrimmed: false };
+      const context = built.context.length > 0 ? built.context : undefined;
+      if (built.totalChunks > 0) {
+        setContextStats({ used: built.usedChunks, total: built.totalChunks, charTrimmed: built.charTrimmed });
+      }
+      if (built.truncated) {
+        console.log(`[CHAT] Context capped: using ${built.usedChunks}/${built.totalChunks} chunks (${built.context.length} chars)`);
+      }
 
       console.log('[CHAT] Sending message to LLM...');
-      const response = await sendChatMessage(
-        [...conversationHistory, { role: 'user', content: userMessage.content }],
-        context,
-        ragSettings.chat.rag_strict_mode
-      );
+      let response;
+      try {
+        response = await sendChatMessage(
+          history,
+          context,
+          ragSettings.chat.rag_strict_mode
+        );
+      } catch (llmErr) {
+        console.error('[CHAT] LLM call failed:', llmErr);
+        setFeedbackError(llmErrorToDutch(llmErr));
+        setPendingRetry({ history, isFirstMessage });
+        return;
+      }
 
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
@@ -302,21 +299,63 @@ try {
         retrieved_context: assistantMessage.retrievedContext || {}
       });
 
-      if (messages.length === 0) {
-        const title = userMessage.content.slice(0, 50) + (userMessage.content.length > 50 ? '...' : '');
+      if (isFirstMessage) {
+        const title = userContent.slice(0, 50) + (userContent.length > 50 ? '...' : '');
         await supabase
           .from('conversations')
           .update({ title })
           .eq('id', currentConversationId);
         await loadConversations();
       }
+
+      setPendingRetry(null);
     } catch (error: any) {
       console.error('[CHAT] Error sending message:', error);
-      const errorMessage = error?.message || 'Onbekende fout';
-      console.error('[CHAT] Error details:', errorMessage);
-      alert(`Er is een fout opgetreden bij het versturen van het bericht.\n\nDetails: ${errorMessage}\n\nProbeer het opnieuw.`);
+      setFeedbackError({
+        title: 'Er is een fout opgetreden bij het versturen van het bericht.',
+        detail: error?.message || undefined,
+      });
+      setPendingRetry({ history, isFirstMessage });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!input.trim() || !currentConversationId || !profile) return;
+
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: input,
+      timestamp: new Date().toISOString()
+    };
+
+    const isFirstMessage = messages.length === 0;
+    const history: Message[] = [
+      ...messages.slice(-10).map(msg => ({ role: msg.role, content: msg.content })),
+      { role: 'user' as const, content: userMessage.content },
+    ];
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+
+    try {
+      await supabase.from('messages').insert({
+        conversation_id: currentConversationId,
+        role: 'user',
+        content: userMessage.content
+      });
+    } catch (e) {
+      console.error('[CHAT] insert user message failed:', e);
+    }
+
+    await sendToAssistant(history, isFirstMessage);
+  };
+
+  const handleRetry = () => {
+    if (pendingRetry) {
+      sendToAssistant(pendingRetry.history, pendingRetry.isFirstMessage);
     }
   };
 
@@ -459,6 +498,72 @@ try {
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
                   </div>
+                </div>
+              )}
+
+              {feedbackError && !loading && (
+                <div
+                  className="bg-red-50 border border-red-200 rounded-2xl p-5"
+                  data-testid="block-chat-error"
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-base font-semibold text-red-900 mb-1">
+                        Antwoord kon niet gegenereerd worden
+                      </h3>
+                      <p className="text-red-800 text-sm mb-2" data-testid="text-chat-error-title">
+                        {feedbackError.title}
+                      </p>
+                      {feedbackError.detail && (
+                        <details className="mb-3 group" data-testid="details-chat-error">
+                          <summary className="text-sm text-red-700 cursor-pointer select-none hover:underline">
+                            Technische details
+                          </summary>
+                          <p
+                            className="mt-2 text-xs text-red-700 bg-red-100/60 border border-red-200 rounded-md px-3 py-2 whitespace-pre-wrap font-mono"
+                            data-testid="text-chat-error-detail"
+                          >
+                            {feedbackError.detail}
+                          </p>
+                        </details>
+                      )}
+                      {contextStats && contextStats.total > 0 && (
+                        <p
+                          className="text-xs text-red-700 mb-3"
+                          data-testid="text-chat-context-stats-error"
+                        >
+                          {contextStats.used < contextStats.total
+                            ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
+                            : contextStats.charTrimmed
+                              ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
+                              : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`}
+                        </p>
+                      )}
+                      <button
+                        onClick={handleRetry}
+                        disabled={loading || !pendingRetry}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed font-medium text-sm"
+                        data-testid="button-chat-retry"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                        Probeer opnieuw
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!feedbackError && contextStats && contextStats.total > 0 && (contextStats.used < contextStats.total || contextStats.charTrimmed) && (
+                <div className="flex justify-start">
+                  <p
+                    className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 max-w-[80%]"
+                    data-testid="text-chat-context-stats"
+                  >
+                    {contextStats.used < contextStats.total
+                      ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`
+                      : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
+                  </p>
                 </div>
               )}
 

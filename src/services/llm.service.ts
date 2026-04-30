@@ -102,19 +102,21 @@ export async function sendChatMessage(
     const content = data.choices[0]?.message?.content;
 
     if (!content) {
-      throw new Error('Geen antwoord ontvangen van Groq API');
+      throw new LLMError('Het taalmodel gaf een leeg antwoord terug.', 502, 'empty_response', 'empty content');
     }
 
     return { content };
   } catch (error: any) {
     console.error('[LLM] Error calling chat API:', error);
-    if (error.message?.includes('503') || error.message?.includes('not configured')) {
-      return {
-        content: 'De chatbot is nog niet geconfigureerd. Voeg een GROQ_API_KEY toe in de Replit Secrets.',
-        error: 'API key not configured'
-      };
+    // LLMError (afkomstig uit callChatAPI of het lege-antwoord-pad) ongewijzigd
+    // doorgeven, zodat de UI status/code/rawMessage kan onderscheiden via
+    // llmErrorToDutch (context_length_exceeded, rate_limit, 503, 5xx, ...).
+    if (error instanceof LLMError) {
+      throw error;
     }
-    throw new Error(`LLM fout: ${error.message}`);
+    // Niet-HTTP fouten (bv. netwerkfout) als generieke LLMError doorgeven.
+    const msg = error?.message || String(error);
+    throw new LLMError(msg, 0, undefined, msg);
   }
 }
 
@@ -282,13 +284,33 @@ BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst.`;
 
     const jsonMatch = content.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
-      throw new Error('Invalid response format');
+      throw new LLMError(
+        'Het taalmodel gaf geen geldige quiz-JSON terug.',
+        502,
+        'invalid_response_format',
+        'Invalid response format'
+      );
     }
 
-    return JSON.parse(jsonMatch[0]);
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch (parseErr: any) {
+      throw new LLMError(
+        'Het taalmodel gaf geen geldige quiz-JSON terug.',
+        502,
+        'invalid_response_format',
+        parseErr?.message || 'JSON parse error'
+      );
+    }
   } catch (error: any) {
     console.error('Error generating quiz:', error);
-    throw new Error(`Failed to generate quiz: ${error.message}`);
+    // LLMError onveranderd doorgeven zodat llmErrorToDutch de juiste
+    // categorie (context-length, rate-limit, 5xx, ...) kan tonen.
+    if (error instanceof LLMError) {
+      throw error;
+    }
+    const msg = error?.message || String(error);
+    throw new LLMError(msg, 0, undefined, msg);
   }
 }
 

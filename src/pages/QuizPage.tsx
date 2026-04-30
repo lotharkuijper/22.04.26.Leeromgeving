@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
-import { generateQuiz, type QuizQuestion } from '../services/llm.service';
-import { searchRelevantChunks, formatContextFromChunks } from '../services/rag.service';
+import { generateQuiz, llmErrorToDutch, type QuizQuestion } from '../services/llm.service';
+import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
 import {
   BookOpen,
@@ -13,7 +13,9 @@ import {
   RotateCcw,
   TrendingUp,
   Clock,
-  Award
+  Award,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
@@ -63,6 +65,9 @@ export function QuizPage() {
   const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
   const [ragSources, setRagSources] = useState<SourceItem[]>([]);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
+  const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
+  const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
+  const [topicError, setTopicError] = useState<string | null>(null);
 
   useEffect(() => {
     loadAttempts();
@@ -91,18 +96,22 @@ export function QuizPage() {
   };
 
   const handleStartQuiz = async () => {
+    setTopicError(null);
     if (!topic.trim()) {
-      alert('Voer een onderwerp in');
+      setTopicError('Voer een onderwerp in');
       return;
     }
 
     setLoading(true);
     setRagSources([]);
+    setFeedbackError(null);
+    setContextStats(null);
     try {
       let ragContext: string | undefined;
       if (activeCourse !== null) {
+        let chunks: Awaited<ReturnType<typeof searchRelevantChunks>> = [];
         try {
-          const chunks = await searchRelevantChunks(
+          chunks = await searchRelevantChunks(
             topic,
             ragSettings.quiz.similarity_threshold,
             ragSettings.quiz.match_count,
@@ -110,17 +119,33 @@ export function QuizPage() {
             profile?.role || 'student',
             activeCourse
           );
-          if (chunks.length > 0) {
-            ragContext = formatContextFromChunks(chunks);
-            setRagSources(chunks.map(c => ({ title: c.documentTitle, similarity: c.similarity })));
-            console.log(`[QUIZ] Using RAG context: ${chunks.length} chunks from active course`);
-          }
         } catch (ragErr) {
           console.warn('[QUIZ] RAG search failed, generating without context:', ragErr);
         }
+
+        if (chunks.length > 0) {
+          const built = buildContextWithCap(chunks);
+          if (built.context.length > 0) {
+            ragContext = built.context;
+          }
+          setRagSources(chunks.map(c => ({ title: c.documentTitle, similarity: c.similarity })));
+          setContextStats({ used: built.usedChunks, total: built.totalChunks, charTrimmed: built.charTrimmed });
+          if (built.truncated) {
+            console.log(`[QUIZ] Context capped: using ${built.usedChunks}/${built.totalChunks} chunks (${built.context.length} chars)`);
+          }
+          console.log(`[QUIZ] Using RAG context: ${chunks.length} chunks from active course`);
+        }
       }
 
-      const generatedQuestions = await generateQuiz(topic, difficulty, numQuestions, ragContext, ragSettings.quiz.rag_strict_mode);
+      let generatedQuestions: QuizQuestion[];
+      try {
+        generatedQuestions = await generateQuiz(topic, difficulty, numQuestions, ragContext, ragSettings.quiz.rag_strict_mode);
+      } catch (llmErr) {
+        console.error('[QUIZ] LLM call failed:', llmErr);
+        setFeedbackError(llmErrorToDutch(llmErr));
+        return;
+      }
+
       setQuestions(generatedQuestions);
       setSelectedAnswers(new Array(generatedQuestions.length).fill(-1));
       setCurrentQuestion(0);
@@ -128,7 +153,10 @@ export function QuizPage() {
       setShowExplanation(false);
     } catch (error) {
       console.error('Error generating quiz:', error);
-      alert('Er is een fout opgetreden bij het genereren van de quiz');
+      setFeedbackError({
+        title: 'Er is een fout opgetreden bij het genereren van de quiz.',
+        detail: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setLoading(false);
     }
@@ -186,6 +214,9 @@ export function QuizPage() {
     setQuestions([]);
     setShowExplanation(false);
     setRagSources([]);
+    setFeedbackError(null);
+    setContextStats(null);
+    setTopicError(null);
   };
 
   const currentQ = questions[currentQuestion];
@@ -215,10 +246,14 @@ export function QuizPage() {
                   <input
                     type="text"
                     value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
+                    onChange={(e) => { setTopic(e.target.value); if (topicError) setTopicError(null); }}
                     placeholder="bijv. 'Cohort studies', 'P-waarden', 'Confounding'"
                     className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all outline-none"
+                    data-testid="input-quiz-topic"
                   />
+                  {topicError && (
+                    <p className="mt-2 text-sm text-red-600" data-testid="text-topic-error">{topicError}</p>
+                  )}
                 </div>
 
                 <div>
@@ -268,6 +303,7 @@ export function QuizPage() {
                   onClick={handleStartQuiz}
                   disabled={loading || !topic.trim()}
                   className="w-full px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  data-testid="button-generate-quiz"
                 >
                   {loading ? (
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -278,6 +314,59 @@ export function QuizPage() {
                     </>
                   )}
                 </button>
+
+                {feedbackError && !loading && (
+                  <div
+                    className="bg-red-50 border border-red-200 rounded-2xl p-5"
+                    data-testid="block-quiz-error"
+                  >
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-red-900 mb-1">
+                          Quiz kon niet gegenereerd worden
+                        </h3>
+                        <p className="text-red-800 text-sm mb-2" data-testid="text-quiz-error-title">
+                          {feedbackError.title}
+                        </p>
+                        {feedbackError.detail && (
+                          <details className="mb-3 group" data-testid="details-quiz-error">
+                            <summary className="text-sm text-red-700 cursor-pointer select-none hover:underline">
+                              Technische details
+                            </summary>
+                            <p
+                              className="mt-2 text-xs text-red-700 bg-red-100/60 border border-red-200 rounded-md px-3 py-2 whitespace-pre-wrap font-mono"
+                              data-testid="text-quiz-error-detail"
+                            >
+                              {feedbackError.detail}
+                            </p>
+                          </details>
+                        )}
+                        {contextStats && contextStats.total > 0 && (
+                          <p
+                            className="text-xs text-red-700 mb-3"
+                            data-testid="text-quiz-context-stats-error"
+                          >
+                            {contextStats.used < contextStats.total
+                              ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
+                              : contextStats.charTrimmed
+                                ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
+                                : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`}
+                          </p>
+                        )}
+                        <button
+                          onClick={handleStartQuiz}
+                          disabled={loading || !topic.trim()}
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed font-medium text-sm"
+                          data-testid="button-quiz-retry"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                          Probeer opnieuw
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -343,6 +432,16 @@ export function QuizPage() {
             <div className="text-left bg-purple-50 border border-purple-200 rounded-xl p-4">
               <SourceList sources={ragSources} label="Gebaseerd op cursusmateriaal" />
             </div>
+          )}
+          {contextStats && contextStats.total > 0 && (contextStats.used < contextStats.total || contextStats.charTrimmed) && (
+            <p
+              className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-left"
+              data-testid="text-quiz-context-stats"
+            >
+              {contextStats.used < contextStats.total
+                ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`
+                : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
+            </p>
           )}
           <button
             onClick={() => setState('active')}
