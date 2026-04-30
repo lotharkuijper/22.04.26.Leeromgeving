@@ -229,89 +229,257 @@ Geef gestructureerde feedback met:
   return { content };
 }
 
-export interface QuizQuestion {
+export type QuestionType = 'mcq' | 'open' | 'casus';
+
+export interface MCQQuestion {
+  type: 'mcq';
   question: string;
   options: string[];
   correctAnswer: number;
   explanation: string;
 }
 
+export interface OpenQuestion {
+  type: 'open';
+  question: string;
+  modelAnswer: string;
+  rubric: string;
+}
+
+export interface CasusQuestion {
+  type: 'casus';
+  context: string;
+  question: string;
+  modelAnswer: string;
+  rubric: string;
+}
+
+export type QuizQuestion = MCQQuestion | OpenQuestion | CasusQuestion;
+
+export interface AnswerEvaluation {
+  feedback: string;
+  feedforward: string;
+  score: number; // 0–100
+}
+
+const difficultyLabel = (d: 'easy' | 'medium' | 'hard') =>
+  d === 'easy' ? 'makkelijke' : d === 'medium' ? 'gemiddelde' : 'moeilijke';
+
+const SECOND_PERSON_RULE = `Aanspraakvorm (volg STRIKT): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT "de student", "deze student" of "de student heeft" — schrijf alsof je het één-op-één tegen de student zegt.`;
+
+function buildContextSection(ragContext?: string, ragStrictMode?: boolean): string {
+  if (ragContext) {
+    const strictNote = ragStrictMode ? RAG_STRICT_INSTRUCTION_LLM : '';
+    return `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}${strictNote}\n`;
+  }
+  if (ragStrictMode) {
+    return `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten beschikbaar. Geef dit aan in de vragen of genereer geen vragen.\n`;
+  }
+  return '';
+}
+
+function extractJSON<T>(content: string, kind: 'array' | 'object'): T {
+  const re = kind === 'array' ? /\[[\s\S]*\]/ : /\{[\s\S]*\}/;
+  const match = content.match(re);
+  if (!match) {
+    throw new LLMError(
+      'Het taalmodel gaf geen geldige JSON terug.',
+      502,
+      'invalid_response_format',
+      content.slice(0, 400),
+    );
+  }
+  try {
+    return JSON.parse(match[0]) as T;
+  } catch (parseErr: any) {
+    throw new LLMError(
+      'Het taalmodel gaf geen geldige JSON terug.',
+      502,
+      'invalid_response_format',
+      parseErr?.message || 'JSON parse error',
+    );
+  }
+}
+
 export async function generateQuiz(
-  topic: string,
+  topics: string[],
   difficulty: 'easy' | 'medium' | 'hard',
+  questionType: QuestionType,
   numQuestions: number = 5,
   ragContext?: string,
   ragStrictMode?: boolean
 ): Promise<QuizQuestion[]> {
-  let contextSection = '';
-  if (ragContext) {
-    const strictNote = ragStrictMode ? RAG_STRICT_INSTRUCTION_LLM : '';
-    contextSection = `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}${strictNote}\n`;
-  } else if (ragStrictMode) {
-    contextSection = `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten beschikbaar. Geef dit aan in de vragen of genereer geen vragen.\n`;
-  }
+  const contextSection = buildContextSection(ragContext, ragStrictMode);
+  const topicsLabel = topics.length === 1 ? `het onderwerp "${topics[0]}"` : `de onderwerpen ${topics.map(t => `"${t}"`).join(', ')}`;
+  const diff = difficultyLabel(difficulty);
 
-  const quizPrompt = `Genereer ${numQuestions} ${difficulty === 'easy' ? 'makkelijke' : difficulty === 'medium' ? 'gemiddelde' : 'moeilijke'} meerkeuzevragen over ${topic} in het domein van epidemiologie en biostatistiek.${contextSection}
+  let promptCore: string;
+  let exampleJson: string;
+  let maxTokens = 2048;
+
+  if (questionType === 'mcq') {
+    promptCore = `Genereer ${numQuestions} ${diff} meerkeuzevragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
 
 Voor elke vraag:
-- Maak een duidelijke, specifieke vraag
-- Geef exact 4 antwoordopties (A, B, C, D)
-- Geef aan welk antwoord correct is (0, 1, 2, of 3)
-- Geef een korte uitleg waarom dit antwoord correct is
-
-Formatteer je antwoord als een JSON array met deze structuur:
-[
+- Maak een duidelijke, specifieke vraag.
+- Geef exact 4 antwoordopties (A, B, C, D).
+- Geef aan welk antwoord correct is (0, 1, 2 of 3).
+- Geef een korte uitleg waarom dit antwoord correct is. Schrijf de uitleg in tweede persoon ("je"/"jij") gericht aan de student.`;
+    exampleJson = `[
   {
+    "type": "mcq",
     "question": "De vraag hier",
     "options": ["Optie A", "Optie B", "Optie C", "Optie D"],
     "correctAnswer": 0,
-    "explanation": "Uitleg waarom dit correct is"
+    "explanation": "Uitleg waarom dit correct is, gericht aan jou"
   }
-]
+]`;
+  } else if (questionType === 'open') {
+    promptCore = `Genereer ${numQuestions} ${diff} open vragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
 
-BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst.`;
+Voor elke vraag:
+- Stel een open vraag (geen meerkeuze) waarop de student in 3–8 zinnen een inhoudelijk antwoord kan geven.
+- Geef een "modelAnswer": een ideaal antwoord van ongeveer 4–8 zinnen dat de kernpunten bevat.
+- Geef een "rubric": korte beoordelingscriteria (3–5 bullets, in één string met newlines) waarmee een beoordelaar later het studentantwoord kan scoren.`;
+    exampleJson = `[
+  {
+    "type": "open",
+    "question": "De open vraag hier",
+    "modelAnswer": "Een uitgewerkt voorbeeldantwoord van enkele zinnen.",
+    "rubric": "- Noemt definitie X\\n- Verwijst naar mechanisme Y\\n- Geeft een voorbeeld"
+  }
+]`;
+  } else {
+    promptCore = `Genereer ${numQuestions} ${diff} casusvragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
+
+Voor elke casus:
+- Schrijf eerst een korte, realistische probleemschets ("context") van 3–6 zinnen waarin een onderzoeks- of praktijksituatie wordt geschetst die past bij ${topicsLabel}.
+- Stel daarna één duidelijke vraag ("question") die de student dwingt het probleem analytisch te benaderen.
+- Geef een "modelAnswer": een ideaal antwoord van ongeveer 5–8 zinnen.
+- Geef een "rubric": korte beoordelingscriteria (3–5 bullets, in één string met newlines).`;
+    exampleJson = `[
+  {
+    "type": "casus",
+    "context": "Korte casusbeschrijving van enkele zinnen.",
+    "question": "De vraag bij deze casus",
+    "modelAnswer": "Een uitgewerkt voorbeeldantwoord van enkele zinnen.",
+    "rubric": "- Identificeert het type studie\\n- Benoemt mogelijke confounders\\n- Geeft een correcte conclusie"
+  }
+]`;
+    maxTokens = 3000;
+  }
+
+  const quizPrompt = `${promptCore}
+
+${SECOND_PERSON_RULE}
+
+Formatteer je antwoord als een JSON array met deze structuur:
+${exampleJson}
+
+BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst, geen markdown-codeblok.`;
 
   try {
     const data = await callChatAPI({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: quizPrompt }],
       temperature: 0.7,
-      max_tokens: 2048,
+      max_tokens: maxTokens,
       skipSystemPrompt: true,
     });
 
     const content = data.choices[0]?.message?.content || '';
-
-    const jsonMatch = content.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      throw new LLMError(
-        'Het taalmodel gaf geen geldige quiz-JSON terug.',
-        502,
-        'invalid_response_format',
-        'Invalid response format'
-      );
-    }
-
-    try {
-      return JSON.parse(jsonMatch[0]);
-    } catch (parseErr: any) {
-      throw new LLMError(
-        'Het taalmodel gaf geen geldige quiz-JSON terug.',
-        502,
-        'invalid_response_format',
-        parseErr?.message || 'JSON parse error'
-      );
-    }
+    const parsed = extractJSON<QuizQuestion[]>(content, 'array');
+    // Defensief: zorg dat elk vraag-object het type heeft (sommige modellen
+    // vergeten dat veld bij MCQ omdat dat de oude default was).
+    return parsed.map((q: any) => ({ ...q, type: q.type || questionType })) as QuizQuestion[];
   } catch (error: any) {
     console.error('Error generating quiz:', error);
-    // LLMError onveranderd doorgeven zodat llmErrorToDutch de juiste
-    // categorie (context-length, rate-limit, 5xx, ...) kan tonen.
     if (error instanceof LLMError) {
       throw error;
     }
     const msg = error?.message || String(error);
     throw new LLMError(msg, 0, undefined, msg);
   }
+}
+
+async function evaluateFreeTextAnswer(args: {
+  systemPersona: string;
+  questionBlock: string;
+  modelAnswer: string;
+  rubric: string;
+  studentAnswer: string;
+}): Promise<AnswerEvaluation> {
+  const { systemPersona, questionBlock, modelAnswer, rubric, studentAnswer } = args;
+  const prompt = `${systemPersona}
+
+${questionBlock}
+
+Modelantwoord (referentie, niet zichtbaar voor de student):
+${modelAnswer}
+
+Beoordelingscriteria (rubric):
+${rubric}
+
+Antwoord van jou (de student):
+${studentAnswer}
+
+${SECOND_PERSON_RULE}
+
+Schrijf een formatieve beoordeling met EXACT drie velden:
+1. "feedback": 3–6 zinnen die concreet benoemen wat goed gaat en wat ontbreekt of onjuist is in jouw antwoord.
+2. "feedforward": 2–4 zinnen die concreet beschrijven hoe jij je antwoord een volgende keer kan verbeteren (één concrete vervolgstap, niet vaag).
+3. "score": een geheel getal tussen 0 en 100 dat aangeeft hoe volledig en correct jouw antwoord is, gewogen tegen het modelantwoord en de rubric. 0 = compleet onjuist of leeg, 100 = inhoudelijk volledig en correct.
+
+Geef je antwoord UITSLUITEND als één JSON-object met deze structuur, zonder extra tekst en zonder markdown-codeblok:
+{
+  "feedback": "...",
+  "feedforward": "...",
+  "score": 75
+}`;
+
+  const data = await callChatAPI({
+    model: 'llama-3.3-70b-versatile',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.3,
+    max_tokens: 1200,
+    skipSystemPrompt: true,
+  });
+
+  const content = data.choices[0]?.message?.content || '';
+  const parsed = extractJSON<{ feedback?: string; feedforward?: string; score?: number | string }>(content, 'object');
+
+  const scoreNum = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));
+  return {
+    feedback: String(parsed.feedback || '').trim(),
+    feedforward: String(parsed.feedforward || '').trim(),
+    score: scoreNum,
+  };
+}
+
+export async function evaluateOpenAnswer(
+  question: OpenQuestion,
+  studentAnswer: string,
+): Promise<AnswerEvaluation> {
+  return evaluateFreeTextAnswer({
+    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt het antwoord van een student op een open vraag.`,
+    questionBlock: `Open vraag:\n${question.question}`,
+    modelAnswer: question.modelAnswer,
+    rubric: question.rubric,
+    studentAnswer,
+  });
+}
+
+export async function evaluateCasusAnswer(
+  question: CasusQuestion,
+  studentAnswer: string,
+): Promise<AnswerEvaluation> {
+  return evaluateFreeTextAnswer({
+    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt het antwoord van een student op een casusvraag. Houd zowel de inhoudelijke juistheid als het correct toepassen op de geschetste casus mee in je oordeel.`,
+    questionBlock: `Casusbeschrijving:\n${question.context}\n\nVraag bij de casus:\n${question.question}`,
+    modelAnswer: question.modelAnswer,
+    rubric: question.rubric,
+    studentAnswer,
+  });
 }
 
 export async function generateEmbeddings(texts: string[]): Promise<number[][]> {

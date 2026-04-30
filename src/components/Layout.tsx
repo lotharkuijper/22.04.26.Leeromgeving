@@ -184,15 +184,13 @@ export function Layout({ children }: LayoutProps) {
               />
             ))}
 
-              {/* ShareStats – oefenen */}
-  <NavItem
-    to="/sharestats"
-    icon={BookOpen}
-    label="ShareStats-oefenen"
-    active={location.pathname.startsWith("/sharestats")}
-    color="from-indigo-500 to-indigo-600"
-    onClick={() => setMobileMenuOpen(false)}
-  />
+            {/*
+              Task #52: ShareStats-oefenen is verwijderd uit de zijbalk.
+              De /sharestats-routes blijven bestaan in App.tsx zodat oude
+              deeplinks en de Beheer-import nog werken; in fase 2 keert
+              ShareStats terug als één van de bronnen onder de nieuwe
+              quiz-architectuur.
+            */}
 
             {/* SWITCH COURSE BUTTON */}
             <button

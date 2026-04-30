@@ -1,32 +1,69 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
-import { generateQuiz, llmErrorToDutch, type QuizQuestion } from '../services/llm.service';
+import {
+  generateQuiz,
+  evaluateOpenAnswer,
+  evaluateCasusAnswer,
+  llmErrorToDutch,
+  type QuizQuestion,
+  type QuestionType,
+  type AnswerEvaluation,
+  type MCQQuestion,
+  type OpenQuestion,
+  type CasusQuestion,
+} from '../services/llm.service';
 import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
+import { getQuizTopics, type QuizTopic } from '../services/quiz-topic.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
 import {
-  BookOpen,
   Play,
   CheckCircle,
   XCircle,
   RotateCcw,
   TrendingUp,
-  Clock,
   Award,
   AlertCircle,
   RefreshCw,
+  ListChecks,
+  PenLine,
+  ClipboardList,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+  BookText,
+  X,
+  Loader2,
+  Search,
+  Calendar,
 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
 type QuizState = 'setup' | 'ready' | 'active' | 'completed';
 
-interface QuizAttempt {
+// Antwoord-objecten zoals ze in `quiz_attempts.answers` worden opgeslagen.
+interface MCQAnswer {
+  type: 'mcq';
+  selectedIndex: number;
+  isCorrect: boolean;
+}
+interface FreeTextAnswer {
+  type: 'open' | 'casus';
+  text: string;
+  evaluation: AnswerEvaluation | null;
+}
+type QuizAnswer = MCQAnswer | FreeTextAnswer;
+
+interface QuizAttemptRow {
   id: string;
-  topic: string;
-  difficulty: string;
-  score: number;
-  total_questions: number;
+  topics: string[] | null;
+  difficulty: string | null;
+  question_type: 'mcq' | 'open' | 'casus' | null;
+  questions_data: QuizQuestion[] | null;
+  answers: QuizAnswer[] | null;
+  score_percentage: number | null;
+  total_questions: number | null;
   created_at: string;
 }
 
@@ -35,14 +72,12 @@ interface RagModuleSettings {
   match_count: number;
   rag_strict_mode: boolean;
 }
-
 interface RagSettings {
   chat: RagModuleSettings;
   explain: RagModuleSettings;
   quiz: RagModuleSettings;
   project: RagModuleSettings;
 }
-
 const RAG_DEFAULTS: RagSettings = {
   chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
   explain: { similarity_threshold: 0.50, match_count: 5, rag_strict_mode: true  },
@@ -50,28 +85,89 @@ const RAG_DEFAULTS: RagSettings = {
   project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
 };
 
+const QUESTION_TYPE_META: Record<QuestionType, { label: string; subtitle: string; icon: typeof ListChecks }> = {
+  mcq:   { label: 'Meerkeuze',   subtitle: '4 opties, directe feedback', icon: ListChecks },
+  open:  { label: 'Open vraag',  subtitle: 'Vrije tekst, AI-beoordeling met percentagescore', icon: PenLine },
+  casus: { label: 'Casus',       subtitle: 'Probleemschets + open antwoord, AI-beoordeling', icon: ClipboardList },
+};
+
+function difficultyDutch(d: string | null | undefined): string {
+  if (d === 'easy') return 'Makkelijk';
+  if (d === 'medium') return 'Gemiddeld';
+  if (d === 'hard') return 'Moeilijk';
+  return d || '';
+}
+
+function questionTypeDutch(t: string | null | undefined): string {
+  if (t === 'mcq') return 'Meerkeuze';
+  if (t === 'open') return 'Open vraag';
+  if (t === 'casus') return 'Casus';
+  return t || '';
+}
+
+function formatDateTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('nl-NL', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch { return iso; }
+}
+
+function topicsLabelOf(row: QuizAttemptRow): string {
+  if (Array.isArray(row.topics) && row.topics.length > 0) return row.topics.join(', ');
+  return '(zonder onderwerp)';
+}
+
 export function QuizPage() {
   const { profile } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
+
   const [state, setState] = useState<QuizState>('setup');
-  const [topic, setTopic] = useState('');
+
+  // Setup
+  const [availableTopics, setAvailableTopics] = useState<QuizTopic[]>([]);
+  const [topicsLoading, setTopicsLoading] = useState(false);
+  const [topicsError, setTopicsError] = useState<string | null>(null);
+  const [topicsSource, setTopicsSource] = useState<QuizTopic['source'] | null>(null);
+  const [selectedTopicIds, setSelectedTopicIds] = useState<Set<string>>(new Set());
+  const [topicSearch, setTopicSearch] = useState('');
+  const [questionType, setQuestionType] = useState<QuestionType>('mcq');
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [numQuestions, setNumQuestions] = useState(5);
+  const [setupValidationError, setSetupValidationError] = useState<string | null>(null);
+
+  // Active quiz
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [answers, setAnswers] = useState<QuizAnswer[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [selectedAnswers, setSelectedAnswers] = useState<number[]>([]);
-  const [showExplanation, setShowExplanation] = useState(false);
+  const [showExplanation, setShowExplanation] = useState(false); // mcq inline feedback
+  const [draftText, setDraftText] = useState(''); // typed text for current open/casus question
+  const [evaluating, setEvaluating] = useState(false);
+  const [evalError, setEvalError] = useState<{ title: string; detail?: string } | null>(null);
+
+  // Generation + RAG
   const [loading, setLoading] = useState(false);
-  const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
   const [ragSources, setRagSources] = useState<SourceItem[]>([]);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
-  const [topicError, setTopicError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadAttempts();
-  }, []);
+  // Resultatenlijst
+  const [attempts, setAttempts] = useState<QuizAttemptRow[]>([]);
+  const [attemptsLoading, setAttemptsLoading] = useState(false);
+  const [attemptsError, setAttemptsError] = useState<string | null>(null);
+  const [expandedAttemptId, setExpandedAttemptId] = useState<string | null>(null);
+  const [archiveDialog, setArchiveDialog] = useState<{ id: string; label: string } | null>(null);
+  const [archiving, setArchiving] = useState(false);
+
+  // Kiezen van quiz-onderwerpen + recente pogingen herladen wanneer cursus
+  // wisselt of gebruiker beschikbaar wordt.
+  useEffect(() => { void loadAttempts(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [profile?.id]);
+  // Triggered op zowel cursus-wissel als zodra het profiel binnenkomt — anders
+  // blijven gebruikers die de pagina bezoeken voordat AuthContext klaar is
+  // hangen op een lege onderwerpenlijst.
+  useEffect(() => { void loadTopics(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [activeCourse, profile?.id]);
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
@@ -80,25 +176,83 @@ export function QuizPage() {
     }).catch(() => {});
   }, [activeCourse]);
 
-  const loadAttempts = async () => {
+  const loadTopics = useCallback(async () => {
     if (!profile) return;
+    setTopicsLoading(true);
+    setTopicsError(null);
+    try {
+      const list = await getQuizTopics(activeCourse);
+      setAvailableTopics(list);
+      setTopicsSource(list.length > 0 ? list[0].source : 'empty');
+      setSelectedTopicIds(prev => {
+        const next = new Set<string>();
+        for (const t of list) if (prev.has(t.id)) next.add(t.id);
+        return next;
+      });
+    } catch (err: any) {
+      console.error('[QUIZ] loadTopics error:', err);
+      setTopicsError(err?.message || 'Kon onderwerpen niet laden');
+      setAvailableTopics([]);
+    } finally {
+      setTopicsLoading(false);
+    }
+  }, [activeCourse, profile]);
 
-    const { data } = await supabase
+  const loadAttempts = useCallback(async () => {
+    if (!profile) return;
+    setAttemptsLoading(true);
+    setAttemptsError(null);
+    const { data, error } = await supabase
       .from('quiz_attempts')
-      .select('*')
+      .select('id, topics, difficulty, question_type, questions_data, answers, score_percentage, total_questions, created_at')
       .eq('student_id', profile.id)
       .order('created_at', { ascending: false })
-      .limit(5);
+      .limit(50);
 
-    if (data) {
-      setAttempts(data);
+    if (error) {
+      console.error('[QUIZ] loadAttempts error:', error);
+      // Detecteer ontbrekende migratie en geef een duidelijke instructie.
+      const isSchemaError = (error as any)?.code === '42703'
+        || /column .* does not exist/i.test(error.message || '');
+      setAttemptsError(
+        isSchemaError
+          ? 'De quiz-database is nog niet bijgewerkt naar het nieuwe model. ' +
+            'Je beheerder moet migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase toepassen. ' +
+            'Tot dat moment kun je nog wel quizzes genereren en oefenen, maar afgeronde pogingen worden nog niet bewaard.'
+          : error.message,
+      );
+      setAttempts([]);
+    } else {
+      setAttempts((data || []) as QuizAttemptRow[]);
     }
+    setAttemptsLoading(false);
+  }, [profile]);
+
+  const filteredTopics = useMemo(() => {
+    const q = topicSearch.trim().toLowerCase();
+    if (!q) return availableTopics;
+    return availableTopics.filter(t => t.name.toLowerCase().includes(q)
+      || (t.category || '').toLowerCase().includes(q));
+  }, [availableTopics, topicSearch]);
+
+  const selectedTopics = useMemo(
+    () => availableTopics.filter(t => selectedTopicIds.has(t.id)),
+    [availableTopics, selectedTopicIds],
+  );
+
+  const toggleTopic = (id: string) => {
+    setSelectedTopicIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+    if (setupValidationError) setSetupValidationError(null);
   };
 
   const handleStartQuiz = async () => {
-    setTopicError(null);
-    if (!topic.trim()) {
-      setTopicError('Voer een onderwerp in');
+    setSetupValidationError(null);
+    if (selectedTopicIds.size === 0) {
+      setSetupValidationError('Kies minstens één onderwerp.');
       return;
     }
 
@@ -106,18 +260,21 @@ export function QuizPage() {
     setRagSources([]);
     setFeedbackError(null);
     setContextStats(null);
+
+    const topicNames = selectedTopics.map(t => t.name);
+
     try {
       let ragContext: string | undefined;
       if (activeCourse !== null) {
         let chunks: Awaited<ReturnType<typeof searchRelevantChunks>> = [];
         try {
           chunks = await searchRelevantChunks(
-            topic,
+            topicNames.join(', '),
             ragSettings.quiz.similarity_threshold,
             ragSettings.quiz.match_count,
             'quiz',
             profile?.role || 'student',
-            activeCourse
+            activeCourse,
           );
         } catch (ragErr) {
           console.warn('[QUIZ] RAG search failed, generating without context:', ragErr);
@@ -130,27 +287,38 @@ export function QuizPage() {
           }
           setRagSources(chunks.map(c => ({ title: c.documentTitle, similarity: c.similarity })));
           setContextStats({ used: built.usedChunks, total: built.totalChunks, charTrimmed: built.charTrimmed });
-          if (built.truncated) {
-            console.log(`[QUIZ] Context capped: using ${built.usedChunks}/${built.totalChunks} chunks (${built.context.length} chars)`);
-          }
-          console.log(`[QUIZ] Using RAG context: ${chunks.length} chunks from active course`);
         }
       }
 
-      let generatedQuestions: QuizQuestion[];
+      let generated: QuizQuestion[];
       try {
-        generatedQuestions = await generateQuiz(topic, difficulty, numQuestions, ragContext, ragSettings.quiz.rag_strict_mode);
+        generated = await generateQuiz(
+          topicNames,
+          difficulty,
+          questionType,
+          numQuestions,
+          ragContext,
+          ragSettings.quiz.rag_strict_mode,
+        );
       } catch (llmErr) {
         console.error('[QUIZ] LLM call failed:', llmErr);
         setFeedbackError(llmErrorToDutch(llmErr));
         return;
       }
 
-      setQuestions(generatedQuestions);
-      setSelectedAnswers(new Array(generatedQuestions.length).fill(-1));
+      // Initialiseer antwoorden in de juiste shape
+      const init: QuizAnswer[] = generated.map(q => {
+        if (q.type === 'mcq') return { type: 'mcq', selectedIndex: -1, isCorrect: false } as MCQAnswer;
+        return { type: q.type, text: '', evaluation: null } as FreeTextAnswer;
+      });
+
+      setQuestions(generated);
+      setAnswers(init);
       setCurrentQuestion(0);
-      setState('ready');
       setShowExplanation(false);
+      setDraftText('');
+      setEvalError(null);
+      setState('ready');
     } catch (error) {
       console.error('Error generating quiz:', error);
       setFeedbackError({
@@ -162,260 +330,493 @@ export function QuizPage() {
     }
   };
 
-  const handleSelectAnswer = (answerIndex: number) => {
-    const newAnswers = [...selectedAnswers];
-    newAnswers[currentQuestion] = answerIndex;
-    setSelectedAnswers(newAnswers);
+  const goToQuestion = (idx: number) => {
+    setCurrentQuestion(idx);
+    const a = answers[idx];
+    if (!a) {
+      setShowExplanation(false);
+      setDraftText('');
+    } else if (a.type === 'mcq') {
+      setShowExplanation(a.selectedIndex !== -1);
+      setDraftText('');
+    } else {
+      setShowExplanation(a.evaluation !== null);
+      setDraftText(a.text || '');
+    }
+    setEvalError(null);
+  };
+
+  const handleSelectMCQ = (answerIndex: number) => {
+    const q = questions[currentQuestion] as MCQQuestion;
+    setAnswers(prev => {
+      const next = [...prev];
+      next[currentQuestion] = {
+        type: 'mcq',
+        selectedIndex: answerIndex,
+        isCorrect: answerIndex === q.correctAnswer,
+      };
+      return next;
+    });
     setShowExplanation(true);
+  };
+
+  const handleSubmitFreeText = async () => {
+    const q = questions[currentQuestion];
+    if (q.type === 'mcq') return;
+    const text = draftText.trim();
+    if (!text) {
+      setEvalError({ title: 'Schrijf eerst een antwoord voor je inlevert.' });
+      return;
+    }
+
+    setEvaluating(true);
+    setEvalError(null);
+    try {
+      const evaluation: AnswerEvaluation = q.type === 'open'
+        ? await evaluateOpenAnswer(q as OpenQuestion, text)
+        : await evaluateCasusAnswer(q as CasusQuestion, text);
+
+      setAnswers(prev => {
+        const next = [...prev];
+        next[currentQuestion] = { type: q.type, text, evaluation };
+        return next;
+      });
+      setShowExplanation(true);
+    } catch (err) {
+      console.error('[QUIZ] evaluation failed:', err);
+      setEvalError(llmErrorToDutch(err));
+    } finally {
+      setEvaluating(false);
+    }
   };
 
   const handleNextQuestion = () => {
     if (currentQuestion < questions.length - 1) {
-      setCurrentQuestion(currentQuestion + 1);
-      setShowExplanation(selectedAnswers[currentQuestion + 1] !== -1);
+      goToQuestion(currentQuestion + 1);
     } else {
-      handleFinishQuiz();
+      void handleFinishQuiz();
     }
   };
 
   const handlePreviousQuestion = () => {
-    if (currentQuestion > 0) {
-      setCurrentQuestion(currentQuestion - 1);
-      setShowExplanation(selectedAnswers[currentQuestion - 1] !== -1);
+    if (currentQuestion > 0) goToQuestion(currentQuestion - 1);
+  };
+
+  const computeScorePercentage = (qs: QuizQuestion[], ans: QuizAnswer[]): number => {
+    if (qs.length === 0) return 0;
+    let total = 0;
+    let count = 0;
+    for (let i = 0; i < qs.length; i++) {
+      const a = ans[i];
+      if (!a) continue;
+      if (a.type === 'mcq') { total += a.isCorrect ? 100 : 0; count++; }
+      else if (a.evaluation) { total += a.evaluation.score; count++; }
     }
+    if (count === 0) return 0;
+    return Math.round(total / count);
   };
 
   const handleFinishQuiz = async () => {
-    const score = selectedAnswers.filter(
-      (answer, index) => answer === questions[index].correctAnswer
-    ).length;
+    const scorePct = computeScorePercentage(questions, answers);
+    const correctCount = answers.filter(a => a && a.type === 'mcq' && a.isCorrect).length;
 
     if (profile) {
-      await supabase.from('quiz_attempts').insert({
+      const { error } = await supabase.from('quiz_attempts').insert({
         student_id: profile.id,
-        topic,
+        topics: selectedTopics.map(t => t.name),
         difficulty,
-        score,
-        total_questions: questions.length,
+        question_type: questionType,
         questions_data: questions,
-        answers: selectedAnswers
+        answers,
+        score: questionType === 'mcq' ? correctCount : scorePct,
+        total_questions: questions.length,
+        score_percentage: scorePct,
       });
+      if (error) {
+        console.error('[QUIZ] insert quiz_attempt failed:', error);
+        const isSchemaError = (error as any)?.code === '42703'
+          || /column .* does not exist/i.test(error.message || '');
+        // Niet blokkerend voor de UI — toon summary alsnog, maar geef hint.
+        setFeedbackError({
+          title: isSchemaError
+            ? 'Je quiz kon niet in je geschiedenis worden opgeslagen omdat de quiz-database nog niet is bijgewerkt naar het nieuwe model.'
+            : 'Je quiz kon niet in je geschiedenis worden opgeslagen.',
+          detail: isSchemaError
+            ? 'Vraag je beheerder om migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase toe te passen.'
+            : error.message,
+        });
+      }
     }
 
     setState('completed');
-    loadAttempts();
+    void loadAttempts();
   };
 
   const handleRestart = () => {
     setState('setup');
-    setTopic('');
-    setCurrentQuestion(0);
-    setSelectedAnswers([]);
     setQuestions([]);
+    setAnswers([]);
+    setCurrentQuestion(0);
     setShowExplanation(false);
+    setDraftText('');
     setRagSources([]);
     setFeedbackError(null);
     setContextStats(null);
-    setTopicError(null);
+    setEvalError(null);
+    setSetupValidationError(null);
+  };
+
+  const handleArchive = async (attemptId: string, generateSummary: boolean) => {
+    setArchiving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const authHeader = session ? `Bearer ${session.access_token}` : '';
+
+      const res = await fetch('/api/quiz/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+        body: JSON.stringify({ attemptId, generateSummary }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Verwijderen mislukt (${res.status})`);
+      }
+
+      const result = await res.json();
+      setAttempts(prev => prev.filter(a => a.id !== attemptId));
+      if (expandedAttemptId === attemptId) setExpandedAttemptId(null);
+      setArchiveDialog(null);
+
+      if (generateSummary && result.summaryFailed) {
+        alert('De quiz is verwijderd, maar de samenvatting kon niet in je leerdagboek worden opgeslagen. Probeer het later opnieuw.');
+      }
+    } catch (err: any) {
+      alert(`Fout bij verwijderen: ${err.message}`);
+    } finally {
+      setArchiving(false);
+    }
   };
 
   const currentQ = questions[currentQuestion];
-  const isAnswered = selectedAnswers[currentQuestion] !== -1;
-  const isCorrect = selectedAnswers[currentQuestion] === currentQ?.correctAnswer;
+  const currentAnswer = answers[currentQuestion];
 
+  // ────────────────────────────────────────────────────────────
+  // SETUP SCREEN
+  // ────────────────────────────────────────────────────────────
   if (state === 'setup') {
     return (
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="max-w-5xl mx-auto space-y-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz Module</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz</h1>
           <p className="text-gray-600">
-            Test je kennis met een AI-gegenereerde quiz over epidemiologie en biostatistiek
+            Kies één of meerdere onderwerpen en een vraagtype. De leerassistent genereert daar een quiz over,
+            beoordeelt jouw open antwoorden met feedback + feed forward, en zet de afgeronde quiz onderaan deze pagina.
           </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* SETUP LEFT COLUMN */}
           <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-200 p-6 space-y-6">
+            <h2 className="text-xl font-bold text-gray-900">Nieuwe quiz starten</h2>
+
+            {/* TOPICS */}
             <div>
-              <h2 className="text-xl font-bold text-gray-900 mb-4">Nieuwe Quiz Starten</h2>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Onderwerpen ({selectedTopicIds.size} geselecteerd)
+              </label>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Onderwerp
-                  </label>
-                  <input
-                    type="text"
-                    value={topic}
-                    onChange={(e) => { setTopic(e.target.value); if (topicError) setTopicError(null); }}
-                    placeholder="bijv. 'Cohort studies', 'P-waarden', 'Confounding'"
-                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all outline-none"
-                    data-testid="input-quiz-topic"
-                  />
-                  {topicError && (
-                    <p className="mt-2 text-sm text-red-600" data-testid="text-topic-error">{topicError}</p>
-                  )}
-                </div>
+              {topicsLoading && (
+                <p className="text-sm text-gray-500 flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Onderwerpen laden…
+                </p>
+              )}
 
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Moeilijkheidsgraad
-                  </label>
-                  <div className="grid grid-cols-3 gap-3">
-                    {(['easy', 'medium', 'hard'] as const).map((level) => (
-                      <button
-                        key={level}
-                        onClick={() => setDifficulty(level)}
-                        className={`px-4 py-3 rounded-lg font-medium transition-all ${
-                          difficulty === level
-                            ? 'bg-gradient-to-r from-cyan-500 to-cyan-600 text-white shadow-lg'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
-                      >
-                        {level === 'easy' ? 'Makkelijk' : level === 'medium' ? 'Gemiddeld' : 'Moeilijk'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Aantal vragen: {numQuestions}
-                  </label>
-                  <input
-                    type="range"
-                    min="3"
-                    max="10"
-                    value={numQuestions}
-                    onChange={(e) => setNumQuestions(parseInt(e.target.value))}
-                    className="w-full"
-                  />
-                  <div className="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>3</span>
-                    <span>10</span>
-                  </div>
-                </div>
-
-                <div>
-                  <RAGStatusIndicator strictMode={ragSettings.quiz.rag_strict_mode} />
-                </div>
-
-                <button
-                  onClick={handleStartQuiz}
-                  disabled={loading || !topic.trim()}
-                  className="w-full px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  data-testid="button-generate-quiz"
-                >
-                  {loading ? (
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <>
-                      <Play className="w-5 h-5" />
-                      Quiz Genereren en Starten
-                    </>
-                  )}
-                </button>
-
-                {feedbackError && !loading && (
-                  <div
-                    className="bg-red-50 border border-red-200 rounded-2xl p-5"
-                    data-testid="block-quiz-error"
+              {!topicsLoading && topicsError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {topicsError}
+                  <button
+                    onClick={() => void loadTopics()}
+                    className="ml-2 underline hover:no-underline"
+                    data-testid="button-topics-retry"
                   >
-                    <div className="flex items-start gap-3">
-                      <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-semibold text-red-900 mb-1">
-                          Quiz kon niet gegenereerd worden
-                        </h3>
-                        <p className="text-red-800 text-sm mb-2" data-testid="text-quiz-error-title">
-                          {feedbackError.title}
-                        </p>
-                        {feedbackError.detail && (
-                          <details className="mb-3 group" data-testid="details-quiz-error">
-                            <summary className="text-sm text-red-700 cursor-pointer select-none hover:underline">
-                              Technische details
-                            </summary>
-                            <p
-                              className="mt-2 text-xs text-red-700 bg-red-100/60 border border-red-200 rounded-md px-3 py-2 whitespace-pre-wrap font-mono"
-                              data-testid="text-quiz-error-detail"
-                            >
-                              {feedbackError.detail}
-                            </p>
-                          </details>
-                        )}
-                        {contextStats && contextStats.total > 0 && (
-                          <p
-                            className="text-xs text-red-700 mb-3"
-                            data-testid="text-quiz-context-stats-error"
-                          >
-                            {contextStats.used < contextStats.total
-                              ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
-                              : contextStats.charTrimmed
-                                ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
-                                : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`}
-                          </p>
-                        )}
-                        <button
-                          onClick={handleStartQuiz}
-                          disabled={loading || !topic.trim()}
-                          className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed font-medium text-sm"
-                          data-testid="button-quiz-retry"
-                        >
-                          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                          Probeer opnieuw
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <div className="bg-white rounded-2xl border border-gray-200 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
-                <Clock className="w-5 h-5 text-cyan-600" />
-                Recente Pogingen
-              </h3>
-              {attempts.length === 0 ? (
-                <p className="text-sm text-gray-500">Nog geen pogingen</p>
-              ) : (
-                <div className="space-y-3">
-                  {attempts.map((attempt) => (
-                    <div key={attempt.id} className="p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-medium text-gray-900 line-clamp-1">
-                          {attempt.topic}
-                        </span>
-                        <span className="text-xs px-2 py-1 rounded-full bg-cyan-100 text-cyan-700 font-semibold">
-                          {attempt.difficulty}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-600">
-                          Score: {attempt.score}/{attempt.total_questions}
-                        </span>
-                        <span className={`font-semibold ${
-                          (attempt.score / attempt.total_questions) >= 0.7
-                            ? 'text-green-600'
-                            : 'text-orange-600'
-                        }`}>
-                          {Math.round((attempt.score / attempt.total_questions) * 100)}%
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    Opnieuw proberen
+                  </button>
                 </div>
               )}
+
+              {!topicsLoading && !topicsError && availableTopics.length === 0 && (
+                <p className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                  Voor deze cursus zijn nog geen onderwerpen beschikbaar. Vraag je docent om eerst begrippen toe te voegen.
+                </p>
+              )}
+
+              {!topicsLoading && !topicsError && availableTopics.length > 0 && (
+                <>
+                  {topicsSource === 'global' && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2">
+                      Voor de actieve cursus zijn nog geen specifieke onderwerpen — je ziet nu de algemene lijst.
+                    </p>
+                  )}
+
+                  <div className="relative mb-2">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      value={topicSearch}
+                      onChange={e => setTopicSearch(e.target.value)}
+                      placeholder="Zoek in onderwerpen…"
+                      className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-cyan-500 focus:border-transparent outline-none text-sm"
+                      data-testid="input-topic-search"
+                    />
+                  </div>
+
+                  <div
+                    className="max-h-60 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100 bg-white"
+                    data-testid="list-quiz-topics"
+                  >
+                    {filteredTopics.length === 0 ? (
+                      <div className="p-3 text-sm text-gray-500">Geen onderwerpen gevonden voor "{topicSearch}".</div>
+                    ) : filteredTopics.map(t => {
+                      const checked = selectedTopicIds.has(t.id);
+                      return (
+                        <label
+                          key={t.id}
+                          className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50 ${checked ? 'bg-cyan-50' : ''}`}
+                          data-testid={`row-topic-${t.id}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleTopic(t.id)}
+                            className="w-4 h-4 accent-cyan-600"
+                            data-testid={`checkbox-topic-${t.id}`}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium text-gray-900 truncate">{t.name}</div>
+                            {t.category && <div className="text-xs text-gray-500">{t.category}</div>}
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  {selectedTopics.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {selectedTopics.map(t => (
+                        <span
+                          key={t.id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-800 text-xs"
+                          data-testid={`chip-selected-topic-${t.id}`}
+                        >
+                          {t.name}
+                          <button
+                            onClick={() => toggleTopic(t.id)}
+                            className="hover:text-cyan-900"
+                            aria-label={`Verwijder ${t.name}`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* QUESTION TYPE */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Vraagtype</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {(Object.keys(QUESTION_TYPE_META) as QuestionType[]).map(t => {
+                  const meta = QUESTION_TYPE_META[t];
+                  const Icon = meta.icon;
+                  const active = questionType === t;
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setQuestionType(t)}
+                      className={`text-left p-3 rounded-xl border-2 transition-all ${
+                        active
+                          ? 'border-cyan-500 bg-cyan-50'
+                          : 'border-gray-200 hover:border-cyan-300 hover:bg-gray-50'
+                      }`}
+                      data-testid={`button-question-type-${t}`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Icon className={`w-5 h-5 ${active ? 'text-cyan-700' : 'text-gray-600'}`} />
+                        <span className="font-semibold text-gray-900">{meta.label}</span>
+                      </div>
+                      <div className="text-xs text-gray-600">{meta.subtitle}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* DIFFICULTY */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">Moeilijkheidsgraad</label>
+              <div className="grid grid-cols-3 gap-3">
+                {(['easy', 'medium', 'hard'] as const).map(level => (
+                  <button
+                    key={level}
+                    onClick={() => setDifficulty(level)}
+                    className={`px-4 py-3 rounded-lg font-medium transition-all ${
+                      difficulty === level
+                        ? 'bg-gradient-to-r from-cyan-500 to-cyan-600 text-white shadow-lg'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                    data-testid={`button-difficulty-${level}`}
+                  >
+                    {difficultyDutch(level)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* NUM QUESTIONS */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Aantal vragen: {numQuestions}
+              </label>
+              <input
+                type="range"
+                min={3}
+                max={questionType === 'mcq' ? 10 : 6}
+                value={numQuestions}
+                onChange={e => setNumQuestions(parseInt(e.target.value))}
+                className="w-full"
+                data-testid="input-num-questions"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>3</span>
+                <span>{questionType === 'mcq' ? 10 : 6}</span>
+              </div>
+              {questionType !== 'mcq' && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Voor open vragen en casussen blijft het aantal beperkt — elke vraag wordt door het taalmodel beoordeeld.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <RAGStatusIndicator strictMode={ragSettings.quiz.rag_strict_mode} />
+            </div>
+
+            {setupValidationError && (
+              <p className="text-sm text-red-600" data-testid="text-setup-validation-error">
+                {setupValidationError}
+              </p>
+            )}
+
+            <button
+              onClick={handleStartQuiz}
+              disabled={loading || selectedTopicIds.size === 0}
+              className="w-full px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              data-testid="button-generate-quiz"
+            >
+              {loading ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <>
+                  <Play className="w-5 h-5" />
+                  Quiz genereren en starten
+                </>
+              )}
+            </button>
+
+            {feedbackError && !loading && (
+              <div className="bg-red-50 border border-red-200 rounded-2xl p-5" data-testid="block-quiz-error">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-base font-semibold text-red-900 mb-1">
+                      Quiz kon niet gegenereerd worden
+                    </h3>
+                    <p className="text-red-800 text-sm mb-2" data-testid="text-quiz-error-title">
+                      {feedbackError.title}
+                    </p>
+                    {feedbackError.detail && (
+                      <details className="mb-3 group" data-testid="details-quiz-error">
+                        <summary className="text-sm text-red-700 cursor-pointer select-none hover:underline">
+                          Technische details
+                        </summary>
+                        <p
+                          className="mt-2 text-xs text-red-700 bg-red-100/60 border border-red-200 rounded-md px-3 py-2 whitespace-pre-wrap font-mono"
+                          data-testid="text-quiz-error-detail"
+                        >
+                          {feedbackError.detail}
+                        </p>
+                      </details>
+                    )}
+                    {contextStats && contextStats.total > 0 && (
+                      <p className="text-xs text-red-700 mb-3" data-testid="text-quiz-context-stats-error">
+                        {contextStats.used < contextStats.total
+                          ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
+                          : contextStats.charTrimmed
+                            ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
+                            : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`}
+                      </p>
+                    )}
+                    <button
+                      onClick={handleStartQuiz}
+                      disabled={loading || selectedTopicIds.size === 0}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed font-medium text-sm"
+                      data-testid="button-quiz-retry"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                      Probeer opnieuw
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT COLUMN: short hint card */}
+          <div className="space-y-6">
+            <div className="bg-white rounded-2xl border border-gray-200 p-6">
+              <h3 className="text-lg font-bold text-gray-900 mb-2">Hoe werkt het?</h3>
+              <ul className="text-sm text-gray-700 space-y-2 list-disc pl-4">
+                <li>Bij <strong>meerkeuze</strong> krijg je per vraag direct correct/incorrect te zien.</li>
+                <li>Bij <strong>open vragen</strong> typ je een antwoord; je krijgt feedback, feed forward en een score van 0–100.</li>
+                <li>Bij <strong>casussen</strong> lees je eerst een korte probleemschets, en daarna geldt hetzelfde als bij open vragen.</li>
+                <li>Afgeronde quizzes verschijnen onderaan deze pagina. Verwijderen kan altijd, eventueel met een notitie in je leerdagboek.</li>
+              </ul>
             </div>
           </div>
         </div>
+
+        {/* RESULTATENLIJST onderaan */}
+        <ResultsList
+          attempts={attempts}
+          loading={attemptsLoading}
+          error={attemptsError}
+          expandedId={expandedAttemptId}
+          onToggleExpand={(id) => setExpandedAttemptId(prev => prev === id ? null : id)}
+          onAskDelete={(row) => setArchiveDialog({ id: row.id, label: topicsLabelOf(row) })}
+        />
+
+        {/* ARCHIVE DIALOG */}
+        {archiveDialog && (
+          <ArchiveDialog
+            label={archiveDialog.label}
+            archiving={archiving}
+            onClose={() => !archiving && setArchiveDialog(null)}
+            onConfirm={(withSummary) => handleArchive(archiveDialog.id, withSummary)}
+          />
+        )}
       </div>
     );
   }
 
+  // ────────────────────────────────────────────────────────────
+  // READY SCREEN
+  // ────────────────────────────────────────────────────────────
   if (state === 'ready') {
-    const difficultyLabel = difficulty === 'easy' ? 'Makkelijk' : difficulty === 'medium' ? 'Gemiddeld' : 'Moeilijk';
+    const topicsText = selectedTopics.map(t => t.name).join(', ');
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="bg-white rounded-2xl border border-gray-200 p-8 space-y-6 text-center">
@@ -425,7 +826,7 @@ export function QuizPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 mb-1">Quiz klaar!</h1>
             <p className="text-gray-600">
-              {questions.length} vragen over <strong>{topic}</strong> — {difficultyLabel} niveau
+              {questions.length} {QUESTION_TYPE_META[questionType].label.toLowerCase()}-vragen over <strong>{topicsText}</strong> — {difficultyDutch(difficulty)} niveau
             </p>
           </div>
           {ragSources.length > 0 && (
@@ -439,12 +840,12 @@ export function QuizPage() {
               data-testid="text-quiz-context-stats"
             >
               {contextStats.used < contextStats.total
-                ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`
+                ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst).`
                 : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
             </p>
           )}
           <button
-            onClick={() => setState('active')}
+            onClick={() => { setState('active'); goToQuestion(0); }}
             data-testid="button-start-quiz"
             className="inline-flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg"
           >
@@ -456,14 +857,23 @@ export function QuizPage() {
     );
   }
 
+  // ────────────────────────────────────────────────────────────
+  // ACTIVE SCREEN
+  // ────────────────────────────────────────────────────────────
   if (state === 'active' && currentQ) {
+    const isMCQ = currentQ.type === 'mcq';
+    const isFreeText = currentQ.type === 'open' || currentQ.type === 'casus';
+    const isAnsweredMCQ = currentAnswer?.type === 'mcq' && currentAnswer.selectedIndex !== -1;
+    const isEvaluatedFree = currentAnswer && currentAnswer.type !== 'mcq' && currentAnswer.evaluation !== null;
+    const canGoNext = isMCQ ? isAnsweredMCQ : isEvaluatedFree;
+
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{topic}</h1>
+            <h1 className="text-2xl font-bold text-gray-900">{selectedTopics.map(t => t.name).join(', ')}</h1>
             <p className="text-gray-600 text-sm">
-              {difficulty === 'easy' ? 'Makkelijk' : difficulty === 'medium' ? 'Gemiddeld' : 'Moeilijk'} niveau
+              {QUESTION_TYPE_META[questionType].label} — {difficultyDutch(difficulty)} niveau
             </p>
             {ragSources.length > 0 && (
               <p className="text-xs text-purple-700 mt-1 flex items-center gap-1">
@@ -477,7 +887,7 @@ export function QuizPage() {
               {currentQuestion + 1} / {questions.length}
             </div>
             <div className="text-sm text-gray-600">
-              {selectedAnswers.filter(a => a !== -1).length} beantwoord
+              {answers.filter(a => (a.type === 'mcq' && a.selectedIndex !== -1) || (a.type !== 'mcq' && a.evaluation)).length} beantwoord
             </div>
           </div>
         </div>
@@ -490,47 +900,53 @@ export function QuizPage() {
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-200 p-8 space-y-6">
-          <div>
-            <div className="flex items-start gap-3 mb-6">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center text-white font-bold flex-shrink-0">
-                {currentQuestion + 1}
-              </div>
-              <div className="flex-1">
-                <h2 className="text-xl font-semibold text-gray-900">{currentQ.question}</h2>
-              </div>
+          {/* Casus context bovenaan */}
+          {currentQ.type === 'casus' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900" data-testid="block-casus-context">
+              <div className="font-semibold mb-1 text-amber-800">Casus</div>
+              <p className="whitespace-pre-wrap">{currentQ.context}</p>
             </div>
+          )}
 
+          {/* Vraagregel */}
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center text-white font-bold flex-shrink-0">
+              {currentQuestion + 1}
+            </div>
+            <div className="flex-1">
+              <h2 className="text-xl font-semibold text-gray-900" data-testid="text-current-question">{currentQ.question}</h2>
+            </div>
+          </div>
+
+          {/* MCQ opties */}
+          {isMCQ && (
             <div className="space-y-3">
-              {currentQ.options.map((option, index) => {
-                const isSelected = selectedAnswers[currentQuestion] === index;
-                const isCorrectAnswer = index === currentQ.correctAnswer;
-                const showCorrect = isAnswered && isCorrectAnswer;
-                const showWrong = isAnswered && isSelected && !isCorrectAnswer;
+              {(currentQ as MCQQuestion).options.map((option, index) => {
+                const a = currentAnswer as MCQAnswer | undefined;
+                const isSelected = a?.selectedIndex === index;
+                const isCorrectAnswer = index === (currentQ as MCQQuestion).correctAnswer;
+                const showCorrect = isAnsweredMCQ && isCorrectAnswer;
+                const showWrong = isAnsweredMCQ && isSelected && !isCorrectAnswer;
 
                 return (
                   <button
                     key={index}
-                    onClick={() => !isAnswered && handleSelectAnswer(index)}
-                    disabled={isAnswered}
+                    onClick={() => !isAnsweredMCQ && handleSelectMCQ(index)}
+                    disabled={isAnsweredMCQ}
+                    data-testid={`button-mcq-option-${index}`}
                     className={`w-full text-left p-4 rounded-xl border-2 transition-all ${
-                      showCorrect
-                        ? 'border-green-500 bg-green-50'
-                        : showWrong
-                        ? 'border-red-500 bg-red-50'
-                        : isSelected
-                        ? 'border-cyan-500 bg-cyan-50'
+                      showCorrect ? 'border-green-500 bg-green-50'
+                        : showWrong ? 'border-red-500 bg-red-50'
+                        : isSelected ? 'border-cyan-500 bg-cyan-50'
                         : 'border-gray-200 hover:border-cyan-300 hover:bg-gray-50'
-                    } ${isAnswered ? 'cursor-default' : 'cursor-pointer'}`}
+                    } ${isAnsweredMCQ ? 'cursor-default' : 'cursor-pointer'}`}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold ${
-                          showCorrect
-                            ? 'bg-green-600 text-white'
-                            : showWrong
-                            ? 'bg-red-600 text-white'
-                            : isSelected
-                            ? 'bg-cyan-600 text-white'
+                          showCorrect ? 'bg-green-600 text-white'
+                            : showWrong ? 'bg-red-600 text-white'
+                            : isSelected ? 'bg-cyan-600 text-white'
                             : 'bg-gray-200 text-gray-700'
                         }`}>
                           {String.fromCharCode(65 + index)}
@@ -544,31 +960,82 @@ export function QuizPage() {
                 );
               })}
             </div>
-          </div>
+          )}
 
-          {showExplanation && (
-            <div className={`p-4 rounded-xl border-2 ${
-              isCorrect ? 'border-green-200 bg-green-50' : 'border-orange-200 bg-orange-50'
-            }`}>
+          {/* MCQ uitleg */}
+          {isMCQ && showExplanation && currentAnswer?.type === 'mcq' && (
+            <div className={`p-4 rounded-xl border-2 ${currentAnswer.isCorrect ? 'border-green-200 bg-green-50' : 'border-orange-200 bg-orange-50'}`}>
               <div className="flex items-start gap-3">
-                {isCorrect ? (
-                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                ) : (
-                  <XCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
-                )}
+                {currentAnswer.isCorrect
+                  ? <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                  : <XCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />}
                 <div>
-                  <p className={`font-semibold mb-1 ${
-                    isCorrect ? 'text-green-900' : 'text-orange-900'
-                  }`}>
-                    {isCorrect ? 'Correct!' : 'Helaas, dat is niet juist'}
+                  <p className={`font-semibold mb-1 ${currentAnswer.isCorrect ? 'text-green-900' : 'text-orange-900'}`}>
+                    {currentAnswer.isCorrect ? 'Correct!' : 'Helaas, dat is niet juist'}
                   </p>
-                  <p className={`text-sm ${
-                    isCorrect ? 'text-green-800' : 'text-orange-800'
-                  }`}>
-                    {currentQ.explanation}
+                  <p className={`text-sm ${currentAnswer.isCorrect ? 'text-green-800' : 'text-orange-800'}`}>
+                    {(currentQ as MCQQuestion).explanation}
                   </p>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Free-text antwoordveld */}
+          {isFreeText && (
+            <div className="space-y-3">
+              <textarea
+                value={draftText}
+                onChange={e => setDraftText(e.target.value)}
+                disabled={isEvaluatedFree || evaluating}
+                placeholder="Schrijf hier jouw antwoord in volledige zinnen…"
+                rows={6}
+                className="w-full p-3 rounded-xl border-2 border-gray-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-200 outline-none disabled:bg-gray-50 disabled:text-gray-700 text-sm resize-y"
+                data-testid="textarea-free-answer"
+              />
+              {!isEvaluatedFree && (
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleSubmitFreeText}
+                    disabled={evaluating || !draftText.trim()}
+                    className="px-6 py-2.5 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    data-testid="button-submit-free-answer"
+                  >
+                    {evaluating ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                    Antwoord inleveren
+                  </button>
+                  {evaluating && <span className="text-sm text-gray-500">Bezig met beoordelen…</span>}
+                </div>
+              )}
+
+              {evalError && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4" data-testid="block-eval-error">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-red-900">Beoordeling mislukt</p>
+                      <p className="text-sm text-red-800 mb-2">{evalError.title}</p>
+                      {evalError.detail && (
+                        <details className="text-xs text-red-700">
+                          <summary className="cursor-pointer hover:underline">Technische details</summary>
+                          <p className="mt-1 font-mono whitespace-pre-wrap bg-red-100/60 rounded-md px-2 py-1">{evalError.detail}</p>
+                        </details>
+                      )}
+                      <button
+                        onClick={handleSubmitFreeText}
+                        className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
+                        data-testid="button-eval-retry"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" /> Opnieuw proberen
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {isEvaluatedFree && currentAnswer && currentAnswer.type !== 'mcq' && currentAnswer.evaluation && (
+                <FreeTextEvaluationBlock evaluation={currentAnswer.evaluation} modelAnswer={(currentQ as OpenQuestion | CasusQuestion).modelAnswer} />
+              )}
             </div>
           )}
         </div>
@@ -578,13 +1045,15 @@ export function QuizPage() {
             onClick={handlePreviousQuestion}
             disabled={currentQuestion === 0}
             className="px-6 py-3 bg-gray-200 text-gray-700 font-semibold rounded-xl hover:bg-gray-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="button-prev-question"
           >
             Vorige
           </button>
           <button
             onClick={handleNextQuestion}
-            disabled={!isAnswered}
+            disabled={!canGoNext}
             className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="button-next-question"
           >
             {currentQuestion === questions.length - 1 ? 'Afronden' : 'Volgende'}
           </button>
@@ -593,55 +1062,53 @@ export function QuizPage() {
     );
   }
 
+  // ────────────────────────────────────────────────────────────
+  // COMPLETED SCREEN
+  // ────────────────────────────────────────────────────────────
   if (state === 'completed') {
-    const score = selectedAnswers.filter(
-      (answer, index) => answer === questions[index].correctAnswer
-    ).length;
-    const percentage = Math.round((score / questions.length) * 100);
+    const percentage = computeScorePercentage(questions, answers);
     const passed = percentage >= 70;
+    const topicsText = selectedTopics.map(t => t.name).join(', ');
 
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center space-y-6">
           <div className={`w-24 h-24 mx-auto rounded-full flex items-center justify-center ${
-            passed
-              ? 'bg-gradient-to-br from-green-500 to-emerald-600'
-              : 'bg-gradient-to-br from-orange-500 to-orange-600'
+            passed ? 'bg-gradient-to-br from-green-500 to-emerald-600' : 'bg-gradient-to-br from-orange-500 to-orange-600'
           }`}>
             <Award className="w-12 h-12 text-white" />
           </div>
 
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz Voltooid!</h1>
-            <p className="text-gray-600">Je hebt de quiz over "{topic}" afgerond</p>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz voltooid!</h1>
+            <p className="text-gray-600">Je hebt de quiz over "{topicsText}" afgerond</p>
           </div>
 
           <div className="inline-block px-8 py-6 bg-gray-50 rounded-2xl">
-            <div className="text-6xl font-bold text-gray-900 mb-2">{percentage}%</div>
-            <div className="text-gray-600">
-              {score} van {questions.length} correct
-            </div>
+            <div className="text-6xl font-bold text-gray-900 mb-2" data-testid="text-final-score">{percentage}%</div>
+            <div className="text-gray-600">{questions.length} vragen — {QUESTION_TYPE_META[questionType].label}</div>
           </div>
 
-          <div className={`p-4 rounded-xl ${
-            passed ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'
-          }`}>
-            <p className={`font-semibold ${
-              passed ? 'text-green-900' : 'text-orange-900'
-            }`}>
-              {passed
-                ? 'Goed gedaan! Je hebt de quiz succesvol afgerond.'
-                : 'Blijf oefenen! Je hebt minimaal 70% nodig om te slagen.'}
+          <div className={`p-4 rounded-xl ${passed ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
+            <p className={`font-semibold ${passed ? 'text-green-900' : 'text-orange-900'}`}>
+              {passed ? 'Goed gedaan! Je hebt de quiz succesvol afgerond.' : 'Blijf oefenen! Je hebt minimaal 70% nodig om te slagen.'}
             </p>
           </div>
+
+          {feedbackError && (
+            <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2 text-left">
+              {feedbackError.title}{feedbackError.detail ? ` — ${feedbackError.detail}` : ''}
+            </p>
+          )}
 
           <div className="flex gap-4 justify-center">
             <button
               onClick={handleRestart}
               className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg flex items-center gap-2"
+              data-testid="button-new-quiz"
             >
               <RotateCcw className="w-5 h-5" />
-              Nieuwe Quiz
+              Nieuwe quiz
             </button>
           </div>
         </div>
@@ -649,48 +1116,12 @@ export function QuizPage() {
         <div className="bg-white rounded-2xl border border-gray-200 p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
             <TrendingUp className="w-6 h-6 text-cyan-600" />
-            Antwoorden Overzicht
+            Antwoordenoverzicht
           </h2>
           <div className="space-y-4">
-            {questions.map((q, index) => {
-              const userAnswer = selectedAnswers[index];
-              const isCorrect = userAnswer === q.correctAnswer;
-
-              return (
-                <div key={index} className={`p-4 rounded-xl border-2 ${
-                  isCorrect ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'
-                }`}>
-                  <div className="flex items-start gap-3">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 ${
-                      isCorrect ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
-                    }`}>
-                      {index + 1}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-gray-900 mb-2">{q.question}</p>
-                      <div className="space-y-1 text-sm">
-                        <p className={isCorrect ? 'text-green-700' : 'text-red-700'}>
-                          <strong>Jouw antwoord:</strong> {q.options[userAnswer]}
-                        </p>
-                        {!isCorrect && (
-                          <p className="text-green-700">
-                            <strong>Correct antwoord:</strong> {q.options[q.correctAnswer]}
-                          </p>
-                        )}
-                        <p className="text-gray-700 mt-2">
-                          <strong>Uitleg:</strong> {q.explanation}
-                        </p>
-                      </div>
-                    </div>
-                    {isCorrect ? (
-                      <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" />
-                    ) : (
-                      <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {questions.map((q, index) => (
+              <QuestionReviewCard key={index} index={index} question={q} answer={answers[index]} />
+            ))}
           </div>
           {ragSources.length > 0 && (
             <div className="mt-2">
@@ -703,4 +1134,262 @@ export function QuizPage() {
   }
 
   return null;
+}
+
+// ────────────────────────────────────────────────────────────
+// HELPER COMPONENTS (in dezelfde file conform fullstack-js skill)
+// ────────────────────────────────────────────────────────────
+
+function FreeTextEvaluationBlock({ evaluation, modelAnswer }: { evaluation: AnswerEvaluation; modelAnswer?: string }) {
+  const passed = evaluation.score >= 70;
+  return (
+    <div className={`rounded-xl border-2 p-4 space-y-3 ${passed ? 'border-green-200 bg-green-50' : 'border-orange-200 bg-orange-50'}`} data-testid="block-free-evaluation">
+      <div className="flex items-center justify-between">
+        <div className={`text-sm font-semibold ${passed ? 'text-green-900' : 'text-orange-900'}`}>
+          Beoordeling
+        </div>
+        <div
+          className={`px-3 py-1 rounded-full text-sm font-bold ${passed ? 'bg-green-600 text-white' : 'bg-orange-600 text-white'}`}
+          data-testid="text-eval-score"
+        >
+          {evaluation.score}/100
+        </div>
+      </div>
+      <div>
+        <div className="text-xs uppercase tracking-wide text-gray-600 mb-1">Feedback</div>
+        <p className="text-sm text-gray-900 whitespace-pre-wrap" data-testid="text-eval-feedback">{evaluation.feedback}</p>
+      </div>
+      <div>
+        <div className="text-xs uppercase tracking-wide text-gray-600 mb-1">Feed forward</div>
+        <p className="text-sm text-gray-900 whitespace-pre-wrap" data-testid="text-eval-feedforward">{evaluation.feedforward}</p>
+      </div>
+      {modelAnswer && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-gray-700 hover:underline">Voorbeeld-antwoord van het model</summary>
+          <p className="mt-2 text-gray-800 whitespace-pre-wrap bg-white/70 border border-gray-200 rounded-md p-2">{modelAnswer}</p>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function QuestionReviewCard({ index, question, answer }: { index: number; question: QuizQuestion; answer: QuizAnswer | undefined }) {
+  if (question.type === 'mcq') {
+    const a = answer && answer.type === 'mcq' ? answer : null;
+    const isCorrect = !!a?.isCorrect;
+    return (
+      <div className={`p-4 rounded-xl border-2 ${isCorrect ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+        <div className="flex items-start gap-3">
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 ${isCorrect ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+            {index + 1}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-gray-900 mb-2">{question.question}</p>
+            <div className="space-y-1 text-sm">
+              <p className={isCorrect ? 'text-green-700' : 'text-red-700'}>
+                <strong>Jouw antwoord:</strong> {a && a.selectedIndex >= 0 ? question.options[a.selectedIndex] : '(geen antwoord)'}
+              </p>
+              {!isCorrect && (
+                <p className="text-green-700">
+                  <strong>Correct antwoord:</strong> {question.options[question.correctAnswer]}
+                </p>
+              )}
+              <p className="text-gray-700 mt-2"><strong>Uitleg:</strong> {question.explanation}</p>
+            </div>
+          </div>
+          {isCorrect ? <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" /> : <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
+        </div>
+      </div>
+    );
+  }
+
+  const a = answer && answer.type !== 'mcq' ? answer : null;
+  const ev = a?.evaluation;
+  const passed = ev ? ev.score >= 70 : false;
+  return (
+    <div className={`p-4 rounded-xl border-2 ${ev ? (passed ? 'border-green-200 bg-green-50' : 'border-orange-200 bg-orange-50') : 'border-gray-200 bg-gray-50'}`}>
+      <div className="flex items-start gap-3">
+        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 ${ev ? (passed ? 'bg-green-600 text-white' : 'bg-orange-600 text-white') : 'bg-gray-400 text-white'}`}>
+          {index + 1}
+        </div>
+        <div className="flex-1 min-w-0">
+          {question.type === 'casus' && (
+            <p className="text-xs italic text-gray-600 mb-1 whitespace-pre-wrap"><strong>Casus:</strong> {question.context}</p>
+          )}
+          <p className="font-semibold text-gray-900 mb-2">{question.question}</p>
+          <div className="space-y-1 text-sm">
+            <p className="text-gray-800"><strong>Jouw antwoord:</strong> {(a?.text || '(geen antwoord)').trim()}</p>
+            {ev && (
+              <>
+                <p className="text-gray-800"><strong>Score:</strong> {ev.score}/100</p>
+                <p className="text-gray-800"><strong>Feedback:</strong> {ev.feedback}</p>
+                <p className="text-gray-800"><strong>Feed forward:</strong> {ev.feedforward}</p>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultsList({
+  attempts, loading, error, expandedId, onToggleExpand, onAskDelete,
+}: {
+  attempts: QuizAttemptRow[];
+  loading: boolean;
+  error: string | null;
+  expandedId: string | null;
+  onToggleExpand: (id: string) => void;
+  onAskDelete: (row: QuizAttemptRow) => void;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 p-6" data-testid="block-results-list">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-cyan-600" />
+          Jouw afgeronde quizzes
+        </h2>
+        <span className="text-sm text-gray-500">{attempts.length} {attempts.length === 1 ? 'quiz' : 'quizzes'}</span>
+      </div>
+
+      {loading && <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Laden…</p>}
+      {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</p>}
+
+      {!loading && !error && attempts.length === 0 && (
+        <p className="text-sm text-gray-500">Je hebt nog geen quizzes afgerond. Start hierboven je eerste quiz.</p>
+      )}
+
+      {!loading && !error && attempts.length > 0 && (
+        <ul className="divide-y divide-gray-200">
+          {attempts.map(row => {
+            const expanded = expandedId === row.id;
+            const score = row.score_percentage;
+            return (
+              <li key={row.id} className="py-3" data-testid={`row-attempt-${row.id}`}>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => onToggleExpand(row.id)}
+                    className="flex-1 text-left flex items-center gap-3 hover:bg-gray-50 -mx-2 px-2 py-2 rounded-lg"
+                    data-testid={`button-expand-attempt-${row.id}`}
+                  >
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0 ${
+                      score == null ? 'bg-gray-400' : score >= 70 ? 'bg-green-600' : 'bg-orange-500'
+                    }`}>
+                      {score == null ? '–' : `${score}%`}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-gray-900 truncate">{topicsLabelOf(row)}</div>
+                      <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
+                        <Calendar className="w-3 h-3" /> {formatDateTime(row.created_at)}
+                        <span>•</span>
+                        <span>{questionTypeDutch(row.question_type)}</span>
+                        <span>•</span>
+                        <span>{difficultyDutch(row.difficulty)}</span>
+                        <span>•</span>
+                        <span>{row.total_questions || 0} vragen</span>
+                      </div>
+                    </div>
+                    {expanded ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
+                  </button>
+                  <button
+                    onClick={() => onAskDelete(row)}
+                    className="p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50"
+                    title="Verwijder en eventueel notitie in leerdagboek opslaan"
+                    data-testid={`button-delete-attempt-${row.id}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {expanded && (
+                  <div className="mt-3 pl-13 ml-0 space-y-3" data-testid={`block-attempt-detail-${row.id}`}>
+                    {(row.questions_data || []).map((q, idx) => (
+                      <QuestionReviewCard
+                        key={idx}
+                        index={idx}
+                        question={q}
+                        answer={(row.answers || [])[idx]}
+                      />
+                    ))}
+                    {(!row.questions_data || row.questions_data.length === 0) && (
+                      <p className="text-sm text-gray-500">Geen detailgegevens beschikbaar voor deze quiz.</p>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ArchiveDialog({
+  label, archiving, onClose, onConfirm,
+}: {
+  label: string;
+  archiving: boolean;
+  onClose: () => void;
+  onConfirm: (withSummary: boolean) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-green-100 rounded-xl">
+            <BookText className="w-5 h-5 text-green-700" />
+          </div>
+          <h2 className="text-lg font-semibold text-gray-900">Verplaats naar leerdagboek</h2>
+          <button
+            onClick={onClose}
+            className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
+            data-testid="btn-quiz-archive-cancel"
+            disabled={archiving}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-2">
+          Je staat op het punt de quiz <strong>"{label}"</strong> te verwijderen.
+        </p>
+        <p className="text-sm text-gray-600 mb-6">
+          Wil je dat de leerassistent eerst een formatieve samenvatting van deze quiz opslaat in je leerdagboek?
+          Die samenvatting bevat jouw resultaten, feedback en feed forward, en kun je later teruglezen om op te reflecteren.
+        </p>
+
+        <div className="flex flex-col gap-3">
+          <button
+            data-testid="btn-quiz-archive-with-summary"
+            onClick={() => onConfirm(true)}
+            disabled={archiving}
+            className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
+            Samenvatting opslaan en quiz verwijderen
+          </button>
+
+          <button
+            data-testid="btn-quiz-archive-without-summary"
+            onClick={() => onConfirm(false)}
+            disabled={archiving}
+            className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Alleen verwijderen (geen dagboekvermelding)
+          </button>
+
+          <button
+            data-testid="btn-quiz-archive-dismiss"
+            onClick={onClose}
+            disabled={archiving}
+            className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
+          >
+            Annuleren
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

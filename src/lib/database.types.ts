@@ -313,33 +313,54 @@ export type Database = {
       quiz_attempts: {
         Row: {
           id: string
-          quiz_set_id: string
+          quiz_set_id: string | null
           student_id: string
           started_at: string
           completed_at: string | null
           score: number
           total_questions: number
           time_spent_seconds: number
+          topics: string[] | null
+          difficulty: string | null
+          question_type: 'mcq' | 'open' | 'casus' | null
+          questions_data: Json | null
+          answers: Json | null
+          score_percentage: number | null
+          created_at: string
         }
         Insert: {
           id?: string
-          quiz_set_id: string
+          quiz_set_id?: string | null
           student_id: string
           started_at?: string
           completed_at?: string | null
           score?: number
           total_questions?: number
           time_spent_seconds?: number
+          topics?: string[] | null
+          difficulty?: string | null
+          question_type?: 'mcq' | 'open' | 'casus' | null
+          questions_data?: Json | null
+          answers?: Json | null
+          score_percentage?: number | null
+          created_at?: string
         }
         Update: {
           id?: string
-          quiz_set_id?: string
+          quiz_set_id?: string | null
           student_id?: string
           started_at?: string
           completed_at?: string | null
           score?: number
           total_questions?: number
           time_spent_seconds?: number
+          topics?: string[] | null
+          difficulty?: string | null
+          question_type?: 'mcq' | 'open' | 'casus' | null
+          questions_data?: Json | null
+          answers?: Json | null
+          score_percentage?: number | null
+          created_at?: string
         }
       }
       datasets: {

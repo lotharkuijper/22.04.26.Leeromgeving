@@ -142,6 +142,33 @@ async function detectConceptsCourseIdColumn() {
   }
 }
 
+// Task #52 (Quiz-omgeving herontwerp fase 1) breidt quiz_attempts uit met
+// nieuwe kolommen (topics text[], difficulty, question_type, questions_data,
+// answers, score_percentage, created_at). Detecteer of de migratie
+// `20260430120000_extend_quiz_attempts_for_multi_type.sql` is toegepast,
+// zodat /api/quiz/archive en de nieuwe insert-flow vroegtijdig en duidelijk
+// kunnen falen als dat niet het geval is.
+let quizAttemptsHasNewSchema = false;
+async function detectQuizAttemptsSchema() {
+  if (!supabaseAdmin) return;
+  try {
+    const { error } = await supabaseAdmin
+      .from('quiz_attempts')
+      .select('topics, question_type, questions_data, answers, score_percentage, created_at')
+      .limit(1);
+    quizAttemptsHasNewSchema = !error;
+    if (error) {
+      console.warn(`[API Server] quiz_attempts nieuw schema NIET gevonden: ${error.message}`);
+      console.warn('[API Server] Pas migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql toe in Supabase.');
+    } else {
+      console.log('[API Server] quiz_attempts nieuw schema beschikbaar.');
+    }
+  } catch (e) {
+    quizAttemptsHasNewSchema = false;
+    console.warn('[API Server] quiz_attempts schema detectie mislukt:', e.message);
+  }
+}
+
 app.post('/api/chat', async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -2354,6 +2381,174 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
   }
 });
 
+app.post('/api/quiz/archive', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  if (!quizAttemptsHasNewSchema) {
+    return res.status(503).json({
+      error: 'De quiz-database is nog niet bijgewerkt naar het nieuwe model. ' +
+        'Pas migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql toe in Supabase en herstart de server.',
+    });
+  }
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { attemptId, generateSummary = true } = req.body;
+  if (!attemptId) return res.status(400).json({ error: 'attemptId is vereist' });
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: row, error: fetchErr } = await supabaseAdmin
+      .from('quiz_attempts')
+      .select('id, student_id, topics, difficulty, question_type, questions_data, answers, score_percentage, total_questions, score, created_at')
+      .eq('id', attemptId)
+      .maybeSingle();
+
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!row) return res.status(404).json({ error: 'Quizpoging niet gevonden' });
+    if (row.student_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze quizpoging' });
+
+    let journalEntryId = null;
+    let summaryFailed = false;
+
+    if (generateSummary) {
+      const apiKey = process.env.GROQ_API_KEY;
+      const topics = Array.isArray(row.topics) && row.topics.length > 0 ? row.topics : ['(geen onderwerp opgegeven)'];
+      const topicsLabel = topics.join(', ');
+      const questionType = row.question_type || 'mcq';
+      const typeLabel = questionType === 'mcq' ? 'meerkeuzevragen'
+        : questionType === 'open' ? 'open vragen'
+        : 'casusvragen';
+      const difficulty = row.difficulty || 'gemiddeld';
+      const totalQuestions = Number(row.total_questions || 0);
+      const scorePct = row.score_percentage != null ? Number(row.score_percentage) : null;
+
+      const questions = Array.isArray(row.questions_data) ? row.questions_data : [];
+      const answers = Array.isArray(row.answers) ? row.answers : [];
+
+      const detailLines = questions.map((q, i) => {
+        const a = answers[i] || {};
+        const qText = q?.question || `(vraag ${i + 1})`;
+        if (questionType === 'mcq') {
+          const opts = Array.isArray(q?.options) ? q.options : [];
+          const sel = typeof a.selectedIndex === 'number' ? opts[a.selectedIndex] : '(niet beantwoord)';
+          const correct = typeof q?.correctAnswer === 'number' ? opts[q.correctAnswer] : '(onbekend)';
+          const status = a.isCorrect ? 'goed' : 'fout';
+          return `Vraag ${i + 1}: ${qText}\n  - Jouw antwoord: ${sel} (${status})\n  - Correct: ${correct}`;
+        }
+        const ans = (a.text || '').trim() || '(geen antwoord)';
+        const ev = a.evaluation || {};
+        const fb = (ev.feedback || '').trim();
+        const ff = (ev.feedforward || '').trim();
+        const sc = ev.score != null ? `${ev.score}/100` : '(geen score)';
+        const ctx = questionType === 'casus' && q?.context ? `\n  - Casus: ${q.context}` : '';
+        return `Vraag ${i + 1}: ${qText}${ctx}\n  - Jouw antwoord: ${ans}\n  - Score: ${sc}\n  - Feedback: ${fb}\n  - Feed forward: ${ff}`;
+      }).join('\n\n');
+
+      const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft zojuist een AI-gegenereerde quiz afgerond. Schrijf een formatief reflectieverslag van 6 tot 12 regels in het Nederlands, gericht aan de student zelf.
+
+Aanspraakvorm (volg STRIKT):
+- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
+- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
+
+Je verslag bevat:
+1. Een beargumenteerd formatief oordeel over jouw resultaten (let op: dit waren ${typeLabel} over ${topicsLabel}, niveau ${difficulty}${scorePct != null ? `, totaalscore ${scorePct}%` : ''}).
+2. Concrete sterke punten én verbeterpunten op basis van jouw antwoorden en de gegeven feedback per vraag.
+3. Eén concrete vervolgstap: wat ga je als volgende oefenen of nalezen om hier sterker in te worden?
+
+Onderwerp(en): ${topicsLabel}
+Vraagtype: ${typeLabel}
+Niveau: ${difficulty}
+Aantal vragen: ${totalQuestions}${scorePct != null ? `\nTotaalscore: ${scorePct}%` : ''}
+
+Quiz-detail (per vraag):
+${detailLines || '(geen details beschikbaar)'}
+
+Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
+
+      if (apiKey) {
+        try {
+          const groqResp = await fetch(GROQ_API_URL, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'llama-3.3-70b-versatile',
+              messages: [{ role: 'user', content: summaryPrompt }],
+              temperature: 0.5,
+              max_tokens: 800,
+            }),
+          });
+
+          if (groqResp.ok) {
+            const groqData = await groqResp.json();
+            const summaryContent = groqData.choices?.[0]?.message?.content;
+            if (summaryContent) {
+              const titleTopics = topicsLabel.length > 80 ? `${topicsLabel.slice(0, 77)}...` : topicsLabel;
+              const { data: entry, error: journalError } = await supabaseAdmin
+                .from('learning_journal_entries')
+                .insert({
+                  user_id: user.id,
+                  title: `Quiz-reflectie: ${titleTopics}`,
+                  content: summaryContent,
+                  activity_type: 'quiz_reflection',
+                })
+                .select('id')
+                .single();
+
+              if (journalError) {
+                console.error('[quiz/archive] Journal insert error:', journalError);
+                summaryFailed = true;
+              } else {
+                journalEntryId = entry.id;
+                console.log(`[quiz/archive] Journal entry aangemaakt: ${journalEntryId}`);
+              }
+            } else {
+              summaryFailed = true;
+            }
+          } else {
+            console.error('[quiz/archive] Groq fout:', groqResp.status, await groqResp.text());
+            summaryFailed = true;
+          }
+        } catch (groqErr) {
+          console.error('[quiz/archive] Groq request mislukt:', groqErr.message);
+          summaryFailed = true;
+        }
+      } else {
+        console.warn('[quiz/archive] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
+        summaryFailed = true;
+      }
+    }
+
+    // Defense-in-depth: filter ook op student_id, zodat een race-condition
+    // tussen ownership-check en delete nooit andermans rij kan raken.
+    const { error: delErr } = await supabaseAdmin
+      .from('quiz_attempts')
+      .delete()
+      .eq('id', attemptId)
+      .eq('student_id', user.id);
+
+    if (delErr) {
+      console.error('[quiz/archive] kon quizpoging niet verwijderen:', delErr);
+      return res.status(500).json({ error: `Verwijderen mislukt: ${delErr.message}` });
+    }
+
+    return res.json({
+      success: true,
+      journalEntryId,
+      summaryCreated: generateSummary && journalEntryId !== null,
+      summaryFailed: generateSummary && summaryFailed,
+    });
+  } catch (err) {
+    console.error('[quiz/archive] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout' });
+  }
+});
+
 app.get('/api/admin/prompts-migration-status', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const authHeader = req.headers['authorization'];
@@ -2575,5 +2770,6 @@ async function initChatbotPromptSection() {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[API Server] Running on port ${PORT}`);
   detectConceptsCourseIdColumn();
+  detectQuizAttemptsSchema();
   initChatbotPromptSection();
 });
