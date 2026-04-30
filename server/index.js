@@ -2381,6 +2381,240 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
   }
 });
 
+// ─── Gedeelde quiz-samenvattingsbouwer ──────────────────────────────────────
+// Beide endpoints (/api/quiz/archive en /api/quiz/save-summary) gebruiken
+// dezelfde notitie-stijl in het leerdagboek. De prompt schaalt mee in lengte
+// en focus afhankelijk van het aantal vragen en het vraagtype: een korte
+// 3-vragen meerkeuzequiz krijgt een compacte notitie van ~6 regels, een rijke
+// 8-vragen open quiz krijgt een notitie tot ~18 regels met meer per-vraag-
+// reflectie. De notitie spreekt de student altijd in de tweede persoon aan.
+function buildQuizSummaryParams({ topics, difficulty, questionType, questions, answers, scorePercentage }) {
+  const safeTopics = Array.isArray(topics) && topics.length > 0 ? topics : ['(geen onderwerp opgegeven)'];
+  const topicsLabel = safeTopics.join(', ');
+  const qType = questionType === 'open' || questionType === 'casus' ? questionType : 'mcq';
+  const typeLabel = qType === 'mcq' ? 'meerkeuzevragen'
+    : qType === 'open' ? 'open vragen'
+    : 'casusvragen';
+  const safeDifficulty = difficulty || 'gemiddeld';
+  const qList = Array.isArray(questions) ? questions : [];
+  const aList = Array.isArray(answers) ? answers : [];
+  const totalQuestions = qList.length;
+  const scorePct = scorePercentage == null ? null : Number(scorePercentage);
+
+  // Lengtebudget op basis van vraagtype + aantal vragen.
+  // Meerkeuze is feitelijker → vaste, korte notitie (6–8 regels) ongeacht aantal.
+  // Open/casus is rijker → schaalt mee tot harde bovengrens (8–22 regels), met
+  // gegarandeerde minLines <= maxLines.
+  let minLines, maxLines, perQuestionLine;
+  const HARD_MAX_LINES = 22;
+  if (qType === 'mcq') {
+    minLines = 6;
+    maxLines = 8;
+    perQuestionLine = '';
+  } else {
+    // Schaal: ~2 regels per vraag, met ondergrens 8 en bovengrens 22.
+    minLines = Math.min(HARD_MAX_LINES - 4, Math.max(8, Math.round(totalQuestions * 1.5) + 4));
+    maxLines = Math.min(HARD_MAX_LINES, Math.max(12, Math.round(totalQuestions * 2.5) + 4));
+    if (minLines > maxLines) minLines = maxLines - 2;
+    perQuestionLine = `Reflecteer kort op de meeste vragen afzonderlijk (zeker waar je antwoord opvallend sterk of opvallend zwak was), en koppel die aan het bredere beeld.`;
+  }
+
+  // Per-vraag-detail voor het taalmodel.
+  const detailLines = qList.map((q, i) => {
+    const a = aList[i] || {};
+    const qText = q?.question || `(vraag ${i + 1})`;
+    if (qType === 'mcq') {
+      const opts = Array.isArray(q?.options) ? q.options : [];
+      const sel = typeof a.selectedIndex === 'number' ? opts[a.selectedIndex] : '(niet beantwoord)';
+      const correct = typeof q?.correctAnswer === 'number' ? opts[q.correctAnswer] : '(onbekend)';
+      const status = a.isCorrect ? 'goed' : 'fout';
+      return `Vraag ${i + 1}: ${qText}\n  - Jouw antwoord: ${sel} (${status})\n  - Correct: ${correct}`;
+    }
+    const ans = (a.text || '').trim() || '(geen antwoord)';
+    const ev = a.evaluation || {};
+    const fb = (ev.feedback || '').trim();
+    const ff = (ev.feedforward || '').trim();
+    const sc = ev.score != null ? `${ev.score}/100` : '(geen score)';
+    const ctx = qType === 'casus' && q?.context ? `\n  - Casus: ${q.context}` : '';
+    return `Vraag ${i + 1}: ${qText}${ctx}\n  - Jouw antwoord: ${ans}\n  - Score: ${sc}\n  - Feedback: ${fb}\n  - Feed forward: ${ff}`;
+  }).join('\n\n');
+
+  // Type-specifieke focusinstructie.
+  const focusInstruction = qType === 'mcq'
+    ? 'Focus op patronen: welke begrippen of denkstappen gingen goed, welke vroegen om correctie. Verwijs waar relevant naar specifieke vraagnummers.'
+    : qType === 'open'
+      ? 'Focus op de kwaliteit van je redenering: hoe expliciet maakte je je aannames, hoe nauwkeurig was je formulering, hoe goed onderbouw je conclusies? Wees concreet per vraag waar dat helpt.'
+      : 'Focus op je klinisch-methodisch redeneren in de casus: hoe goed verbond je theorie met het scenario, welke methodische keuzes onderbouwde je, welke nuances liet je liggen? Wees concreet per casus waar dat helpt.';
+
+  const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft zojuist een AI-gegenereerde quiz afgerond. Schrijf een formatief reflectieverslag van ${minLines} tot ${maxLines} regels in het Nederlands, gericht aan de student zelf.
+
+Aanspraakvorm (volg STRIKT):
+- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
+- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
+
+Je verslag bevat — in deze volgorde, met deze (vetgedrukte) kopjes op aparte regels:
+**Wat je hebt laten zien**
+- Concrete sterke punten op basis van jouw antwoorden en de gegeven feedback.
+
+**Aandachtspunten**
+- Waar het minder ging en waarom; verwijs waar relevant naar specifieke vraagnummers.
+
+**Wat je hiermee kunt**
+- Eén of twee concrete vervolgstappen — wat ga je nalezen, oefenen of toepassen om dit verder te brengen, en waarvoor is wat je nu kunt al genoeg?
+
+Type-specifieke focus: ${focusInstruction}
+${perQuestionLine}
+
+Quiz-context:
+- Onderwerp(en): ${topicsLabel}
+- Vraagtype: ${typeLabel}
+- Niveau: ${safeDifficulty}
+- Aantal vragen: ${totalQuestions}${scorePct != null ? `\n- Totaalscore: ${scorePct}%` : ''}
+
+Quiz-detail (per vraag):
+${detailLines || '(geen details beschikbaar)'}
+
+Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees concreet, eerlijk en motiverend; vermijd vaagheden en clichés.`;
+
+  return {
+    summaryPrompt,
+    topicsLabel,
+    qType,
+    typeLabel,
+    minLines,
+    maxLines,
+  };
+}
+
+// Roept Groq aan met de gegeven prompt en schrijft de notitie weg in
+// learning_journal_entries. Returnt {journalEntryId, summaryFailed, errorReason}.
+async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qType, maxLines }) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    console.warn('[quiz/summary] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
+    return { journalEntryId: null, summaryFailed: true, errorReason: 'Geen taalmodel-toegang (GROQ_API_KEY ontbreekt).' };
+  }
+  // Token-budget evenredig aan maximale regels (≈ 50 tokens/regel marge).
+  const maxTokens = Math.min(2000, Math.max(600, maxLines * 60));
+
+  let summaryContent;
+  try {
+    const groqResp = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: summaryPrompt }],
+        temperature: 0.5,
+        max_tokens: maxTokens,
+      }),
+    });
+
+    if (!groqResp.ok) {
+      const txt = await groqResp.text();
+      console.error('[quiz/summary] Groq fout:', groqResp.status, txt);
+      return { journalEntryId: null, summaryFailed: true, errorReason: `Het taalmodel reageerde met status ${groqResp.status}.` };
+    }
+    const groqData = await groqResp.json();
+    summaryContent = groqData.choices?.[0]?.message?.content;
+    if (!summaryContent) {
+      return { journalEntryId: null, summaryFailed: true, errorReason: 'Het taalmodel gaf een leeg antwoord.' };
+    }
+  } catch (groqErr) {
+    console.error('[quiz/summary] Groq request mislukt:', groqErr.message);
+    return { journalEntryId: null, summaryFailed: true, errorReason: groqErr.message };
+  }
+
+  const titleTopics = topicsLabel.length > 80 ? `${topicsLabel.slice(0, 77)}...` : topicsLabel;
+  const typePrefix = qType === 'mcq' ? 'Meerkeuzequiz' : qType === 'open' ? 'Open quiz' : 'Casusquiz';
+  const { data: entry, error: journalError } = await supabaseAdmin
+    .from('learning_journal_entries')
+    .insert({
+      user_id: user.id,
+      title: `${typePrefix}-reflectie: ${titleTopics}`,
+      content: summaryContent,
+      activity_type: 'quiz_reflection',
+    })
+    .select('id')
+    .single();
+
+  if (journalError) {
+    console.error('[quiz/summary] Journal insert error:', journalError);
+    return { journalEntryId: null, summaryFailed: true, errorReason: journalError.message };
+  }
+  console.log(`[quiz/summary] Journal entry aangemaakt: ${entry.id}`);
+  return { journalEntryId: entry.id, summaryFailed: false, errorReason: null };
+}
+
+// /api/quiz/save-summary — schrijft alleen een leerdagboek-notitie op basis
+// van quizgegevens die direct in de body worden meegestuurd. Werkt onafhankelijk
+// van de quiz_attempts-tabel, zodat de student de samenvatting altijd kan
+// bewaren, ook als de quiz_attempts-migratie nog niet is toegepast.
+app.post('/api/quiz/save-summary', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { topics, difficulty, questionType, questions, answers, scorePercentage } = req.body || {};
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: 'questions is vereist en mag niet leeg zijn' });
+  }
+  // Veiligheidsplafond op aantal vragen om abuse op een authenticated
+  // Groq-genererend endpoint te beperken.
+  if (questions.length > 30) {
+    return res.status(400).json({ error: 'Te veel vragen (max 30 per samenvatting)' });
+  }
+  if (!Array.isArray(answers)) {
+    return res.status(400).json({ error: 'answers is vereist (array)' });
+  }
+  if (answers.length !== questions.length) {
+    return res.status(400).json({ error: 'answers.length moet gelijk zijn aan questions.length' });
+  }
+  if (questionType && !['mcq', 'open', 'casus'].includes(questionType)) {
+    return res.status(400).json({ error: 'Onbekend questionType' });
+  }
+  // Per vraagtype: minimale shape-checks zodat de prompt niet leeg loopt.
+  const qt = questionType || 'mcq';
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+    if (!q || typeof q.question !== 'string' || !q.question.trim()) {
+      return res.status(400).json({ error: `Vraag ${i + 1} mist een tekstveld` });
+    }
+    if (qt === 'mcq' && !Array.isArray(q.options)) {
+      return res.status(400).json({ error: `Vraag ${i + 1} (mcq) mist options` });
+    }
+  }
+  if (scorePercentage != null) {
+    const n = Number(scorePercentage);
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      return res.status(400).json({ error: 'scorePercentage moet tussen 0 en 100 liggen' });
+    }
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const params = buildQuizSummaryParams({ topics, difficulty, questionType, questions, answers, scorePercentage });
+    const result = await generateAndSaveQuizSummary({ user, ...params });
+
+    if (result.summaryFailed) {
+      return res.status(502).json({
+        error: 'De samenvatting kon niet worden opgesteld of opgeslagen.',
+        detail: result.errorReason,
+      });
+    }
+    return res.json({ success: true, journalEntryId: result.journalEntryId });
+  } catch (err) {
+    console.error('[quiz/save-summary] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout', detail: err?.message });
+  }
+});
+
 app.post('/api/quiz/archive', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   if (!quizAttemptsHasNewSchema) {
@@ -2417,111 +2651,17 @@ app.post('/api/quiz/archive', async (req, res) => {
     let summaryFailed = false;
 
     if (generateSummary) {
-      const apiKey = process.env.GROQ_API_KEY;
-      const topics = Array.isArray(row.topics) && row.topics.length > 0 ? row.topics : ['(geen onderwerp opgegeven)'];
-      const topicsLabel = topics.join(', ');
-      const questionType = row.question_type || 'mcq';
-      const typeLabel = questionType === 'mcq' ? 'meerkeuzevragen'
-        : questionType === 'open' ? 'open vragen'
-        : 'casusvragen';
-      const difficulty = row.difficulty || 'gemiddeld';
-      const totalQuestions = Number(row.total_questions || 0);
-      const scorePct = row.score_percentage != null ? Number(row.score_percentage) : null;
-
-      const questions = Array.isArray(row.questions_data) ? row.questions_data : [];
-      const answers = Array.isArray(row.answers) ? row.answers : [];
-
-      const detailLines = questions.map((q, i) => {
-        const a = answers[i] || {};
-        const qText = q?.question || `(vraag ${i + 1})`;
-        if (questionType === 'mcq') {
-          const opts = Array.isArray(q?.options) ? q.options : [];
-          const sel = typeof a.selectedIndex === 'number' ? opts[a.selectedIndex] : '(niet beantwoord)';
-          const correct = typeof q?.correctAnswer === 'number' ? opts[q.correctAnswer] : '(onbekend)';
-          const status = a.isCorrect ? 'goed' : 'fout';
-          return `Vraag ${i + 1}: ${qText}\n  - Jouw antwoord: ${sel} (${status})\n  - Correct: ${correct}`;
-        }
-        const ans = (a.text || '').trim() || '(geen antwoord)';
-        const ev = a.evaluation || {};
-        const fb = (ev.feedback || '').trim();
-        const ff = (ev.feedforward || '').trim();
-        const sc = ev.score != null ? `${ev.score}/100` : '(geen score)';
-        const ctx = questionType === 'casus' && q?.context ? `\n  - Casus: ${q.context}` : '';
-        return `Vraag ${i + 1}: ${qText}${ctx}\n  - Jouw antwoord: ${ans}\n  - Score: ${sc}\n  - Feedback: ${fb}\n  - Feed forward: ${ff}`;
-      }).join('\n\n');
-
-      const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft zojuist een AI-gegenereerde quiz afgerond. Schrijf een formatief reflectieverslag van 6 tot 12 regels in het Nederlands, gericht aan de student zelf.
-
-Aanspraakvorm (volg STRIKT):
-- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
-- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
-
-Je verslag bevat:
-1. Een beargumenteerd formatief oordeel over jouw resultaten (let op: dit waren ${typeLabel} over ${topicsLabel}, niveau ${difficulty}${scorePct != null ? `, totaalscore ${scorePct}%` : ''}).
-2. Concrete sterke punten én verbeterpunten op basis van jouw antwoorden en de gegeven feedback per vraag.
-3. Eén concrete vervolgstap: wat ga je als volgende oefenen of nalezen om hier sterker in te worden?
-
-Onderwerp(en): ${topicsLabel}
-Vraagtype: ${typeLabel}
-Niveau: ${difficulty}
-Aantal vragen: ${totalQuestions}${scorePct != null ? `\nTotaalscore: ${scorePct}%` : ''}
-
-Quiz-detail (per vraag):
-${detailLines || '(geen details beschikbaar)'}
-
-Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
-
-      if (apiKey) {
-        try {
-          const groqResp = await fetch(GROQ_API_URL, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'llama-3.3-70b-versatile',
-              messages: [{ role: 'user', content: summaryPrompt }],
-              temperature: 0.5,
-              max_tokens: 800,
-            }),
-          });
-
-          if (groqResp.ok) {
-            const groqData = await groqResp.json();
-            const summaryContent = groqData.choices?.[0]?.message?.content;
-            if (summaryContent) {
-              const titleTopics = topicsLabel.length > 80 ? `${topicsLabel.slice(0, 77)}...` : topicsLabel;
-              const { data: entry, error: journalError } = await supabaseAdmin
-                .from('learning_journal_entries')
-                .insert({
-                  user_id: user.id,
-                  title: `Quiz-reflectie: ${titleTopics}`,
-                  content: summaryContent,
-                  activity_type: 'quiz_reflection',
-                })
-                .select('id')
-                .single();
-
-              if (journalError) {
-                console.error('[quiz/archive] Journal insert error:', journalError);
-                summaryFailed = true;
-              } else {
-                journalEntryId = entry.id;
-                console.log(`[quiz/archive] Journal entry aangemaakt: ${journalEntryId}`);
-              }
-            } else {
-              summaryFailed = true;
-            }
-          } else {
-            console.error('[quiz/archive] Groq fout:', groqResp.status, await groqResp.text());
-            summaryFailed = true;
-          }
-        } catch (groqErr) {
-          console.error('[quiz/archive] Groq request mislukt:', groqErr.message);
-          summaryFailed = true;
-        }
-      } else {
-        console.warn('[quiz/archive] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
-        summaryFailed = true;
-      }
+      const params = buildQuizSummaryParams({
+        topics: row.topics,
+        difficulty: row.difficulty,
+        questionType: row.question_type,
+        questions: row.questions_data,
+        answers: row.answers,
+        scorePercentage: row.score_percentage,
+      });
+      const result = await generateAndSaveQuizSummary({ user, ...params });
+      journalEntryId = result.journalEntryId;
+      summaryFailed = result.summaryFailed;
     }
 
     // Defense-in-depth: filter ook op student_id, zodat een race-condition

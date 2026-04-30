@@ -161,6 +161,16 @@ export function QuizPage() {
   const [archiveDialog, setArchiveDialog] = useState<{ id: string; label: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
 
+  // Direct opslaan-flow op het "Quiz voltooid!"-scherm. Werkt ook als de
+  // quiz_attempts-rij niet bewaard kon worden, dus losgekoppeld van de
+  // resultatenlijst-flow hierboven.
+  const [savingSummary, setSavingSummary] = useState(false);
+  const [summaryStatus, setSummaryStatus] = useState<
+    | { kind: 'idle' }
+    | { kind: 'saved'; journalEntryId: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+
   // Kiezen van quiz-onderwerpen + recente pogingen herladen wanneer cursus
   // wisselt of gebruiker beschikbaar wordt.
   useEffect(() => { void loadAttempts(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [profile?.id]);
@@ -464,6 +474,43 @@ export function QuizPage() {
     setContextStats(null);
     setEvalError(null);
     setSetupValidationError(null);
+    setSummaryStatus({ kind: 'idle' });
+  };
+
+  const handleSaveSummaryToJournal = async () => {
+    if (savingSummary) return;
+    setSavingSummary(true);
+    setSummaryStatus({ kind: 'idle' });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const authHeader = session ? `Bearer ${session.access_token}` : '';
+      const scorePct = computeScorePercentage(questions, answers);
+
+      const res = await fetch('/api/quiz/save-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+        body: JSON.stringify({
+          topics: selectedTopics.map(t => t.name),
+          difficulty,
+          questionType,
+          questions,
+          answers,
+          scorePercentage: scorePct,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || err.error || `Opslaan mislukt (${res.status})`);
+      }
+
+      const data = await res.json();
+      setSummaryStatus({ kind: 'saved', journalEntryId: data.journalEntryId });
+    } catch (err: any) {
+      setSummaryStatus({ kind: 'error', message: err?.message || 'Onbekende fout' });
+    } finally {
+      setSavingSummary(false);
+    }
   };
 
   const handleArchive = async (attemptId: string, generateSummary: boolean) => {
@@ -1101,7 +1148,50 @@ export function QuizPage() {
             </p>
           )}
 
-          <div className="flex gap-4 justify-center">
+          {/* Samenvatting-naar-leerdagboek status */}
+          {summaryStatus.kind === 'saved' && (
+            <div
+              className="text-left bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3"
+              data-testid="block-summary-saved"
+            >
+              <CheckCircle className="w-5 h-5 text-green-700 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-semibold text-green-900 mb-0.5">Notitie opgeslagen in je leerdagboek</p>
+                <p className="text-sm text-green-800">
+                  Je kunt 'm later teruglezen op de pagina <a href="/feedback" className="underline hover:no-underline font-medium">Leer Dagboek</a>.
+                </p>
+              </div>
+            </div>
+          )}
+          {summaryStatus.kind === 'error' && (
+            <div
+              className="text-left bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3"
+              data-testid="block-summary-error"
+            >
+              <AlertCircle className="w-5 h-5 text-red-700 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-semibold text-red-900 mb-0.5">Opslaan mislukt</p>
+                <p className="text-sm text-red-800">{summaryStatus.message}</p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-3 justify-center">
+            {summaryStatus.kind !== 'saved' && (
+              <button
+                onClick={handleSaveSummaryToJournal}
+                disabled={savingSummary}
+                className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="button-save-summary"
+              >
+                {savingSummary ? <Loader2 className="w-5 h-5 animate-spin" /> : <BookText className="w-5 h-5" />}
+                {savingSummary
+                  ? 'Samenvatting wordt opgesteld…'
+                  : summaryStatus.kind === 'error'
+                    ? 'Opnieuw proberen'
+                    : 'Bewaar samenvatting in leerdagboek'}
+              </button>
+            )}
             <button
               onClick={handleRestart}
               className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg flex items-center gap-2"
