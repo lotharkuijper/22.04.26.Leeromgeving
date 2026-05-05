@@ -3512,7 +3512,7 @@ app.post('/api/quiz/concept-availability', async (req, res) => {
         .from('documents')
         .select('id, folder_id')
         .in('folder_id', folderIds)
-        .eq('bucket', 'rag-sources');
+        .eq('bucket', 'rag_sources');
       for (const d of docs || []) {
         docCountByFolder.set(d.folder_id, (docCountByFolder.get(d.folder_id) || 0) + 1);
       }
