@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import {
   evaluateOpenAnswer,
   evaluateCasusAnswer,
+  fetchQuizPrompts,
   llmErrorToDutch,
   type QuizQuestion,
   type QuestionType,
@@ -158,6 +159,17 @@ export function QuizPage() {
   const [sourceMix, setSourceMix] = useState<SourceMix>({ pct_rag: 50, pct_itembank: 0, pct_llm: 50 });
   const [lastMixCounts, setLastMixCounts] = useState<MixCounts | null>(null);
 
+  // Per-begrip beschikbaarheid (Task #57): toont aan jou hoeveel RAG-documenten
+  // en ItemBank-vragen per geselecteerd begrip beschikbaar zijn, zodat je
+  // weet of de bronnen-mix vermoedelijk genoeg materiaal vindt.
+  type ConceptAvailability = {
+    primary_folder_id: string | null;
+    rag_doc_count: number | null;
+    itembank_question_count: number;
+  };
+  const [conceptAvailability, setConceptAvailability] = useState<Record<string, ConceptAvailability>>({});
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+
   // Resultatenlijst
   const [attempts, setAttempts] = useState<QuizAttemptRow[]>([]);
   const [attemptsLoading, setAttemptsLoading] = useState(false);
@@ -187,6 +199,40 @@ export function QuizPage() {
     if (!activeCourse) return;
     void fetchSourceMix(activeCourse).then(setSourceMix);
   }, [activeCourse]);
+
+  // Beschikbaarheid bijwerken zodra de geselecteerde concepten of de cursus
+  // veranderen — debounced via een micro-delay zodat snelle aan/uit-clicks
+  // geen request-storm veroorzaken.
+  useEffect(() => {
+    if (!activeCourse) { setConceptAvailability({}); return; }
+    const ids = Array.from(selectedTopicIds);
+    if (ids.length === 0) { setConceptAvailability({}); return; }
+    let cancelled = false;
+    setAvailabilityLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+        const res = await fetch('/api/quiz/concept-availability', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ courseId: activeCourse, conceptIds: ids }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!cancelled && data?.availability) {
+          setConceptAvailability(data.availability);
+        }
+      } catch (err) {
+        console.warn('[QUIZ] concept-availability ophalen mislukt:', err);
+        if (!cancelled) setConceptAvailability({});
+      } finally {
+        if (!cancelled) setAvailabilityLoading(false);
+      }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [activeCourse, selectedTopicIds]);
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
@@ -294,6 +340,8 @@ export function QuizPage() {
             'quiz',
             profile?.role || 'student',
             activeCourse,
+            undefined,
+            selectedTopics.map(t => t.id),
           );
         } catch (ragErr) {
           console.warn('[QUIZ] RAG search failed, generating without context:', ragErr);
@@ -402,9 +450,14 @@ export function QuizPage() {
     setEvaluating(true);
     setEvalError(null);
     try {
+      // Geef de beheerde "quiz_evaluate_open"-prompt mee als systemPersona
+      // zodat docenten het beoordelingsgedrag (toon, rubriek-strengte, ...) via
+      // de admin-UI kunnen bijsturen zonder code-wijziging.
+      const quizPrompts = await fetchQuizPrompts();
+      const evaluatorPrompt = quizPrompts.quiz_evaluate_open || undefined;
       const evaluation: AnswerEvaluation = q.type === 'open'
-        ? await evaluateOpenAnswer(q as OpenQuestion, text)
-        : await evaluateCasusAnswer(q as CasusQuestion, text);
+        ? await evaluateOpenAnswer(q as OpenQuestion, text, evaluatorPrompt)
+        : await evaluateCasusAnswer(q as CasusQuestion, text, evaluatorPrompt);
 
       setAnswers(prev => {
         const next = [...prev];
@@ -686,6 +739,55 @@ export function QuizPage() {
                           </button>
                         </span>
                       ))}
+                    </div>
+                  )}
+
+                  {selectedTopics.length > 0 && (
+                    <div className="mt-3 border border-gray-200 rounded-lg bg-gray-50 p-3" data-testid="panel-concept-availability">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-700">
+                          Beschikbaar materiaal per begrip
+                        </span>
+                        {availabilityLoading && <Loader2 className="w-3 h-3 animate-spin text-gray-500" />}
+                      </div>
+                      <ul className="space-y-1">
+                        {selectedTopics.map(t => {
+                          const a = conceptAvailability[t.id];
+                          const ragCount = a?.rag_doc_count;
+                          const ibCount = a?.itembank_question_count ?? 0;
+                          const hasRag = (ragCount ?? 0) > 0;
+                          const hasIb = ibCount > 0;
+                          return (
+                            <li
+                              key={t.id}
+                              className="flex items-center justify-between text-xs"
+                              data-testid={`avail-row-${t.id}`}
+                            >
+                              <span className="text-gray-800 truncate flex-1 mr-2">{t.name}</span>
+                              <span className="flex items-center gap-1.5">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${hasRag ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-600'}`}
+                                  title={ragCount === null ? 'Geen primaire RAG-folder gekoppeld' : `${ragCount} document(en) in primaire folder`}
+                                  data-testid={`avail-rag-${t.id}`}
+                                >
+                                  RAG: {ragCount === null ? '—' : ragCount}
+                                </span>
+                                <span
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${hasIb ? 'bg-blue-100 text-blue-800' : 'bg-gray-200 text-gray-600'}`}
+                                  title={`${ibCount} ItemBank-vraag/vragen via koppelingen`}
+                                  data-testid={`avail-itembank-${t.id}`}
+                                >
+                                  IB: {ibCount}
+                                </span>
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <p className="text-[11px] text-gray-500 mt-2">
+                        Heeft een begrip "RAG: —"? Dan is er nog geen primaire cursus-folder gekoppeld
+                        en valt de generator terug op de algemene cursus-mappen.
+                      </p>
                     </div>
                   )}
                 </>

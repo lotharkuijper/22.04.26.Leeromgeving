@@ -308,13 +308,63 @@ function extractJSON<T>(content: string, kind: 'array' | 'object'): T {
   }
 }
 
+// Cache voor quiz-prompts uit chatbot_prompts (Task #57). Wordt geladen bij
+// het eerste gebruik en behouden voor de duur van de pagina; admins moeten de
+// pagina vernieuwen na een prompt-wijziging.
+export type QuizPromptName =
+  | 'quiz_generate_strict'
+  | 'quiz_generate_blended'
+  | 'quiz_generate_creative'
+  | 'quiz_evaluate_open';
+
+let quizPromptCache: Record<QuizPromptName, string> | null = null;
+let quizPromptInflight: Promise<Record<QuizPromptName, string>> | null = null;
+
+export async function fetchQuizPrompts(): Promise<Record<QuizPromptName, string>> {
+  if (quizPromptCache) return quizPromptCache;
+  if (quizPromptInflight) return quizPromptInflight;
+  quizPromptInflight = (async () => {
+    try {
+      const { supabase } = await import('../lib/supabase');
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+      const res = await fetch('/api/quiz/prompts', { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const prompts = (data?.prompts || {}) as Record<QuizPromptName, string>;
+      quizPromptCache = prompts;
+      return prompts;
+    } catch (err) {
+      console.warn('[llm] fetchQuizPrompts mislukt — fallback op hardcoded persona:', err);
+      // Fallback: lege strings → caller gebruikt zijn eigen hardcoded persona.
+      const fallback = {
+        quiz_generate_strict: '',
+        quiz_generate_blended: '',
+        quiz_generate_creative: '',
+        quiz_evaluate_open: '',
+      } as Record<QuizPromptName, string>;
+      quizPromptCache = fallback;
+      return fallback;
+    } finally {
+      quizPromptInflight = null;
+    }
+  })();
+  return quizPromptInflight;
+}
+
+export function clearQuizPromptCache() {
+  quizPromptCache = null;
+}
+
 export async function generateQuiz(
   topics: string[],
   difficulty: 'easy' | 'medium' | 'hard',
   questionType: QuestionType,
   numQuestions: number = 5,
   ragContext?: string,
-  ragStrictMode?: boolean
+  ragStrictMode?: boolean,
+  systemPromptOverride?: string,
 ): Promise<QuizQuestion[]> {
   const contextSection = buildContextSection(ragContext, ragStrictMode);
   const topicsLabel = topics.length === 1 ? `het onderwerp "${topics[0]}"` : `de onderwerpen ${topics.map(t => `"${t}"`).join(', ')}`;
@@ -392,6 +442,9 @@ BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst, geen markdown-cod
       temperature: 0.7,
       max_tokens: maxTokens,
       skipSystemPrompt: true,
+      ...(systemPromptOverride && systemPromptOverride.trim().length > 0
+        ? { systemPromptOverride }
+        : {}),
     });
 
     const content = data.choices[0]?.message?.content || '';
@@ -415,8 +468,9 @@ async function evaluateFreeTextAnswer(args: {
   modelAnswer: string;
   rubric: string;
   studentAnswer: string;
+  systemPromptOverride?: string;
 }): Promise<AnswerEvaluation> {
-  const { systemPersona, questionBlock, modelAnswer, rubric, studentAnswer } = args;
+  const { systemPersona, questionBlock, modelAnswer, rubric, studentAnswer, systemPromptOverride } = args;
   const prompt = `${systemPersona}
 
 ${questionBlock}
@@ -450,6 +504,9 @@ Geef je antwoord UITSLUITEND als één JSON-object met deze structuur, zonder ex
     temperature: 0.3,
     max_tokens: 1200,
     skipSystemPrompt: true,
+    ...(systemPromptOverride && systemPromptOverride.trim().length > 0
+      ? { systemPromptOverride }
+      : {}),
   });
 
   const content = data.choices[0]?.message?.content || '';
@@ -466,26 +523,30 @@ Geef je antwoord UITSLUITEND als één JSON-object met deze structuur, zonder ex
 export async function evaluateOpenAnswer(
   question: OpenQuestion,
   studentAnswer: string,
+  systemPromptOverride?: string,
 ): Promise<AnswerEvaluation> {
   return evaluateFreeTextAnswer({
-    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt het antwoord van een student op een open vraag.`,
+    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt jouw antwoord op een open vraag.`,
     questionBlock: `Open vraag:\n${question.question}`,
     modelAnswer: question.modelAnswer,
     rubric: question.rubric,
     studentAnswer,
+    systemPromptOverride,
   });
 }
 
 export async function evaluateCasusAnswer(
   question: CasusQuestion,
   studentAnswer: string,
+  systemPromptOverride?: string,
 ): Promise<AnswerEvaluation> {
   return evaluateFreeTextAnswer({
-    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt het antwoord van een student op een casusvraag. Houd zowel de inhoudelijke juistheid als het correct toepassen op de geschetste casus mee in je oordeel.`,
+    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt jouw antwoord op een casusvraag. Houd zowel de inhoudelijke juistheid als het correct toepassen op de geschetste casus mee in je oordeel.`,
     questionBlock: `Casusbeschrijving:\n${question.context}\n\nVraag bij de casus:\n${question.question}`,
     modelAnswer: question.modelAnswer,
     rubric: question.rubric,
     studentAnswer,
+    systemPromptOverride,
   });
 }
 

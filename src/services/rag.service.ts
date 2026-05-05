@@ -59,6 +59,32 @@ export async function getRAGEnabledFolders(
   }
 }
 
+// Haal de primaire RAG-folders op die docenten aan een set begrippen hebben
+// gekoppeld. Wordt door searchRelevantChunks gebruikt om eerst binnen die
+// folders te zoeken voordat het terugvalt op de bredere cursus-mappen.
+async function fetchPrimaryRagFolders(
+  courseId: string,
+  conceptIds: string[],
+): Promise<string[]> {
+  if (!conceptIds || conceptIds.length === 0) return [];
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+    const res = await fetch('/api/quiz/primary-rag-folders', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ courseId, conceptIds }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.folderIds) ? data.folderIds : [];
+  } catch (err) {
+    console.warn('[RAG] Primaire folders ophalen mislukt:', err);
+    return [];
+  }
+}
+
 export async function searchRelevantChunks(
   query: string,
   matchThreshold: number = 0.7,
@@ -66,7 +92,8 @@ export async function searchRelevantChunks(
   moduleType?: 'general' | 'explain' | 'project' | 'quiz',
   userRole: 'student' | 'docent' | 'admin' = 'admin',
   courseId?: string | null,
-  expansion?: QueryExpansionOptions & { enabled?: boolean }
+  expansion?: QueryExpansionOptions & { enabled?: boolean },
+  conceptIds?: string[],
 ): Promise<DocumentChunk[]> {
   if (courseId === null) {
     console.log('[RAG] No active course — skipping RAG search');
@@ -117,7 +144,14 @@ export async function searchRelevantChunks(
       ? ragEnabledFolders
       : ragEnabledFolders.filter((id) => accessibleFolderIds.includes(id));
 
-    console.log(`[RAG] Allowed folder IDs: ${allowedFolderIds.length}`);
+    // Primaire RAG-folders per begrip (Task #57). Wanneer concepten gekoppeld
+    // zijn aan een specifieke folder, geven we die voorrang. Pas als daar geen
+    // bruikbare hits zijn, vallen we terug op de bredere allowedFolderIds.
+    const primaryFolderIds = (conceptIds && conceptIds.length > 0 && courseId)
+      ? (await fetchPrimaryRagFolders(courseId, conceptIds)).filter((id) => allowedFolderIds.includes(id))
+      : [];
+
+    console.log(`[RAG] Allowed folder IDs: ${allowedFolderIds.length}, primary folders: ${primaryFolderIds.length}`);
 
     // Vraag de top kandidaten op zonder drempel zodat we altijd de hoogste
     // beschikbare similarity-score kunnen rapporteren bij geen match.
@@ -145,6 +179,8 @@ export async function searchRelevantChunks(
       .in('id', allChunks.map((c: { document_id: string }) => c.document_id))
       .eq('bucket', STORAGE_CONFIG.buckets.RAG_SOURCES);
 
+    const docFolderById = new Map((documents || []).map((d) => [d.id, d.folder_id]));
+
     const allowedDocIds = new Set(
       documents
         ?.filter((doc) => {
@@ -157,11 +193,28 @@ export async function searchRelevantChunks(
     const inAllowedFolders = (allChunks as Array<{ id: string; document_id: string; content: string; document_title: string; similarity: number; metadata: unknown }>)
       .filter((chunk) => allowedDocIds.has(chunk.document_id));
 
-    const aboveThreshold = inAllowedFolders.filter((c) => c.similarity >= matchThreshold);
+    // Voorrang aan chunks uit primaire folders zodra die voldoende hits opleveren.
+    let workingSet = inAllowedFolders;
+    if (primaryFolderIds.length > 0) {
+      const primarySet = new Set(primaryFolderIds);
+      const primaryChunks = inAllowedFolders.filter((c) => {
+        const f = docFolderById.get(c.document_id);
+        return f && primarySet.has(f);
+      });
+      const primaryAboveThreshold = primaryChunks.filter((c) => c.similarity >= matchThreshold);
+      if (primaryAboveThreshold.length >= Math.min(matchCount, 2)) {
+        workingSet = primaryChunks;
+        console.log(`[RAG] Primaire folder-set gebruikt (${primaryChunks.length} kandidaten, ${primaryAboveThreshold.length} ≥ drempel)`);
+      } else {
+        console.log(`[RAG] Primaire folder-set onvoldoende (${primaryAboveThreshold.length} hits) — fallback naar brede set.`);
+      }
+    }
+
+    const aboveThreshold = workingSet.filter((c) => c.similarity >= matchThreshold);
 
     if (aboveThreshold.length === 0) {
-      const maxAllowed = inAllowedFolders.length > 0
-        ? Math.max(...inAllowedFolders.map((c) => c.similarity))
+      const maxAllowed = workingSet.length > 0
+        ? Math.max(...workingSet.map((c) => c.similarity))
         : 0;
       console.warn(
         `[RAG] Geen chunks boven drempel ${matchThreshold.toFixed(2)} ` +

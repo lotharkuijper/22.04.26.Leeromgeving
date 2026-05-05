@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus } from 'lucide-react';
+import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
@@ -9,6 +9,13 @@ interface Concept {
   name: string;
   category?: string | null;
   course_id?: string | null;
+  definition?: string | null;
+}
+
+interface MappingSuggestion {
+  exsection_path: string[];
+  count: number;
+  similarity: number;
 }
 
 interface ItembankSection {
@@ -76,6 +83,13 @@ export function QuizSourcesAdminPanel() {
   const [prompts, setPrompts] = useState<QuizPrompt[]>([]);
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
 
+  // Embedding-gebaseerde mapping-suggesties per concept (Task #57). De docent
+  // klikt op "Stel mapping voor" en krijgt de top-3 itembank-secties die qua
+  // betekenis het dichtst bij het begrip liggen, klaar om met één klik
+  // toe te voegen aan de huidige mappings.
+  const [suggestionsByConcept, setSuggestionsByConcept] = useState<Record<string, MappingSuggestion[]>>({});
+  const [suggestingConceptId, setSuggestingConceptId] = useState<string | null>(null);
+
   const headers = useMemo(
     () =>
       session?.access_token
@@ -100,7 +114,7 @@ export function QuizSourcesAdminPanel() {
       // Concepten van de cursus
       const { data: conceptRows } = await supabase
         .from('concepts')
-        .select('id, name, category, course_id, key_points')
+        .select('id, name, category, course_id, key_points, definition')
         .order('name');
       const courseMarker = `course_id:${courseId}`;
       const filtered = (conceptRows || []).filter((c: any) => {
@@ -276,6 +290,35 @@ export function QuizSourcesAdminPanel() {
     setMappings(prev => prev.filter(m => !(m.concept_id === conceptId && m.exsection_path.join('/') === pathKey)));
   }
 
+  async function handleSuggestMappings(concept: Concept) {
+    setSuggestingConceptId(concept.id);
+    try {
+      const res = await fetch('/api/admin/itembank-mapping-suggestions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          conceptName: concept.name,
+          conceptDefinition: concept.definition || null,
+          topN: 3,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Suggesties ophalen mislukt');
+      setSuggestionsByConcept(prev => ({ ...prev, [concept.id]: data.suggestions || [] }));
+    } catch (err) {
+      showMsg('error', err instanceof Error ? err.message : 'Onbekende fout bij suggesties');
+    }
+    setSuggestingConceptId(null);
+  }
+
+  function dismissSuggestions(conceptId: string) {
+    setSuggestionsByConcept(prev => {
+      const next = { ...prev };
+      delete next[conceptId];
+      return next;
+    });
+  }
+
   function setRagFolder(conceptId: string, folderId: string) {
     setRagSources(prev => {
       const others = prev.filter(s => s.concept_id !== conceptId);
@@ -371,30 +414,46 @@ export function QuizSourcesAdminPanel() {
               const conceptMappings = mappings.filter(m => m.concept_id === concept.id);
               return (
                 <div key={concept.id} className="border border-gray-200 rounded-lg p-3" data-testid={`mapping-row-${concept.id}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
+                  <div className="flex items-center justify-between mb-2 gap-2">
+                    <div className="flex-1 min-w-0">
                       <span className="font-medium text-gray-900">{concept.name}</span>
                       {concept.category && <span className="ml-2 text-xs text-gray-500">{concept.category}</span>}
                     </div>
-                    <select
-                      onChange={e => {
-                        const idx = parseInt(e.target.value, 10);
-                        if (!Number.isNaN(idx) && sections[idx]) {
-                          addMapping(concept.id, sections[idx].exsection_path);
-                          e.target.value = '';
-                        }
-                      }}
-                      className="text-xs border border-gray-300 rounded px-2 py-1"
-                      defaultValue=""
-                      data-testid={`select-section-${concept.id}`}
-                    >
-                      <option value="">+ koppel sectie...</option>
-                      {sections.map((s, idx) => (
-                        <option key={s.exsection_path.join('/')} value={idx}>
-                          {s.exsection_path.join(' / ')} ({s.count})
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSuggestMappings(concept)}
+                        disabled={suggestingConceptId === concept.id}
+                        className="px-2 py-1 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded text-xs text-amber-900 inline-flex items-center gap-1 disabled:opacity-50"
+                        data-testid={`button-suggest-mapping-${concept.id}`}
+                      >
+                        {suggestingConceptId === concept.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Lightbulb className="w-3 h-3" />
+                        )}
+                        Stel mapping voor
+                      </button>
+                      <select
+                        onChange={e => {
+                          const idx = parseInt(e.target.value, 10);
+                          if (!Number.isNaN(idx) && sections[idx]) {
+                            addMapping(concept.id, sections[idx].exsection_path);
+                            e.target.value = '';
+                          }
+                        }}
+                        className="text-xs border border-gray-300 rounded px-2 py-1"
+                        defaultValue=""
+                        data-testid={`select-section-${concept.id}`}
+                      >
+                        <option value="">+ koppel sectie...</option>
+                        {sections.map((s, idx) => (
+                          <option key={s.exsection_path.join('/')} value={idx}>
+                            {s.exsection_path.join(' / ')} ({s.count})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                   {conceptMappings.length === 0 ? (
                     <p className="text-xs text-gray-400 italic">Nog geen secties gekoppeld</p>
@@ -419,6 +478,60 @@ export function QuizSourcesAdminPanel() {
                           </span>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {suggestionsByConcept[concept.id] && (
+                    <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded" data-testid={`suggestions-${concept.id}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-amber-900 inline-flex items-center gap-1">
+                          <Lightbulb className="w-3 h-3" /> Voorgestelde secties (op semantische gelijkenis)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => dismissSuggestions(concept.id)}
+                          className="text-xs text-amber-700 hover:text-amber-900"
+                          aria-label="Sluit suggesties"
+                        >
+                          sluiten
+                        </button>
+                      </div>
+                      {suggestionsByConcept[concept.id].length === 0 ? (
+                        <p className="text-xs text-amber-800 italic">Geen suggesties beschikbaar.</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {suggestionsByConcept[concept.id].map(s => {
+                            const pathKey = s.exsection_path.join('/');
+                            const already = mappings.some(
+                              m => m.concept_id === concept.id && m.exsection_path.join('/') === pathKey
+                            );
+                            return (
+                              <li
+                                key={pathKey}
+                                className="flex items-center justify-between gap-2 text-xs"
+                                data-testid={`suggestion-${concept.id}-${pathKey}`}
+                              >
+                                <span className="text-amber-900 flex-1 truncate">
+                                  {s.exsection_path.join(' / ')}
+                                  <span className="ml-2 text-amber-700">
+                                    ({s.count} vragen · gelijkenis {(s.similarity * 100).toFixed(0)}%)
+                                  </span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => addMapping(concept.id, s.exsection_path)}
+                                  disabled={already}
+                                  className="px-2 py-0.5 bg-amber-200 text-amber-900 rounded hover:bg-amber-300 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                                  data-testid={`button-add-suggestion-${concept.id}-${pathKey}`}
+                                >
+                                  <Plus className="w-3 h-3" />
+                                  {already ? 'al gekoppeld' : 'voeg toe'}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
                     </div>
                   )}
                 </div>

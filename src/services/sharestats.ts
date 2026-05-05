@@ -1,4 +1,5 @@
 // src/services/sharestats.ts
+import { getItembankRepo } from './github-parser.service';
 
 export interface ShareStatsTopic {
   name: string;
@@ -13,7 +14,12 @@ export interface ShareStatsFile {
   type: "file";
 }
 
-const GITHUB_API_BASE = "repos/ShareStats/itembank/contents";
+// Bouw het GitHub-API-pad op uit de runtime-configureerbare repo zodat
+// alternatieve forks zonder code-aanpassing kunnen worden gebruikt.
+function repoBase(): string {
+  const { owner, repo } = getItembankRepo();
+  return `repos/${owner}/${repo}/contents`;
+}
 
 async function githubFetch(path: string): Promise<any> {
   const res = await fetch(`/api/github/${path}`);
@@ -28,7 +34,7 @@ async function githubFetch(path: string): Promise<any> {
 // -----------------------------
 export async function fetchShareStatsTopics(): Promise<ShareStatsTopic[]> {
   try {
-    const data = await githubFetch(GITHUB_API_BASE);
+    const data = await githubFetch(repoBase());
     return data.filter((item: any) => item.type === "dir");
   } catch (error) {
     console.error("[SHARESTATS] Failed to fetch topics:", error);
@@ -75,7 +81,7 @@ export async function fetchShareStatsFiles(
   topicPath: string
 ): Promise<ShareStatsFile[]> {
   try {
-    return await fetchDirectoryRecursive(`${GITHUB_API_BASE}/${topicPath}`, 0);
+    return await fetchDirectoryRecursive(`${repoBase()}/${topicPath}`, 0);
   } catch (error) {
     console.error("[SHARESTATS] Failed to fetch files:", error);
     return [];

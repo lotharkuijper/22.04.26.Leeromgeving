@@ -2963,6 +2963,62 @@ async function detectQuizSourcesSchema() {
   }
 }
 
+// Helper: vereis een geauthenticeerde gebruiker (alle rollen). Wordt gebruikt
+// door endpoints die ook studenten mogen aanroepen — combineer met
+// `userHasCourseAccess()` zodra de route per cursus filtert om cross-course
+// dataleks te voorkomen.
+async function requireAuthUser(req, res) {
+  if (!supabaseAdmin) {
+    res.status(503).json({ error: 'Admin client niet beschikbaar' });
+    return null;
+  }
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    res.status(401).json({ error: 'Authorization header vereist' });
+    return null;
+  }
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error } = await callerClient.auth.getUser();
+    if (error || !user) {
+      res.status(401).json({ error: 'Niet geauthenticeerd' });
+      return null;
+    }
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('role, email')
+      .eq('id', user.id)
+      .maybeSingle();
+    return { user, profile: profile || { role: 'student' } };
+  } catch (err) {
+    res.status(401).json({ error: 'Authenticatie mislukt: ' + err.message });
+    return null;
+  }
+}
+
+// Controleer of een gebruiker toegang heeft tot een specifieke cursus.
+// Admins/superuser hebben altijd toegang; anderen moeten lid zijn via
+// course_members. Geen cursus = geen toegang.
+async function userHasCourseAccess(user, profile, courseId) {
+  if (!courseId || !user) return false;
+  const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+  if (isAdmin) return true;
+  try {
+    const { data: membership } = await supabaseAdmin
+      .from('course_members')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('course_id', courseId)
+      .maybeSingle();
+    return !!membership;
+  } catch {
+    return false;
+  }
+}
+
 // Helper: vereis admin/docent. Geeft op fout een response en `null` terug.
 async function requireAdminOrDocent(req, res) {
   if (!supabaseAdmin) {
@@ -3308,11 +3364,16 @@ app.put('/api/admin/quiz-sources-mix/:courseId', async (req, res) => {
 // Geeft een lijst itembank-vragen terug die matchen op de mappings van de
 // gegeven concepten binnen een cursus. De client doet de mix-coördinatie.
 app.post('/api/quiz/itembank-questions', async (req, res) => {
-  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
   const { courseId, conceptIds = [], limit = 5 } = req.body || {};
   if (!courseId || !Array.isArray(conceptIds) || conceptIds.length === 0) {
     return res.status(400).json({ error: 'courseId en niet-lege conceptIds vereist' });
   }
+  // Cross-course leak voorkomen: itembank-vragen mogen alleen door cursusleden
+  // (en admins/superuser) opgehaald worden.
+  const hasAccess = await userHasCourseAccess(auth.user, auth.profile, courseId);
+  if (!hasAccess) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
   if (!quizSourcesSchemaReady) {
     return res.json({ questions: [], schema_ready: false });
   }
@@ -3377,6 +3438,282 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
     }));
 
     return res.json({ questions, total_candidates: matches.length });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoint: quiz-prompts ophalen voor de generator/evaluator -------------
+// Iedere ingelogde gebruiker mag de actieve quiz-prompts inzien — de UI heeft
+// ze nodig zodat generateQuiz/evaluateOpen de juiste persona meesturen.
+app.get('/api/quiz/prompts', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: uErr } = await callerClient.auth.getUser();
+    if (uErr || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const names = Object.keys(QUIZ_PROMPT_DEFAULTS);
+    const result = { ...QUIZ_PROMPT_DEFAULTS };
+    if (promptsHasSection) {
+      const { data } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('name, content, is_active')
+        .in('name', names);
+      for (const row of data || []) {
+        if (row.is_active !== false && typeof row.content === 'string' && row.content.trim().length > 0) {
+          result[row.name] = row.content;
+        }
+      }
+    }
+    return res.json({ prompts: result });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoint: per-begrip beschikbaarheid (RAG-docs + ItemBank-vragen) ------
+// Geeft per concept terug hoeveel RAG-documenten er in zijn primaire folder
+// staan en hoeveel itembank-vragen via mappings overeenkomen. De student-UI
+// gebruikt dit om te tonen wat er voor het geselecteerde begrip beschikbaar is.
+app.post('/api/quiz/concept-availability', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId, conceptIds = [] } = req.body || {};
+  if (!courseId || !Array.isArray(conceptIds) || conceptIds.length === 0) {
+    return res.status(400).json({ error: 'courseId en niet-lege conceptIds vereist' });
+  }
+  // Cross-course leak voorkomen: alleen leden + admins zien availability voor
+  // een cursus.
+  const hasAccess = await userHasCourseAccess(auth.user, auth.profile, courseId);
+  if (!hasAccess) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  if (!quizSourcesSchemaReady) {
+    return res.json({ availability: {}, schema_ready: false });
+  }
+  try {
+    // 1) Primaire RAG-folders per concept
+    const { data: ragRows } = await supabaseAdmin
+      .from('concept_rag_sources')
+      .select('concept_id, folder_id')
+      .eq('course_id', courseId)
+      .in('concept_id', conceptIds);
+    const folderByConcept = new Map((ragRows || []).map(r => [r.concept_id, r.folder_id]));
+
+    // 2) Document-counts per folder
+    const folderIds = [...new Set((ragRows || []).map(r => r.folder_id).filter(Boolean))];
+    const docCountByFolder = new Map();
+    if (folderIds.length > 0) {
+      const { data: docs } = await supabaseAdmin
+        .from('documents')
+        .select('id, folder_id')
+        .in('folder_id', folderIds)
+        .eq('bucket', 'rag-sources');
+      for (const d of docs || []) {
+        docCountByFolder.set(d.folder_id, (docCountByFolder.get(d.folder_id) || 0) + 1);
+      }
+    }
+
+    // 3) ItemBank-mappings per concept
+    const { data: mapRows } = await supabaseAdmin
+      .from('concept_itembank_sections')
+      .select('concept_id, exsection_path, course_id')
+      .in('concept_id', conceptIds)
+      .or(`course_id.eq.${courseId},course_id.is.null`);
+
+    // Voor performance: één query met alle items waarvan eerste segment
+    // overlapt, daarna in JS groeperen op concept.
+    const allFirstSegments = [...new Set(
+      (mapRows || [])
+        .map(r => Array.isArray(r.exsection_path) && r.exsection_path.length > 0 ? r.exsection_path[0] : null)
+        .filter(Boolean)
+    )];
+    let allItems = [];
+    let itemsTruncated = false;
+    const ITEM_HARD_LIMIT = 5000;
+    if (allFirstSegments.length > 0) {
+      const { data: items, count } = await supabaseAdmin
+        .from('quiz_questions')
+        .select('id, exsection_path', { count: 'exact' })
+        .eq('source', 'sharestats')
+        .overlaps('exsection_path', allFirstSegments)
+        .limit(ITEM_HARD_LIMIT);
+      allItems = items || [];
+      if (typeof count === 'number' && count > ITEM_HARD_LIMIT) itemsTruncated = true;
+    }
+
+    const itembankCountByConcept = new Map();
+    for (const cid of conceptIds) {
+      const conceptMaps = (mapRows || []).filter(r => r.concept_id === cid);
+      if (conceptMaps.length === 0) { itembankCountByConcept.set(cid, 0); continue; }
+      const targets = conceptMaps
+        .map(m => Array.isArray(m.exsection_path) ? m.exsection_path : [])
+        .filter(p => p.length > 0);
+      let n = 0;
+      for (const item of allItems) {
+        const qPath = Array.isArray(item.exsection_path) ? item.exsection_path : [];
+        const match = targets.some(target => {
+          if (qPath.length < target.length) return false;
+          for (let i = 0; i < target.length; i++) if (qPath[i] !== target[i]) return false;
+          return true;
+        });
+        if (match) n++;
+      }
+      itembankCountByConcept.set(cid, n);
+    }
+
+    // 4) Compose result. Wanneer de itembank-prefilter de hard-limit raakte,
+    // markeren we per concept dat de count een ondergrens is — zodat de UI
+    // dat niet als exact getal presenteert.
+    const availability = {};
+    for (const cid of conceptIds) {
+      const fId = folderByConcept.get(cid) || null;
+      availability[cid] = {
+        primary_folder_id: fId,
+        rag_doc_count: fId ? (docCountByFolder.get(fId) || 0) : null,
+        itembank_question_count: itembankCountByConcept.get(cid) || 0,
+        itembank_count_truncated: itemsTruncated,
+      };
+    }
+    return res.json({ availability, schema_ready: true, truncated: itemsTruncated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoint: primaire RAG-folder-IDs voor concept-set ---------------------
+// Wordt gebruikt door de RAG-search om eerst binnen die folders te zoeken.
+app.post('/api/quiz/primary-rag-folders', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId, conceptIds = [] } = req.body || {};
+  if (!courseId || !Array.isArray(conceptIds) || conceptIds.length === 0) {
+    return res.json({ folderIds: [] });
+  }
+  // Cross-course leak voorkomen.
+  const hasAccess = await userHasCourseAccess(auth.user, auth.profile, courseId);
+  if (!hasAccess) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  if (!quizSourcesSchemaReady) {
+    return res.json({ folderIds: [], schema_ready: false });
+  }
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('concept_rag_sources')
+      .select('folder_id')
+      .eq('course_id', courseId)
+      .in('concept_id', conceptIds);
+    if (error) return res.status(500).json({ error: error.message });
+    const folderIds = [...new Set((data || []).map(r => r.folder_id).filter(Boolean))];
+    return res.json({ folderIds, schema_ready: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoint: ItemBank-mapping-suggesties via embeddings -------------------
+// Voor een gegeven concept (naam + optionele definitie) ranken we alle
+// itembank-secties op cosine-similarity en geven we de top-N terug.
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+async function fetchOpenAIEmbeddings(texts) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY niet geconfigureerd');
+  const response = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: 'text-embedding-3-small', input: texts }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenAI embeddings error: ${err}`);
+  }
+  const data = await response.json();
+  return (data.data || []).map(d => d.embedding);
+}
+
+app.post('/api/admin/itembank-mapping-suggestions', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar' });
+  }
+  const { conceptName, conceptDefinition, topN = 3 } = req.body || {};
+  if (!conceptName || typeof conceptName !== 'string') {
+    return res.status(400).json({ error: 'conceptName is verplicht' });
+  }
+  // Bound de werkverzameling om timeouts en grote OpenAI-bills te voorkomen
+  // bij onverwacht grote itembanks. 800 unieke secties is ruim voldoende voor
+  // een cursus en kost ~1 OpenAI-call.
+  const MAX_SECTIONS = 800;
+  const ITEM_PAGE_LIMIT = 5000;
+  try {
+    // 1) Verzamel unieke secties met counts. We pagineren lichtjes om geheugen
+    // te beperken: pak max ITEM_PAGE_LIMIT records, deduplate naar pad-key,
+    // en cap daarna op MAX_SECTIONS (meest voorkomende paden eerst).
+    const { data: rows, error: secErr } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('exsection_path')
+      .eq('source', 'sharestats')
+      .not('exsection_path', 'is', null)
+      .limit(ITEM_PAGE_LIMIT);
+    if (secErr) return res.status(500).json({ error: secErr.message });
+    const seen = new Map();
+    for (const row of rows || []) {
+      const path = Array.isArray(row.exsection_path) ? row.exsection_path : [];
+      if (path.length === 0) continue;
+      const key = path.join(' / ');
+      const entry = seen.get(key) || { exsection_path: path, count: 0 };
+      entry.count += 1;
+      seen.set(key, entry);
+    }
+    let sections = [...seen.values()];
+    let sectionsTruncated = false;
+    if (sections.length > MAX_SECTIONS) {
+      sections.sort((a, b) => b.count - a.count);
+      sections = sections.slice(0, MAX_SECTIONS);
+      sectionsTruncated = true;
+    }
+    if (sections.length === 0) return res.json({ suggestions: [], truncated: false });
+
+    // 2) Bereken embeddings: één voor concept, één voor elke sectielabel
+    const conceptText = conceptDefinition
+      ? `${conceptName}. ${String(conceptDefinition).slice(0, 600)}`
+      : conceptName;
+    const sectionTexts = sections.map(s => s.exsection_path.join(' / '));
+    const allTexts = [conceptText, ...sectionTexts];
+
+    // OpenAI embeddings in chunks van max 100 om limieten te vermijden
+    const embeddings = [];
+    const CHUNK = 100;
+    for (let i = 0; i < allTexts.length; i += CHUNK) {
+      const part = await fetchOpenAIEmbeddings(allTexts.slice(i, i + CHUNK));
+      embeddings.push(...part);
+    }
+    const conceptEmb = embeddings[0];
+    const ranked = sections.map((s, idx) => ({
+      ...s,
+      similarity: cosineSimilarity(conceptEmb, embeddings[1 + idx]),
+    }));
+    ranked.sort((a, b) => b.similarity - a.similarity);
+    return res.json({
+      suggestions: ranked.slice(0, Math.max(1, Math.min(topN, 10))),
+      truncated: sectionsTruncated,
+      candidates_evaluated: sections.length,
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
