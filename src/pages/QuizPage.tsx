@@ -166,6 +166,7 @@ export function QuizPage() {
     primary_folder_id: string | null;
     rag_doc_count: number | null;
     itembank_question_count: number;
+    itembank_count_truncated?: boolean;
   };
   const [conceptAvailability, setConceptAvailability] = useState<Record<string, ConceptAvailability>>({});
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
@@ -774,10 +775,19 @@ export function QuizPage() {
                                 </span>
                                 <span
                                   className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${hasIb ? 'bg-blue-100 text-blue-800' : 'bg-gray-200 text-gray-600'}`}
-                                  title={`${ibCount} ItemBank-vraag/vragen via koppelingen`}
+                                  title={a?.itembank_count_truncated
+                                    ? `Ten minste ${ibCount} ItemBank-vraag/vragen — exacte telling beperkt door cap`
+                                    : `${ibCount} ItemBank-vraag/vragen via koppelingen`}
                                   data-testid={`avail-itembank-${t.id}`}
                                 >
-                                  IB: {ibCount}
+                                  IB: {a?.itembank_count_truncated ? `≥${ibCount}` : ibCount}
+                                </span>
+                                <span
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-100 text-violet-800"
+                                  title="LLM-creatief is altijd beschikbaar — Groq genereert toepassings- en transfervragen zonder externe bron"
+                                  data-testid={`avail-llm-${t.id}`}
+                                >
+                                  LLM
                                 </span>
                               </span>
                             </li>

@@ -317,11 +317,21 @@ export type QuizPromptName =
   | 'quiz_generate_creative'
   | 'quiz_evaluate_open';
 
+// Cache met TTL: succesvolle ophaal blijft 5 min geldig zodat we niet bij elke
+// vraag opnieuw naar de DB gaan, terwijl een transiënte fout (HTTP 5xx, offline
+// even) niet voor de hele sessie de fallback vastpint. Bij een fout cachen we
+// ALLEEN kortstondig (10s) zodat een storm aan calls geen request-storm geeft,
+// maar de volgende generatie het opnieuw probeert.
 let quizPromptCache: Record<QuizPromptName, string> | null = null;
+let quizPromptCacheExpiry = 0;
+let quizPromptCacheIsFallback = false;
 let quizPromptInflight: Promise<Record<QuizPromptName, string>> | null = null;
+const QUIZ_PROMPT_TTL_OK_MS = 5 * 60 * 1000;
+const QUIZ_PROMPT_TTL_ERR_MS = 10 * 1000;
 
 export async function fetchQuizPrompts(): Promise<Record<QuizPromptName, string>> {
-  if (quizPromptCache) return quizPromptCache;
+  const now = Date.now();
+  if (quizPromptCache && now < quizPromptCacheExpiry) return quizPromptCache;
   if (quizPromptInflight) return quizPromptInflight;
   quizPromptInflight = (async () => {
     try {
@@ -334,6 +344,8 @@ export async function fetchQuizPrompts(): Promise<Record<QuizPromptName, string>
       const data = await res.json();
       const prompts = (data?.prompts || {}) as Record<QuizPromptName, string>;
       quizPromptCache = prompts;
+      quizPromptCacheExpiry = Date.now() + QUIZ_PROMPT_TTL_OK_MS;
+      quizPromptCacheIsFallback = false;
       return prompts;
     } catch (err) {
       console.warn('[llm] fetchQuizPrompts mislukt — fallback op hardcoded persona:', err);
@@ -345,6 +357,9 @@ export async function fetchQuizPrompts(): Promise<Record<QuizPromptName, string>
         quiz_evaluate_open: '',
       } as Record<QuizPromptName, string>;
       quizPromptCache = fallback;
+      // Korte TTL bij fallback zodat de volgende generatie opnieuw probeert.
+      quizPromptCacheExpiry = Date.now() + QUIZ_PROMPT_TTL_ERR_MS;
+      quizPromptCacheIsFallback = true;
       return fallback;
     } finally {
       quizPromptInflight = null;
@@ -355,6 +370,12 @@ export async function fetchQuizPrompts(): Promise<Record<QuizPromptName, string>
 
 export function clearQuizPromptCache() {
   quizPromptCache = null;
+  quizPromptCacheExpiry = 0;
+  quizPromptCacheIsFallback = false;
+}
+
+export function isQuizPromptCacheFallback(): boolean {
+  return quizPromptCacheIsFallback;
 }
 
 export async function generateQuiz(
