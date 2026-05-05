@@ -60,8 +60,8 @@ export async function getRAGEnabledFolders(
 }
 
 // Haal de primaire RAG-folders op die docenten aan een set begrippen hebben
-// gekoppeld. Wordt door searchRelevantChunks gebruikt om eerst binnen die
-// folders te zoeken voordat het terugvalt op de bredere cursus-mappen.
+// gekoppeld. Wordt door searchRelevantChunksWithStats gebruikt om eerst binnen
+// die folders te zoeken voordat het terugvalt op de bredere cursus-mappen.
 async function fetchPrimaryRagFolders(
   courseId: string,
   conceptIds: string[],
@@ -85,7 +85,16 @@ async function fetchPrimaryRagFolders(
   }
 }
 
-export async function searchRelevantChunks(
+export interface RAGSearchStats {
+  chunks: DocumentChunk[];
+  threshold: number;
+  matchCount: number;
+  maxSimilarity: number;
+  candidatesConsidered: number;
+  searchPerformed: boolean;
+}
+
+export async function searchRelevantChunksWithStats(
   query: string,
   matchThreshold: number = 0.7,
   matchCount: number = 5,
@@ -94,10 +103,20 @@ export async function searchRelevantChunks(
   courseId?: string | null,
   expansion?: QueryExpansionOptions & { enabled?: boolean },
   conceptIds?: string[],
-): Promise<DocumentChunk[]> {
+): Promise<RAGSearchStats> {
+  const baseStats: RAGSearchStats = {
+    chunks: [],
+    threshold: matchThreshold,
+    matchCount,
+    maxSimilarity: 0,
+    candidatesConsidered: 0,
+    searchPerformed: false,
+  };
+
+
   if (courseId === null) {
     console.log('[RAG] No active course — skipping RAG search');
-    return [];
+    return baseStats;
   }
 
   // Verrijk de zoekterm wanneer expansion expliciet aanstaat. Voor korte
@@ -115,7 +134,7 @@ export async function searchRelevantChunks(
 
   if (!embedding) {
     console.warn('[RAG] No embedding generated, RAG not available');
-    return [];
+    return baseStats;
   }
 
   try {
@@ -126,7 +145,7 @@ export async function searchRelevantChunks(
 
     if (!docCount || docCount === 0) {
       console.warn('[RAG] No RAG documents in database, operating without RAG context');
-      return [];
+      return baseStats;
     }
 
     console.log(`[RAG] Found ${docCount} RAG documents in database`);
@@ -135,7 +154,7 @@ export async function searchRelevantChunks(
 
     if (courseId !== undefined && ragEnabledFolders.length === 0) {
       console.log('[RAG] Active course has no RAG folders for this module — skipping RAG');
-      return [];
+      return baseStats;
     }
 
     const accessibleFolderIds = await getAccessibleFolders(userRole);
@@ -163,12 +182,12 @@ export async function searchRelevantChunks(
 
     if (error) {
       console.error('[RAG] Error searching chunks:', error);
-      return [];
+      return baseStats;
     }
 
     if (!allChunks || allChunks.length === 0) {
       console.warn('[RAG] match_document_chunks returned no rows at all');
-      return [];
+      return { ...baseStats, searchPerformed: true };
     }
 
     console.log(`[RAG] RPC returned ${allChunks.length} candidate chunks (top score: ${(allChunks[0]?.similarity ?? 0).toFixed(3)})`);
@@ -210,35 +229,73 @@ export async function searchRelevantChunks(
       }
     }
 
+    const maxAllowed = workingSet.length > 0
+      ? Math.max(...workingSet.map((c) => c.similarity))
+      : 0;
+
     const aboveThreshold = workingSet.filter((c) => c.similarity >= matchThreshold);
 
     if (aboveThreshold.length === 0) {
-      const maxAllowed = workingSet.length > 0
-        ? Math.max(...workingSet.map((c) => c.similarity))
-        : 0;
       console.warn(
         `[RAG] Geen chunks boven drempel ${matchThreshold.toFixed(2)} ` +
-        `(beste score in toegestane mappen: ${maxAllowed.toFixed(3)}, kandidaten: ${inAllowedFolders.length}). ` +
+        `(beste score in toegestane mappen: ${maxAllowed.toFixed(3)}, kandidaten: ${workingSet.length}). ` +
         `Overweeg de drempel te verlagen.`
       );
-      return [];
+      return {
+        chunks: [],
+        threshold: matchThreshold,
+        matchCount,
+        maxSimilarity: maxAllowed,
+        candidatesConsidered: workingSet.length,
+        searchPerformed: true,
+      };
     }
 
     const filteredChunks = aboveThreshold.slice(0, matchCount);
 
     console.log(`[RAG] Returning ${filteredChunks.length} chunks (scores: ${filteredChunks.map((c) => c.similarity.toFixed(3)).join(', ')})`);
 
-    return filteredChunks.map((chunk) => ({
-      id: chunk.id,
-      content: chunk.content,
-      documentTitle: chunk.document_title,
-      similarity: chunk.similarity,
-      metadata: chunk.metadata,
-    }));
+    return {
+      chunks: filteredChunks.map((chunk) => ({
+        id: chunk.id,
+        content: chunk.content,
+        documentTitle: chunk.document_title,
+        similarity: chunk.similarity,
+        metadata: chunk.metadata,
+      })),
+      threshold: matchThreshold,
+      matchCount,
+      maxSimilarity: maxAllowed,
+      candidatesConsidered: workingSet.length,
+      searchPerformed: true,
+    };
   } catch (error) {
-    console.error('[RAG] Unexpected error in searchRelevantChunks:', error);
-    return [];
+    console.error('[RAG] Unexpected error in searchRelevantChunksWithStats:', error);
+    return baseStats;
   }
+}
+
+export async function searchRelevantChunks(
+  query: string,
+  matchThreshold: number = 0.7,
+  matchCount: number = 5,
+  moduleType?: 'general' | 'explain' | 'project' | 'quiz',
+  userRole: 'student' | 'docent' | 'admin' = 'admin',
+  courseId?: string | null,
+  expansion?: QueryExpansionOptions & { enabled?: boolean },
+  conceptIds?: string[],
+): Promise<DocumentChunk[]> {
+  const stats = await searchRelevantChunksWithStats(
+    query,
+    matchThreshold,
+    matchCount,
+    moduleType,
+    userRole,
+    courseId,
+    expansion,
+    conceptIds,
+  );
+  return stats.chunks;
 }
 
 export async function checkRAGAvailability(): Promise<{

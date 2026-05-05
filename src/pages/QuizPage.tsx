@@ -16,9 +16,10 @@ import {
   type QuizSource,
 } from '../services/llm.service';
 import { generateMixedQuiz, fetchSourceMix, distributeMix, SOURCE_LABELS, SOURCE_COLORS, type SourceMix, type MixCounts } from '../services/quiz-mix.service';
-import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, type DocumentChunk } from '../services/rag.service';
 import { getQuizTopics, type QuizTopic } from '../services/quiz-topic.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
+import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import {
   Play,
   CheckCircle,
@@ -151,6 +152,12 @@ export function QuizPage() {
   // Generation + RAG
   const [loading, setLoading] = useState(false);
   const [ragSources, setRagSources] = useState<SourceItem[]>([]);
+  const [ragStats, setRagStats] = useState<{
+    threshold: number;
+    maxSimilarity: number;
+    candidatesConsidered: number;
+    searchPerformed: boolean;
+  } | null>(null);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
@@ -326,15 +333,16 @@ export function QuizPage() {
     setRagSources([]);
     setFeedbackError(null);
     setContextStats(null);
+    setRagStats(null);
 
     const topicNames = selectedTopics.map(t => t.name);
 
     try {
       let ragContext: string | undefined;
       if (activeCourse !== null) {
-        let chunks: Awaited<ReturnType<typeof searchRelevantChunks>> = [];
+        let chunks: DocumentChunk[] = [];
         try {
-          chunks = await searchRelevantChunks(
+          const ragResult = await searchRelevantChunksWithStats(
             topicNames.join(', '),
             ragSettings.quiz.similarity_threshold,
             ragSettings.quiz.match_count,
@@ -344,6 +352,13 @@ export function QuizPage() {
             undefined,
             selectedTopics.map(t => t.id),
           );
+          setRagStats({
+            threshold: ragResult.threshold,
+            maxSimilarity: ragResult.maxSimilarity,
+            candidatesConsidered: ragResult.candidatesConsidered,
+            searchPerformed: ragResult.searchPerformed,
+          });
+          chunks = ragResult.chunks;
         } catch (ragErr) {
           console.warn('[QUIZ] RAG search failed, generating without context:', ragErr);
         }
@@ -544,6 +559,7 @@ export function QuizPage() {
     setShowExplanation(false);
     setDraftText('');
     setRagSources([]);
+    setRagStats(null);
     setFeedbackError(null);
     setContextStats(null);
     setEvalError(null);
@@ -1061,6 +1077,17 @@ export function QuizPage() {
                 : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
             </p>
           )}
+          {ragStats && (
+            <div className="text-left">
+              <RAGDiagnostics
+                matchCount={ragSources.length}
+                threshold={ragStats.threshold}
+                maxSimilarity={ragStats.maxSimilarity}
+                candidatesConsidered={ragStats.candidatesConsidered}
+                searchPerformed={ragStats.searchPerformed}
+              />
+            </div>
+          )}
           <button
             onClick={() => { setState('active'); goToQuestion(0); }}
             data-testid="button-start-quiz"
@@ -1097,6 +1124,17 @@ export function QuizPage() {
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500" />
                 Gebaseerd op {ragSources.length} bron{ragSources.length !== 1 ? 'nen' : ''} uit cursusmateriaal
               </p>
+            )}
+            {ragStats && (
+              <div className="mt-1">
+                <RAGDiagnostics
+                  matchCount={ragSources.length}
+                  threshold={ragStats.threshold}
+                  maxSimilarity={ragStats.maxSimilarity}
+                  candidatesConsidered={ragStats.candidatesConsidered}
+                  searchPerformed={ragStats.searchPerformed}
+                />
+              </div>
             )}
           </div>
           <div className="text-right">
@@ -1394,6 +1432,17 @@ export function QuizPage() {
           {ragSources.length > 0 && (
             <div className="mt-2">
               <SourceList sources={ragSources} label="Quiz gebaseerd op cursusmateriaal" />
+            </div>
+          )}
+          {ragStats && (
+            <div className="mt-3">
+              <RAGDiagnostics
+                matchCount={ragSources.length}
+                threshold={ragStats.threshold}
+                maxSimilarity={ragStats.maxSimilarity}
+                candidatesConsidered={ragStats.candidatesConsidered}
+                searchPerformed={ragStats.searchPerformed}
+              />
             </div>
           )}
         </div>

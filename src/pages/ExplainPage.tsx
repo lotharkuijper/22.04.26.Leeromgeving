@@ -3,9 +3,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
-import { searchRelevantChunks, buildContextWithCap, dedupeSourcesByDocument } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
+import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import type { Database } from '../lib/database.types';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
@@ -55,6 +56,12 @@ export function ExplainPage() {
   const [profileTimeout, setProfileTimeout] = useState(false);
   const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number }>>([]);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
+  const [retrievedStats, setRetrievedStats] = useState<{
+    threshold: number;
+    maxSimilarity: number;
+    candidatesConsidered: number;
+    searchPerformed: boolean;
+  } | null>(null);
   const [conceptSource, setConceptSource] = useState<'course' | 'global' | 'empty' | null>(null);
   const [conceptsLoading, setConceptsLoading] = useState(false);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
@@ -148,6 +155,7 @@ export function ExplainPage() {
       setFeedback(data.feedback || null);
       setFeedbackError(null);
       setRetrievedSources([]);
+      setRetrievedStats(null);
       setActiveExplanationId(item.id);
     } catch (err) {
       console.error('[EXPLAIN] select history fout:', err);
@@ -273,6 +281,7 @@ export function ExplainPage() {
     setFeedback(null);
     setFeedbackError(null);
     setRetrievedSources([]);
+    setRetrievedStats(null);
 
     try {
       console.log('[EXPLAIN] Searching for relevant RAG chunks for concept:', selectedConcept.name);
@@ -281,7 +290,7 @@ export function ExplainPage() {
       // key_points toe; voor korte Nederlandse vaktermen (bv. "cohort") tilt
       // dat de top-similarity meetbaar omhoog zonder de drempel te verlagen.
       const expansionEnabled = ragSettings.explain.query_expansion_enabled;
-      const chunks = await searchRelevantChunks(
+      const ragResult = await searchRelevantChunksWithStats(
         selectedConcept.name,
         ragSettings.explain.similarity_threshold,
         ragSettings.explain.match_count,
@@ -296,6 +305,13 @@ export function ExplainPage() {
             }
           : undefined
       );
+      const chunks = ragResult.chunks;
+      setRetrievedStats({
+        threshold: ragResult.threshold,
+        maxSimilarity: ragResult.maxSimilarity,
+        candidatesConsidered: ragResult.candidatesConsidered,
+        searchPerformed: ragResult.searchPerformed,
+      });
 
       const allSources = chunks.map(chunk => ({
         title: chunk.documentTitle,
@@ -763,6 +779,17 @@ export function ExplainPage() {
                     </div>
                   )}
                   <SourceList sources={retrievedSources} showSimilarity={false} />
+                  {retrievedStats && (
+                    <div className="mt-4">
+                      <RAGDiagnostics
+                        matchCount={retrievedSources.length}
+                        threshold={retrievedStats.threshold}
+                        maxSimilarity={retrievedStats.maxSimilarity}
+                        candidatesConsidered={retrievedStats.candidatesConsidered}
+                        searchPerformed={retrievedStats.searchPerformed}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </>

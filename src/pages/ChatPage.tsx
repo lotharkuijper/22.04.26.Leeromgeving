@@ -3,8 +3,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { sendChatMessage, llmErrorToDutch, type Message } from '../services/llm.service';
-import { searchRelevantChunks, buildContextWithCap } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, type DocumentChunk } from '../services/rag.service';
 import { SourceList } from '../components/SourceList';
+import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 
@@ -237,9 +238,20 @@ export function ChatPage() {
 
     try {
       console.log('[CHAT] Searching for relevant RAG chunks...');
-      let chunks: Awaited<ReturnType<typeof searchRelevantChunks>> = [];
+      let chunks: DocumentChunk[] = [];
+      let ragStats: {
+        threshold: number;
+        maxSimilarity: number;
+        candidatesConsidered: number;
+        searchPerformed: boolean;
+      } = {
+        threshold: ragSettings.chat.similarity_threshold,
+        maxSimilarity: 0,
+        candidatesConsidered: 0,
+        searchPerformed: false,
+      };
       try {
-        chunks = await searchRelevantChunks(
+        const stats = await searchRelevantChunksWithStats(
           userContent,
           ragSettings.chat.similarity_threshold,
           ragSettings.chat.match_count,
@@ -247,6 +259,13 @@ export function ChatPage() {
           profile?.role || 'student',
           activeCourse
         );
+        chunks = stats.chunks;
+        ragStats = {
+          threshold: stats.threshold,
+          maxSimilarity: stats.maxSimilarity,
+          candidatesConsidered: stats.candidatesConsidered,
+          searchPerformed: stats.searchPerformed,
+        };
         if (chunks.length === 0) {
           console.log('[CHAT] No RAG documents available, using LLM without context');
         } else {
@@ -282,12 +301,22 @@ export function ChatPage() {
         return;
       }
 
+      const retrievedContext = {
+        chunks,
+        stats: {
+          threshold: ragStats.threshold,
+          maxSimilarity: ragStats.maxSimilarity,
+          candidatesConsidered: ragStats.candidatesConsidered,
+          searchPerformed: ragStats.searchPerformed,
+        },
+      };
+
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'assistant',
         content: response.content,
         timestamp: new Date().toISOString(),
-        retrievedContext: chunks.length > 0 ? { chunks } : undefined
+        retrievedContext,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -484,6 +513,17 @@ export function ChatPage() {
                         sources={msg.retrievedContext.chunks.map((c: any) => ({ title: c.documentTitle, similarity: c.similarity }))}
                         label="Bronnen uit cursusmateriaal"
                       />
+                    )}
+                    {msg.role === 'assistant' && msg.retrievedContext?.stats && (
+                      <div className="mt-3">
+                        <RAGDiagnostics
+                          matchCount={msg.retrievedContext?.chunks?.length ?? 0}
+                          threshold={msg.retrievedContext.stats.threshold}
+                          maxSimilarity={msg.retrievedContext.stats.maxSimilarity}
+                          candidatesConsidered={msg.retrievedContext.stats.candidatesConsidered}
+                          searchPerformed={msg.retrievedContext.stats.searchPerformed}
+                        />
+                      </div>
                     )}
                   </div>
                 </div>
