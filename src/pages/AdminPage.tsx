@@ -35,6 +35,7 @@ interface RagModuleSettings {
   similarity_threshold: number;
   match_count: number;
   rag_strict_mode: boolean;
+  query_expansion_enabled: boolean;
 }
 
 interface RagExtractionSettings {
@@ -51,10 +52,10 @@ interface RagSettingsConfig {
 }
 
 const RAG_ADMIN_DEFAULTS: RagSettingsConfig = {
-  chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
-  explain: { similarity_threshold: 0.50, match_count: 5, rag_strict_mode: true  },
-  quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
-  project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
+  chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false, query_expansion_enabled: false },
+  explain: { similarity_threshold: 0.50, match_count: 5, rag_strict_mode: true,  query_expansion_enabled: true  },
+  quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true,  query_expansion_enabled: false },
+  project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false, query_expansion_enabled: false },
   extraction: { similarity_threshold: 0.55, min_evidence_chunks: 1 },
 };
 
@@ -204,9 +205,13 @@ export function AdminPage() {
   const [coursesWithOverrides, setCoursesWithOverrides] = useState<Set<string>>(new Set());
   const [ragDeletingOverride, setRagDeletingOverride] = useState(false);
   const [diagnosticQuery, setDiagnosticQuery] = useState('');
+  const [diagnosticExpand, setDiagnosticExpand] = useState(false);
+  const [diagnosticDefinition, setDiagnosticDefinition] = useState('');
   const [diagnosticLoading, setDiagnosticLoading] = useState(false);
   const [diagnosticResult, setDiagnosticResult] = useState<{
     query: string;
+    embedQuery?: string;
+    expanded?: boolean;
     chunks: RagDiagnosticChunk[];
     maxScore: number;
     candidatesInAllowedFolders?: number;
@@ -465,6 +470,8 @@ export function AdminPage() {
         body: JSON.stringify({
           courseId: ragSelectedCourseId || undefined,
           query: diagnosticQuery.trim(),
+          expand: diagnosticExpand,
+          definition: diagnosticExpand && diagnosticDefinition.trim() ? diagnosticDefinition.trim() : undefined,
         }),
       });
       const data = await res.json();
@@ -1818,6 +1825,27 @@ const tabGroups = [
                         </button>
                       </div>
                     </div>
+
+                    {mod === 'explain' && (
+                      <div className="border-t border-gray-200 pt-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Zoekquery verrijken</label>
+                        <p className="text-xs text-gray-500 mb-3 max-w-2xl">
+                          Vult korte begripsnamen aan met Nederlandse synoniemen, key_points en de definition
+                          voordat het embedding-model wordt aangeroepen. Verhelpt dat text-embedding-3-small voor
+                          losse vaktermen (zoals &ldquo;cohort&rdquo;) anders lage similarity-scores oplevert.
+                          Alleen actief voor &ldquo;Begrippen uitleggen&rdquo;; chat/quiz/project gebruiken eigen
+                          context-rijke queries en hebben deze verrijking niet nodig.
+                        </p>
+                        <button
+                          onClick={() => updateRagModule(mod, 'query_expansion_enabled', !s.query_expansion_enabled)}
+                          className={`relative inline-flex items-center gap-3 w-fit px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${s.query_expansion_enabled ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                          data-testid={`toggle-expansion-${mod}`}
+                        >
+                          {s.query_expansion_enabled ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                          {s.query_expansion_enabled ? 'Verrijking aan' : 'Verrijking uit'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1863,25 +1891,52 @@ const tabGroups = [
                   )}
                 </div>
 
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={diagnosticQuery}
-                    onChange={e => setDiagnosticQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !diagnosticLoading) runDiagnostic(); }}
-                    placeholder="bijv. Cross-over onderzoek"
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                    data-testid="input-diagnostic-query"
-                  />
-                  <button
-                    onClick={runDiagnostic}
-                    disabled={diagnosticLoading || !diagnosticQuery.trim()}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 text-sm font-medium"
-                    data-testid="button-run-diagnostic"
-                  >
-                    {diagnosticLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                    Test
-                  </button>
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={diagnosticQuery}
+                      onChange={e => setDiagnosticQuery(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !diagnosticLoading) runDiagnostic(); }}
+                      placeholder="bijv. Cross-over onderzoek"
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                      data-testid="input-diagnostic-query"
+                    />
+                    <button
+                      onClick={runDiagnostic}
+                      disabled={diagnosticLoading || !diagnosticQuery.trim()}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 text-sm font-medium"
+                      data-testid="button-run-diagnostic"
+                    >
+                      {diagnosticLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                      Test
+                    </button>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer w-fit">
+                    <input
+                      type="checkbox"
+                      checked={diagnosticExpand}
+                      onChange={e => setDiagnosticExpand(e.target.checked)}
+                      className="accent-blue-600"
+                      data-testid="checkbox-diagnostic-expand"
+                    />
+                    Verrijk de zoekterm met synoniemen (zelfde logica als &ldquo;Begrippen uitleggen&rdquo; gebruikt)
+                  </label>
+                  {diagnosticExpand && (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-gray-600">
+                        Optioneel: definition van het begrip (zoals opgeslagen in <code>concepts</code>) voor een eerlijke vergelijking met &ldquo;Begrippen uitleggen&rdquo;.
+                      </label>
+                      <textarea
+                        value={diagnosticDefinition}
+                        onChange={e => setDiagnosticDefinition(e.target.value)}
+                        rows={2}
+                        placeholder="Bijv. 'Een groep mensen met een gemeenschappelijk kenmerk die in de tijd gevolgd wordt.'"
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-full"
+                        data-testid="textarea-diagnostic-definition"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {diagnosticError && (
@@ -1906,7 +1961,21 @@ const tabGroups = [
                           ({diagnosticResult.candidatesInAllowedFolders} kandidaten in toegestane mappen)
                         </span>
                       )}
+                      {diagnosticResult.expanded && (
+                        <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs">
+                          verrijkte zoekterm gebruikt
+                        </span>
+                      )}
                     </div>
+                    {diagnosticResult.expanded && diagnosticResult.embedQuery && diagnosticResult.embedQuery !== diagnosticResult.query && (
+                      <div
+                        className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-3 py-2"
+                        data-testid="text-diagnostic-embed-query"
+                      >
+                        <span className="font-medium text-blue-900">Verrijkte zoekstring:</span>{' '}
+                        <span className="font-mono break-words">{diagnosticResult.embedQuery}</span>
+                      </div>
+                    )}
 
                     {diagnosticResult.chunks.length === 0 ? (
                       <div className="text-sm text-gray-500 italic">

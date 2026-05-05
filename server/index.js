@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
+import { expandQuery } from './queryExpansion.js';
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -37,10 +38,10 @@ Regels:
 5. Prijs deelantwoorden en moedig studenten aan dieper na te denken`;
 
 const RAG_MODULE_DEFAULTS = {
-  chat:    { similarity_threshold: 0.70, match_count: 5,  rag_strict_mode: false },
-  explain: { similarity_threshold: 0.50, match_count: 5,  rag_strict_mode: true  },
-  quiz:    { similarity_threshold: 0.65, match_count: 5,  rag_strict_mode: true  },
-  project: { similarity_threshold: 0.60, match_count: 7,  rag_strict_mode: false },
+  chat:    { similarity_threshold: 0.70, match_count: 5,  rag_strict_mode: false, query_expansion_enabled: false },
+  explain: { similarity_threshold: 0.50, match_count: 5,  rag_strict_mode: true,  query_expansion_enabled: true  },
+  quiz:    { similarity_threshold: 0.65, match_count: 5,  rag_strict_mode: true,  query_expansion_enabled: false },
+  project: { similarity_threshold: 0.60, match_count: 7,  rag_strict_mode: false, query_expansion_enabled: false },
 };
 
 const RAG_EXTRACTION_DEFAULTS = {
@@ -52,25 +53,32 @@ const RAG_EXTRACTION_DEFAULTS = {
 //   null / undefined  → geen folderfilter (alle chunks)
 //   []                → expliciet geen toegang (geen resultaten)
 //   [id, id, ...]     → alleen chunks uit deze folders
-async function searchChunksServerSide(queryText, threshold, matchCount, allowedFolderIds) {
+async function searchChunksServerSide(queryText, threshold, matchCount, allowedFolderIds, expansion) {
   const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey || !supabaseAdmin) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+  if (!openaiKey || !supabaseAdmin) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery: queryText };
 
   // Expliciet lege toegestane mappen → geen toegang
   if (Array.isArray(allowedFolderIds) && allowedFolderIds.length === 0) {
-    return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+    return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery: queryText };
   }
+
+  // Verrijk de zoekterm wanneer expansion-opties zijn meegegeven (synoniemen,
+  // definitie, key_points). Dit geeft het embedding-model meer signaal voor
+  // korte Nederlandse vaktermen waar text-embedding-3-small anders laag scoort.
+  const embedQuery = (expansion && expansion.enabled)
+    ? expandQuery(queryText, { definition: expansion.definition, keyPoints: expansion.keyPoints })
+    : queryText;
 
   try {
     const embRes = await fetch(OPENAI_EMBEDDINGS_URL, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: [queryText] }),
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: [embedQuery] }),
     });
-    if (!embRes.ok) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+    if (!embRes.ok) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
     const embData = await embRes.json();
     const embedding = embData.data?.[0]?.embedding;
-    if (!embedding) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+    if (!embedding) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
 
     const { data: allChunks, error } = await supabaseAdmin.rpc('match_document_chunks', {
       query_embedding: embedding,
@@ -94,10 +102,11 @@ async function searchChunksServerSide(queryText, threshold, matchCount, allowedF
       matched: candidate.filter(c => c.similarity >= threshold).slice(0, matchCount),
       maxScore: candidate.length > 0 ? Math.max(...candidate.map(c => c.similarity)) : 0,
       candidatesInAllowed: candidate.length,
+      embedQuery,
     };
   } catch (err) {
     console.error('[searchChunksServerSide] Error:', err.message);
-    return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+    return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
   }
 }
 
@@ -536,6 +545,9 @@ app.put('/api/rag-settings', async (req, res) => {
         if (m.rag_strict_mode !== undefined) {
           m.rag_strict_mode = Boolean(m.rag_strict_mode);
         }
+        if (m.query_expansion_enabled !== undefined) {
+          m.query_expansion_enabled = Boolean(m.query_expansion_enabled);
+        }
       }
     }
     // Aparte validatie voor extraction (andere shape: similarity_threshold + min_evidence_chunks)
@@ -695,7 +707,7 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { courseId, query } = req.body;
+  const { courseId, query, expand, definition, keyPoints } = req.body;
   if (!query || typeof query !== 'string' || !query.trim()) {
     return res.status(400).json({ error: 'query (zoekterm) is vereist' });
   }
@@ -760,8 +772,18 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
       }
     }
 
-    // Haal top-N kandidaten op zonder drempel
-    const result = await searchChunksServerSide(query.trim(), 0, 10, allowedFolderIds);
+    // Haal top-N kandidaten op zonder drempel. Wanneer `expand` is meegegeven,
+    // wordt de zoekterm verrijkt met synoniemen (en optioneel definition/keyPoints)
+    // voordat het embedding-model wordt aangeroepen — handig om de winst van
+    // query-uitbreiding direct in de admin-UI te demonstreren.
+    const expansion = expand
+      ? {
+          enabled: true,
+          definition: typeof definition === 'string' ? definition : undefined,
+          keyPoints: Array.isArray(keyPoints) ? keyPoints : undefined,
+        }
+      : undefined;
+    const result = await searchChunksServerSide(query.trim(), 0, 10, allowedFolderIds, expansion);
 
     if (!result || !result.matched) {
       return res.json({ query: query.trim(), chunks: [], maxScore: 0 });
@@ -780,6 +802,8 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
 
     return res.json({
       query: query.trim(),
+      embedQuery: result.embedQuery || query.trim(),
+      expanded: Boolean(expansion),
       maxScore: result.maxScore,
       candidatesInAllowedFolders: result.candidatesInAllowed,
       chunks: result.matched.map(c => ({

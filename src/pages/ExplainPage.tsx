@@ -24,6 +24,7 @@ interface RagModuleSettings {
   similarity_threshold: number;
   match_count: number;
   rag_strict_mode: boolean;
+  query_expansion_enabled: boolean;
 }
 
 interface RagSettings {
@@ -34,10 +35,10 @@ interface RagSettings {
 }
 
 const RAG_DEFAULTS: RagSettings = {
-  chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false },
-  explain: { similarity_threshold: 0.50, match_count: 5, rag_strict_mode: true  },
-  quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
-  project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
+  chat:    { similarity_threshold: 0.70, match_count: 5, rag_strict_mode: false, query_expansion_enabled: false },
+  explain: { similarity_threshold: 0.50, match_count: 5, rag_strict_mode: true,  query_expansion_enabled: true  },
+  quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true,  query_expansion_enabled: false },
+  project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false, query_expansion_enabled: false },
 };
 
 export function ExplainPage() {
@@ -275,15 +276,25 @@ export function ExplainPage() {
 
     try {
       console.log('[EXPLAIN] Searching for relevant RAG chunks for concept:', selectedConcept.name);
-      // Bewust ALLEEN de begripsnaam als zoekterm — dit matcht beter tegen het
-      // origineel cursusmateriaal dan een door LLM-geparafraseerde definitie.
+      // De begripsnaam is het primaire zoeksignaal. Wanneer query-uitbreiding
+      // aanstaat, voegen we een statische synoniemenlijst + de definition +
+      // key_points toe; voor korte Nederlandse vaktermen (bv. "cohort") tilt
+      // dat de top-similarity meetbaar omhoog zonder de drempel te verlagen.
+      const expansionEnabled = ragSettings.explain.query_expansion_enabled;
       const chunks = await searchRelevantChunks(
         selectedConcept.name,
         ragSettings.explain.similarity_threshold,
         ragSettings.explain.match_count,
         'explain',
         profile?.role || 'student',
-        activeCourse
+        activeCourse,
+        expansionEnabled
+          ? {
+              enabled: true,
+              definition: selectedConcept.definition || undefined,
+              keyPoints: selectedConcept.key_points || undefined,
+            }
+          : undefined
       );
 
       const allSources = chunks.map(chunk => ({

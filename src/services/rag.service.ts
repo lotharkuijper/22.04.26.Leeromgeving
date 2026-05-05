@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import { getAccessibleFolders } from './permissions.service';
 import { generateEmbeddings } from './llm.service';
 import { STORAGE_CONFIG } from '../config/storage.config';
+import { expandQuery, type QueryExpansionOptions } from './queryExpansion';
 
 export interface DocumentChunk {
   id: string;
@@ -64,14 +65,26 @@ export async function searchRelevantChunks(
   matchCount: number = 5,
   moduleType?: 'general' | 'explain' | 'project' | 'quiz',
   userRole: 'student' | 'docent' | 'admin' = 'admin',
-  courseId?: string | null
+  courseId?: string | null,
+  expansion?: QueryExpansionOptions & { enabled?: boolean }
 ): Promise<DocumentChunk[]> {
   if (courseId === null) {
     console.log('[RAG] No active course — skipping RAG search');
     return [];
   }
 
-  const embedding = await generateEmbedding(query);
+  // Verrijk de zoekterm wanneer expansion expliciet aanstaat. Voor korte
+  // Nederlandse vaktermen (bv. "cohort") geeft text-embedding-3-small zonder
+  // verrijking lage similarity-scores; door synoniemen + de definition mee te
+  // geven scoren we meetbaar hoger zonder de drempel te verlagen.
+  const embedQuery = expansion?.enabled
+    ? expandQuery(query, { definition: expansion.definition, keyPoints: expansion.keyPoints })
+    : query;
+  if (expansion?.enabled && embedQuery !== query) {
+    console.log(`[RAG] Query expanded for embedding: "${query}" -> "${embedQuery.slice(0, 120)}${embedQuery.length > 120 ? '…' : ''}"`);
+  }
+
+  const embedding = await generateEmbedding(embedQuery);
 
   if (!embedding) {
     console.warn('[RAG] No embedding generated, RAG not available');
