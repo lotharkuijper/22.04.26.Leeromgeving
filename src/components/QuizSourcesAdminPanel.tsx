@@ -127,7 +127,7 @@ export function QuizSourcesAdminPanel() {
 
       // Folders voor RAG-koppeling
       const { data: folderRows } = await supabase
-        .from('folders')
+        .from('document_folders')
         .select('id, name')
         .order('name');
       setFolders(folderRows || []);

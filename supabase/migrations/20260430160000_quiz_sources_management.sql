@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS concept_rag_sources (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   concept_id uuid NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
   course_id uuid NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
-  folder_id uuid REFERENCES folders(id) ON DELETE CASCADE,
+  folder_id uuid REFERENCES document_folders(id) ON DELETE CASCADE,
   created_at timestamptz NOT NULL DEFAULT now(),
   created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   UNIQUE (concept_id, course_id)

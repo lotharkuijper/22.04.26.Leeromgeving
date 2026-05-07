@@ -8,7 +8,7 @@ Taal: Nederlands, tweede persoon (`je`/`jij`). Superuser: `l.d.j.kuijper@vu.nl`.
 - `src/` — React frontend (pagina's, contexten, services).
 - `server/index.js` — Express API: prompts, quiz, RAG, ItemBank-sync, mappings, mix.
 - `server/queryExpansion.js` — Synoniemen-map + `expandQuery()` voor Nederlandse vaktermen; spiegel van `src/services/queryExpansion.ts`.
-- `supabase/migrations/` — SQL-migraties; gebruiker past ze handmatig toe in Supabase Studio. Server detecteert ontbrekende kolommen/tabellen defensief.
+- `supabase/migrations/` — SQL-migraties. Agent past ze zelf toe via een directe Postgres-verbinding (`SUPABASE_DB_URL`, session pooler, poort 5432). Server detecteert ontbrekende kolommen/tabellen defensief.
 - Drie quiz-bronnen (Task #57): `rag` (cursusmateriaal via embeddings), `itembank` (ShareStats GitHub-mchoice items), `llm` (creatief). Mix per cursus instelbaar in admin.
 - `src/pages/` — Wouter-loze, react-router-dom-pagina's; `ExplainPage`, `AdminPage`, `ChatPage`, etc.
 
