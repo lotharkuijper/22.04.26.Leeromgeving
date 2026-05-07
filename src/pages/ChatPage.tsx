@@ -536,18 +536,28 @@ export function ChatPage() {
                         label="Bronnen uit cursusmateriaal"
                       />
                     )}
-                    {msg.role === 'assistant' && msg.retrievedContext?.stats && (
-                      <div className="mt-3">
-                        <RAGDiagnostics
-                          matchCount={msg.retrievedContext?.chunks?.length ?? 0}
-                          threshold={msg.retrievedContext.stats.threshold}
-                          maxSimilarity={msg.retrievedContext.stats.maxSimilarity}
-                          candidatesConsidered={msg.retrievedContext.stats.candidatesConsidered}
-                          searchPerformed={msg.retrievedContext.stats.searchPerformed}
-                          viewerRole={profile?.role}
-                        />
-                      </div>
-                    )}
+                    {msg.role === 'assistant' && (() => {
+                      const stats = msg.retrievedContext?.stats as
+                        | { threshold: number; maxSimilarity: number; candidatesConsidered?: number; searchPerformed?: boolean }
+                        | undefined;
+                      const chunks = (msg.retrievedContext?.chunks ?? []) as Array<{ similarity?: number | string }>;
+                      if (!stats && chunks.length === 0) return null;
+                      const fallbackMax = chunks.length > 0
+                        ? Math.max(...chunks.map((c) => Number(c.similarity) || 0))
+                        : 0;
+                      return (
+                        <div className="mt-3">
+                          <RAGDiagnostics
+                            matchCount={chunks.length}
+                            threshold={stats?.threshold ?? ragSettings.chat.similarity_threshold}
+                            maxSimilarity={stats?.maxSimilarity ?? fallbackMax}
+                            candidatesConsidered={stats?.candidatesConsidered}
+                            searchPerformed={stats?.searchPerformed ?? true}
+                            viewerRole={profile?.role}
+                          />
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               ))}
