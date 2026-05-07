@@ -21,6 +21,8 @@ interface MappingSuggestion {
 interface ItembankSection {
   exsection_path: string[];
   count: number;
+  mcq_count?: number;
+  open_count?: number;
   topic?: string | null;
 }
 
@@ -409,6 +411,39 @@ export function QuizSourcesAdminPanel() {
             Geen itembank-secties beschikbaar. Importeer eerst items via "ShareStats Import".
           </p>
         ) : (
+          <>
+            <div className="border border-gray-200 rounded-lg overflow-hidden" data-testid="table-itembank-sections-overview">
+              <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-700">
+                Beschikbare ItemBank-secties ({sections.length})
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-600 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium">Sectie</th>
+                      <th className="text-right px-3 py-2 font-medium w-16">Totaal</th>
+                      <th className="text-right px-3 py-2 font-medium w-16">MCQ</th>
+                      <th className="text-right px-3 py-2 font-medium w-16">Open</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sections.map(s => {
+                      const key = s.exsection_path.join('/');
+                      const mcq = s.mcq_count ?? 0;
+                      const open = s.open_count ?? 0;
+                      return (
+                        <tr key={key} className="border-t border-gray-100" data-testid={`row-section-${key}`}>
+                          <td className="px-3 py-1.5 text-gray-800">{s.exsection_path.join(' / ')}</td>
+                          <td className="px-3 py-1.5 text-right text-gray-700" data-testid={`text-section-total-${key}`}>{s.count}</td>
+                          <td className={`px-3 py-1.5 text-right ${mcq === 0 ? 'text-gray-400' : 'text-gray-700'}`} data-testid={`text-section-mcq-${key}`}>{mcq}</td>
+                          <td className={`px-3 py-1.5 text-right ${open === 0 ? 'text-gray-400' : 'text-gray-700'}`} data-testid={`text-section-open-${key}`}>{open}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           <div className="space-y-3">
             {concepts.map(concept => {
               const conceptMappings = mappings.filter(m => m.concept_id === concept.id);
@@ -447,11 +482,15 @@ export function QuizSourcesAdminPanel() {
                         data-testid={`select-section-${concept.id}`}
                       >
                         <option value="">+ koppel sectie...</option>
-                        {sections.map((s, idx) => (
-                          <option key={s.exsection_path.join('/')} value={idx}>
-                            {s.exsection_path.join(' / ')} ({s.count})
-                          </option>
-                        ))}
+                        {sections.map((s, idx) => {
+                          const mcq = s.mcq_count ?? 0;
+                          const open = s.open_count ?? 0;
+                          return (
+                            <option key={s.exsection_path.join('/')} value={idx}>
+                              {s.exsection_path.join(' / ')} ({s.count} · {mcq} mcq / {open} open)
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
                   </div>
@@ -538,6 +577,7 @@ export function QuizSourcesAdminPanel() {
               );
             })}
           </div>
+          </>
         )}
         <button
           onClick={handleSaveMappings}
