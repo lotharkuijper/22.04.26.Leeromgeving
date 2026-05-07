@@ -923,9 +923,9 @@ export function QuizPage() {
                       </span>
                     ))}
                   </div>
-                  {questionType !== 'mcq' && sourceMix.pct_itembank > 0 && (
+                  {questionType === 'casus' && sourceMix.pct_itembank > 0 && (
                     <p className="text-xs text-gray-500 mt-2">
-                      ItemBank bevat alleen meerkeuzevragen — voor open vragen en casussen wordt deze bron overgeslagen.
+                      ItemBank bevat geen casussen — voor dit vraagtype wordt deze bron overgeslagen en aangevuld met creatieve LLM-vragen.
                     </p>
                   )}
                 </div>

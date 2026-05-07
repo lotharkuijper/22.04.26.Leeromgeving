@@ -3222,7 +3222,7 @@ app.get('/api/admin/itembank-sections', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('quiz_questions')
-      .select('exsection_path, topic, subtopic')
+      .select('exsection_path, topic, subtopic, item_type')
       .eq('source', 'sharestats')
       .not('exsection_path', 'is', null);
     if (error) return res.status(500).json({ error: error.message });
@@ -3231,8 +3231,17 @@ app.get('/api/admin/itembank-sections', async (req, res) => {
       const path = Array.isArray(row.exsection_path) ? row.exsection_path : [];
       if (path.length === 0) continue;
       const key = path.join(' / ');
-      const entry = seen.get(key) || { exsection_path: path, count: 0, topic: row.topic, subtopic: row.subtopic };
+      const entry = seen.get(key) || {
+        exsection_path: path,
+        count: 0,
+        mcq_count: 0,
+        open_count: 0,
+        topic: row.topic,
+        subtopic: row.subtopic,
+      };
       entry.count += 1;
+      if (row.item_type === 'open') entry.open_count += 1;
+      else entry.mcq_count += 1;
       seen.set(key, entry);
     }
     const sections = [...seen.values()].sort((a, b) => a.exsection_path.join('/').localeCompare(b.exsection_path.join('/')));
@@ -3388,9 +3397,14 @@ app.put('/api/admin/quiz-sources-mix/:courseId', async (req, res) => {
 app.post('/api/quiz/itembank-questions', async (req, res) => {
   const auth = await requireAuthUser(req, res);
   if (!auth) return;
-  const { courseId, conceptIds = [], limit = 5 } = req.body || {};
+  const { courseId, conceptIds = [], limit = 5, questionType = 'mcq' } = req.body || {};
   if (!courseId || !Array.isArray(conceptIds) || conceptIds.length === 0) {
     return res.status(400).json({ error: 'courseId en niet-lege conceptIds vereist' });
+  }
+  // ItemBank ondersteunt alleen mcq + open (geen casus). Casus → leeg resultaat.
+  const wantedItemType = questionType === 'open' ? 'open' : (questionType === 'mcq' ? 'mcq' : null);
+  if (!wantedItemType) {
+    return res.json({ questions: [], reason: 'unsupported_question_type' });
   }
   // Cross-course leak voorkomen: itembank-vragen mogen alleen door cursusleden
   // (en admins/superuser) opgehaald worden.
@@ -3420,12 +3434,21 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
     // het breedste segment (eerste segment) en filteren in JS op exact prefix-
     // match — dat is robuust ongeacht hoe de docent het pad heeft samengesteld.
     const firstSegments = [...new Set(sectionPaths.map(p => p[0]))];
-    const { data: candidates, error: qErr } = await supabaseAdmin
+    let candidatesQuery = supabaseAdmin
       .from('quiz_questions')
-      .select('id, question_text, answer_options, correct_answer, explanation, sharestats_id, exsection_path, topic, subtopic')
+      .select('id, question_text, answer_options, correct_answer, explanation, sharestats_id, exsection_path, topic, subtopic, item_type, metadata')
       .eq('source', 'sharestats')
       .overlaps('exsection_path', firstSegments)
       .limit(500);
+    // item_type-kolom is pas vanaf migratie 20260507130000 aanwezig.
+    // Voor mcq: accepteer item_type='mcq' óf NULL (oude rijen zijn historisch
+    // mchoice). Voor open: vereis expliciet item_type='open'.
+    if (wantedItemType === 'mcq') {
+      candidatesQuery = candidatesQuery.or('item_type.eq.mcq,item_type.is.null');
+    } else {
+      candidatesQuery = candidatesQuery.eq('item_type', 'open');
+    }
+    const { data: candidates, error: qErr } = await candidatesQuery;
     if (qErr) return res.status(500).json({ error: qErr.message });
 
     const matches = (candidates || []).filter(q => {
@@ -3446,18 +3469,40 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
     }
     const picked = matches.slice(0, Math.max(1, Math.min(limit, 50)));
 
-    // Normaliseer naar het frontend-format.
-    const questions = picked.map(q => ({
-      id: `itembank-${q.id}`,
-      type: 'mcq',
-      source: 'itembank',
-      sharestats_id: q.sharestats_id,
-      question: q.question_text,
-      options: q.answer_options || {},
-      correctAnswer: q.correct_answer,
-      explanation: q.explanation || '',
-      exsection_path: q.exsection_path,
-    }));
+    // Normaliseer naar het frontend-format. Voor open vragen geven we het
+    // modelantwoord terug (uit Solution + eventueel exsolution-numeric) zodat
+    // de open-evaluator van de quiz daarop kan beoordelen.
+    const questions = picked.map(q => {
+      const itemType = q.item_type || 'mcq';
+      if (itemType === 'open') {
+        const numericSolution = q.correct_answer || '';
+        const writtenSolution = q.explanation || '';
+        const modelAnswer = numericSolution
+          ? (writtenSolution ? `${numericSolution}\n\n${writtenSolution}` : numericSolution)
+          : writtenSolution;
+        return {
+          id: `itembank-${q.id}`,
+          type: 'open',
+          source: 'itembank',
+          sharestats_id: q.sharestats_id,
+          question: q.question_text,
+          modelAnswer,
+          explanation: writtenSolution,
+          exsection_path: q.exsection_path,
+        };
+      }
+      return {
+        id: `itembank-${q.id}`,
+        type: 'mcq',
+        source: 'itembank',
+        sharestats_id: q.sharestats_id,
+        question: q.question_text,
+        options: q.answer_options || {},
+        correctAnswer: q.correct_answer,
+        explanation: q.explanation || '',
+        exsection_path: q.exsection_path,
+      };
+    });
 
     return res.json({ questions, total_candidates: matches.length });
   } catch (err) {
@@ -3560,7 +3605,7 @@ app.post('/api/quiz/concept-availability', async (req, res) => {
     if (allFirstSegments.length > 0) {
       const { data: items, count } = await supabaseAdmin
         .from('quiz_questions')
-        .select('id, exsection_path', { count: 'exact' })
+        .select('id, exsection_path, item_type', { count: 'exact' })
         .eq('source', 'sharestats')
         .overlaps('exsection_path', allFirstSegments)
         .limit(ITEM_HARD_LIMIT);
@@ -3571,11 +3616,11 @@ app.post('/api/quiz/concept-availability', async (req, res) => {
     const itembankCountByConcept = new Map();
     for (const cid of conceptIds) {
       const conceptMaps = (mapRows || []).filter(r => r.concept_id === cid);
-      if (conceptMaps.length === 0) { itembankCountByConcept.set(cid, 0); continue; }
+      if (conceptMaps.length === 0) { itembankCountByConcept.set(cid, { total: 0, mcq: 0, open: 0 }); continue; }
       const targets = conceptMaps
         .map(m => Array.isArray(m.exsection_path) ? m.exsection_path : [])
         .filter(p => p.length > 0);
-      let n = 0;
+      let total = 0, mcq = 0, open = 0;
       for (const item of allItems) {
         const qPath = Array.isArray(item.exsection_path) ? item.exsection_path : [];
         const match = targets.some(target => {
@@ -3583,9 +3628,13 @@ app.post('/api/quiz/concept-availability', async (req, res) => {
           for (let i = 0; i < target.length; i++) if (qPath[i] !== target[i]) return false;
           return true;
         });
-        if (match) n++;
+        if (match) {
+          total++;
+          if (item.item_type === 'open') open++;
+          else mcq++;
+        }
       }
-      itembankCountByConcept.set(cid, n);
+      itembankCountByConcept.set(cid, { total, mcq, open });
     }
 
     // 4) Compose result. Wanneer de itembank-prefilter de hard-limit raakte,
@@ -3594,10 +3643,13 @@ app.post('/api/quiz/concept-availability', async (req, res) => {
     const availability = {};
     for (const cid of conceptIds) {
       const fId = folderByConcept.get(cid) || null;
+      const ibCounts = itembankCountByConcept.get(cid) || { total: 0, mcq: 0, open: 0 };
       availability[cid] = {
         primary_folder_id: fId,
         rag_doc_count: fId ? (docCountByFolder.get(fId) || 0) : null,
-        itembank_question_count: itembankCountByConcept.get(cid) || 0,
+        itembank_question_count: ibCounts.total,
+        itembank_mcq_count: ibCounts.mcq,
+        itembank_open_count: ibCounts.open,
         itembank_count_truncated: itemsTruncated,
       };
     }

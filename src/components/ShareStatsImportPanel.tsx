@@ -12,10 +12,20 @@ import { getRepositoryTopics, setItembankRepo } from '../services/github-parser.
 
 interface ImportResult {
   imported: number;
+  importedMcq?: number;
+  importedOpen?: number;
   skipped: number;
   errors: number;
   skippedReasons?: Record<string, number>;
 }
+
+const SKIP_REASON_LABELS: Record<string, string> = {
+  not_dutch: 'Niet-Nederlands',
+  unsupported_extype: 'Niet-ondersteund vraagtype',
+  already_imported: 'Al eerder geïmporteerd',
+  no_rmd: 'Geen .Rmd-bestand',
+  parse_failed: 'Niet geparseerd',
+};
 
 export function ShareStatsImportPanel() {
   const [repoUrl, setRepoUrl] = useState<string>('https://github.com/ShareStats/itembank');
@@ -132,7 +142,7 @@ export function ShareStatsImportPanel() {
     }
     void runImport(
       selectedTopics,
-      `${selectedTopics.length} topic(s) importeren? Dit kan enkele minuten duren. Alleen Nederlandse meerkeuzevragen worden geïmporteerd.`
+      `${selectedTopics.length} topic(s) importeren? Dit kan enkele minuten duren. Alleen Nederlandstalige meerkeuze- en open vragen worden geïmporteerd.`
     );
   };
 
@@ -151,10 +161,12 @@ export function ShareStatsImportPanel() {
           <div className="flex-1">
             <h3 className="font-semibold text-gray-900 mb-1">ShareStats Itembank</h3>
             <p className="text-sm text-gray-700">
-              Importeer en synchroniseer meerkeuzevragen uit een ShareStats-itembank-repository.
-              Alleen Nederlandstalige items met <code>extype: mchoice</code> worden geïmporteerd.
-              Het hiërarchische pad uit <code>exsection</code> wordt opgeslagen zodat je vragen
-              aan cursus-begrippen kunt koppelen.
+              Importeer en synchroniseer vragen uit een ShareStats-itembank-repository.
+              Alleen Nederlandstalige items worden geïmporteerd. Ondersteunde vraagtypes:
+              meerkeuze (<code>mchoice</code>, <code>schoice</code>) en open
+              (<code>num</code>, <code>string</code>, <code>cloze</code>). Het hiërarchische
+              pad uit <code>exsection</code> wordt opgeslagen zodat je vragen aan
+              cursus-begrippen kunt koppelen.
             </p>
           </div>
         </div>
@@ -274,6 +286,11 @@ export function ShareStatsImportPanel() {
                     <span className="text-sm font-medium text-green-900">Geïmporteerd</span>
                   </div>
                   <p className="text-2xl font-bold text-green-900">{result.imported}</p>
+                  {(result.importedMcq !== undefined || result.importedOpen !== undefined) && (
+                    <p className="text-xs text-green-800 mt-1">
+                      {result.importedMcq ?? 0} mcq · {result.importedOpen ?? 0} open
+                    </p>
+                  )}
                 </div>
 
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4" data-testid="result-skipped">
@@ -298,7 +315,7 @@ export function ShareStatsImportPanel() {
                   <strong>Overslaan-redenen:</strong>{' '}
                   {Object.entries(result.skippedReasons)
                     .filter(([, n]) => n > 0)
-                    .map(([k, n]) => `${k}: ${n}`)
+                    .map(([k, n]) => `${SKIP_REASON_LABELS[k] || k}: ${n}`)
                     .join(' · ') || '—'}
                 </div>
               )}
@@ -311,7 +328,8 @@ export function ShareStatsImportPanel() {
         <h4 className="font-semibold text-gray-900 mb-2">Over ShareStats import</h4>
         <ul className="text-sm text-gray-700 space-y-2">
           <li>• Vragen worden opgehaald van de geconfigureerde GitHub-repository</li>
-          <li>• Alleen Nederlandstalige meerkeuzevragen (taal: nl, extype: mchoice) worden geïmporteerd</li>
+          <li>• Alleen Nederlandstalige items worden geïmporteerd (folder bevat <code>-nl</code>, of <code>exlang: nl</code>)</li>
+          <li>• Meerkeuze (<code>mchoice</code>, <code>schoice</code>) en open vragen (<code>num</code>, <code>string</code>, <code>cloze</code>) worden ondersteund</li>
           <li>• Duplicaten (op basis van ShareStats-ID) worden overgeslagen</li>
           <li>• Het hiërarchische pad uit <code>exsection</code> wordt opgeslagen voor mapping op begrippen</li>
           <li>• Elke vraag wordt automatisch gevalideerd tegen cursusmateriaal</li>

@@ -45,17 +45,26 @@ export async function importQuestionsFromShareStats(
   repositoryUrl: string,
   topics: string[],
   onProgress?: ImportProgressCallback
-): Promise<{ imported: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
+): Promise<{ imported: number; importedMcq: number; importedOpen: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
   let imported = 0;
+  let importedMcq = 0;
+  let importedOpen = 0;
   let skipped = 0;
   let errors = 0;
   const skippedReasons: Record<string, number> = {
     not_dutch: 0,
-    not_mchoice: 0,
+    unsupported_extype: 0,
     already_imported: 0,
     no_rmd: 0,
     parse_failed: 0,
   };
+
+  // R/exams extypes:
+  //  - mchoice / schoice → meerkeuze (single/multiple-choice)
+  //  - num / string / cloze → open vraag (numeriek / tekst / invul)
+  // Casus-typen worden nog niet ondersteund in onze quiz-generator.
+  const MCQ_EXTYPES = new Set(['mchoice', 'schoice']);
+  const OPEN_EXTYPES = new Set(['num', 'string', 'cloze']);
 
   try {
     // Configureer parser zodat de juiste repo gefetcht wordt.
@@ -89,14 +98,12 @@ export async function importQuestionsFromShareStats(
           const folderName = item.name;
           const folderPath = item.path;
 
-          // Filter 1: alleen Nederlandse items (-nl)
-          const languageSegment = folderName.split('-')[3];
-          if (languageSegment !== 'nl') {
-            skipped++;
-            skippedReasons.not_dutch++;
-            processedItems++;
-            continue;
-          }
+          // Filter 1 (voorlopig): folderNaam-segmenten checken op 'nl'.
+          // Echte beslissing valt pas na parsen, met fallback op
+          // metadata.exlang — anders missen we items met taalcode in
+          // metadata maar niet in foldernaam.
+          const folderSegments = folderName.split('-');
+          const folderHasNl = folderSegments.includes('nl');
 
           onProgress?.({
             stage: 'parsing',
@@ -122,11 +129,30 @@ export async function importQuestionsFromShareStats(
             continue;
           }
 
-          // Filter 2: alleen meerkeuze-items (extype: mchoice)
-          const extype = (parsedItem.question.metaInformation?.extype || '').toLowerCase().trim();
-          if (extype !== 'mchoice') {
+          // Filter 1b: NL-beslissing met OR-logica. Item is NL als
+          // folderHasNl OF metadata.exlang met 'nl' begint. Als exlang
+          // expliciet niet-nl is, overrulet die altijd de folder.
+          const exlang = (parsedItem.question.metaInformation?.exlang || '').toLowerCase().trim();
+          const exlangIsNl = exlang.startsWith('nl');
+          const exlangIsNonNl = exlang.length > 0 && !exlangIsNl;
+          const isDutch = exlangIsNl || (folderHasNl && !exlangIsNonNl);
+          if (!isDutch) {
             skipped++;
-            skippedReasons.not_mchoice++;
+            skippedReasons.not_dutch++;
+            processedItems++;
+            continue;
+          }
+
+          // Filter 2: vraagtype bepalen via extype.
+          const extype = (parsedItem.question.metaInformation?.extype || '').toLowerCase().trim();
+          let itemType: 'mcq' | 'open';
+          if (MCQ_EXTYPES.has(extype)) {
+            itemType = 'mcq';
+          } else if (OPEN_EXTYPES.has(extype)) {
+            itemType = 'open';
+          } else {
+            skipped++;
+            skippedReasons.unsupported_extype++;
             processedItems++;
             continue;
           }
@@ -148,20 +174,37 @@ export async function importQuestionsFromShareStats(
           const answerOptions: { [key: string]: string } = {};
           let correctAnswer = '';
 
-          parsedItem.question.answerOptions.forEach((option, index) => {
-            const key = String.fromCharCode(65 + index);
-            answerOptions[key] = option.text;
-            if (option.correct && !correctAnswer) {
-              correctAnswer = key;
-            }
-          });
+          if (itemType === 'mcq') {
+            parsedItem.question.answerOptions.forEach((option, index) => {
+              const key = String.fromCharCode(65 + index);
+              answerOptions[key] = option.text;
+              if (option.correct && !correctAnswer) {
+                correctAnswer = key;
+              }
+            });
 
-          // Geen juist antwoord gevonden? Sla over (corrupte item).
-          if (!correctAnswer) {
-            skipped++;
-            skippedReasons.parse_failed++;
-            processedItems++;
-            continue;
+            // Geen juist antwoord gevonden? Sla over (corrupte item).
+            if (!correctAnswer) {
+              skipped++;
+              skippedReasons.parse_failed++;
+              processedItems++;
+              continue;
+            }
+          } else {
+            // Open vraag: het modelantwoord komt uit de Solution-sectie.
+            // Voor `num` staat het numerieke antwoord vaak in metadata.exsolution.
+            const exsolution = parsedItem.question.metaInformation?.exsolution;
+            if (exsolution) {
+              correctAnswer = String(exsolution).trim();
+            }
+            // Als de vraag geen Solution én geen exsolution heeft, kunnen we
+            // hem niet evalueren; sla over.
+            if (!correctAnswer && !(parsedItem.question.solution || '').trim()) {
+              skipped++;
+              skippedReasons.parse_failed++;
+              processedItems++;
+              continue;
+            }
           }
 
           onProgress?.({
@@ -197,6 +240,7 @@ export async function importQuestionsFromShareStats(
             validation_score: validation.similarityScore,
             exsection_path: exsectionPath.length > 0 ? exsectionPath : null,
             source_repo: repositoryUrl,
+            item_type: itemType,
           };
 
           const { error: insertError } = await supabase
@@ -204,28 +248,34 @@ export async function importQuestionsFromShareStats(
             .insert(insertPayload);
 
           if (insertError) {
-            // Defensief: als de migratie nog niet is toegepast, mist
-            // exsection_path/source_repo. Probeer nog een keer zonder die kolommen.
-            const isMissingCol = /column .* does not exist|schema cache/i.test(insertError.message || '');
-            if (isMissingCol) {
-              delete insertPayload.exsection_path;
-              delete insertPayload.source_repo;
-              delete insertPayload.source_commit_sha;
+            // Defensief: als de migratie nog niet is toegepast, kunnen
+            // optionele kolommen ontbreken. We verwijderen alleen exact
+            // de kolom die in de foutmelding voorkomt en proberen het
+            // opnieuw, maximaal 4x. Zo behouden we item_type wanneer die
+            // kolom wél bestaat (gangbare situatie na migratie T001).
+            const optionalCols = ['exsection_path', 'source_repo', 'source_commit_sha', 'item_type'];
+            const missingColRe = /column "?([a-z_]+)"? .*does not exist|schema cache.*?"([a-z_]+)"/i;
+            let lastError: typeof insertError | null = insertError;
+            for (let attempt = 0; attempt < optionalCols.length && lastError; attempt++) {
+              const m = (lastError.message || '').match(missingColRe);
+              const col = m?.[1] || m?.[2];
+              if (!col || !optionalCols.includes(col)) break;
+              delete insertPayload[col];
               const { error: retryError } = await supabase
                 .from('quiz_questions')
                 .insert(insertPayload);
-              if (retryError) {
-                console.error(`Insert mislukte na retry voor ${folderName}:`, retryError);
-                errors++;
-              } else {
-                imported++;
-              }
-            } else {
-              console.error(`Fout bij opslaan vraag ${folderName}:`, insertError);
+              lastError = retryError ?? null;
+            }
+            if (lastError) {
+              console.error(`Fout bij opslaan vraag ${folderName}:`, lastError);
               errors++;
+            } else {
+              imported++;
+              if (itemType === 'mcq') importedMcq++; else importedOpen++;
             }
           } else {
             imported++;
+            if (itemType === 'mcq') importedMcq++; else importedOpen++;
           }
 
           processedItems++;
@@ -245,7 +295,7 @@ export async function importQuestionsFromShareStats(
       totalQuestions: totalItems,
     });
 
-    return { imported, skipped, skippedReasons, errors };
+    return { imported, importedMcq, importedOpen, skipped, skippedReasons, errors };
   } catch (error) {
     console.error('Fout bij importeren ShareStats vragen:', error);
     onProgress?.({
@@ -260,7 +310,7 @@ export async function importQuestionsFromShareStats(
 export async function syncShareStatsQuestions(
   repositoryUrl?: string,
   onProgress?: ImportProgressCallback
-): Promise<{ imported: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
+): Promise<{ imported: number; importedMcq: number; importedOpen: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
   const url = repositoryUrl || (await getShareStatsConfig()).repositoryUrl || DEFAULT_REPO_URL;
   const result = await importQuestionsFromShareStats(url, [], onProgress);
 

@@ -19,6 +19,7 @@ import {
   type QuestionType,
   type QuizQuestion,
   type MCQQuestion,
+  type OpenQuestion,
   type QuizSource,
 } from './llm.service';
 
@@ -34,7 +35,7 @@ export interface MixCounts {
   llm: number;
 }
 
-export interface ItembankRawQuestion {
+export interface ItembankRawMcqQuestion {
   id: string;
   type: 'mcq';
   source: 'itembank';
@@ -45,6 +46,19 @@ export interface ItembankRawQuestion {
   explanation: string;
   exsection_path?: string[];
 }
+
+export interface ItembankRawOpenQuestion {
+  id: string;
+  type: 'open';
+  source: 'itembank';
+  sharestats_id?: string;
+  question: string;
+  modelAnswer: string;
+  explanation?: string;
+  exsection_path?: string[];
+}
+
+export type ItembankRawQuestion = ItembankRawMcqQuestion | ItembankRawOpenQuestion;
 
 export const DEFAULT_MIX: SourceMix = { pct_rag: 50, pct_itembank: 0, pct_llm: 50 };
 
@@ -70,7 +84,9 @@ export async function fetchSourceMix(courseId: string | null): Promise<SourceMix
  */
 export function distributeMix(total: number, mix: SourceMix, questionType: QuestionType): MixCounts {
   let { pct_rag, pct_itembank, pct_llm } = mix;
-  if (questionType !== 'mcq') {
+  // ItemBank ondersteunt mcq + open. Voor casus is er geen itembank-bron;
+  // dat percentage gaat naar de creatieve LLM-bron.
+  if (questionType === 'casus') {
     pct_llm += pct_itembank;
     pct_itembank = 0;
   }
@@ -105,8 +121,11 @@ export async function fetchItembankQuestions(
   courseId: string,
   conceptIds: string[],
   limit: number,
-): Promise<MCQQuestion[]> {
+  questionType: QuestionType,
+): Promise<Array<MCQQuestion | OpenQuestion>> {
   if (limit <= 0 || conceptIds.length === 0) return [];
+  // ItemBank levert alleen mcq en open; casus wordt door de server geweigerd.
+  if (questionType !== 'mcq' && questionType !== 'open') return [];
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -114,12 +133,12 @@ export async function fetchItembankQuestions(
     const res = await fetch('/api/quiz/itembank-questions', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ courseId, conceptIds, limit }),
+      body: JSON.stringify({ courseId, conceptIds, limit, questionType }),
     });
     if (!res.ok) return [];
     const data = await res.json();
     const raw: ItembankRawQuestion[] = Array.isArray(data?.questions) ? data.questions : [];
-    return raw.map(convertItembankQuestion);
+    return raw.map(q => q.type === 'open' ? convertItembankOpenQuestion(q) : convertItembankMcqQuestion(q));
   } catch (err) {
     console.warn('[quiz-mix] Itembank-vragen ophalen mislukt:', err);
     return [];
@@ -130,7 +149,7 @@ export async function fetchItembankQuestions(
  * Converteert het ItemBank-formaat (letter-keys, string-correctAnswer) naar
  * het interne MCQQuestion-formaat (string[]-opties, integer-index).
  */
-export function convertItembankQuestion(q: ItembankRawQuestion): MCQQuestion {
+export function convertItembankMcqQuestion(q: ItembankRawMcqQuestion): MCQQuestion {
   const keys = Object.keys(q.options || {}).sort(); // 'A','B','C','D' alfabetisch
   const options = keys.map(k => q.options[k]);
   const correctIndex = Math.max(0, keys.indexOf(q.correctAnswer));
@@ -140,6 +159,21 @@ export function convertItembankQuestion(q: ItembankRawQuestion): MCQQuestion {
     options,
     correctAnswer: correctIndex,
     explanation: q.explanation || '',
+    source: 'itembank' as QuizSource,
+  };
+}
+
+/**
+ * Backwards-compatible alias.
+ */
+export const convertItembankQuestion = convertItembankMcqQuestion;
+
+export function convertItembankOpenQuestion(q: ItembankRawOpenQuestion): OpenQuestion {
+  return {
+    type: 'open',
+    question: q.question,
+    modelAnswer: q.modelAnswer || '',
+    rubric: q.explanation || 'Beoordeel of het antwoord van de student inhoudelijk overeenkomt met het modelantwoord uit de ItemBank.',
     source: 'itembank' as QuizSource,
   };
 }
@@ -177,7 +211,7 @@ export async function generateMixedQuiz(args: {
   // 1) ItemBank
   let itembankActual = 0;
   if (counts.itembank > 0 && args.courseId) {
-    const ibQs = await fetchItembankQuestions(args.courseId, args.conceptIds, counts.itembank);
+    const ibQs = await fetchItembankQuestions(args.courseId, args.conceptIds, counts.itembank, args.questionType);
     itembankActual = ibQs.length;
     out.push(...ibQs);
   }
