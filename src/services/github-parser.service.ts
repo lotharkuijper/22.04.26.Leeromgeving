@@ -183,7 +183,9 @@ async function fetchRecursiveTree(branch: string): Promise<{ entries: GitTreeEnt
 
 // Recursieve fallback: loop de directory-structuur af tot maxDepth.
 // Wordt alleen gebruikt als de Trees-API faalt of truncated is.
-const HIDDEN_DIR_PREFIXES = ['.', '_'];
+// Alleen écht verborgen mappen (`.git`, `.github`, ...) worden uitgesloten;
+// underscore-prefixen kunnen geldige content bevatten en filteren we niet.
+const HIDDEN_DIR_PREFIXES = ['.'];
 async function walkDirectoryForRmd(
   dirPath: string,
   topic: string,
