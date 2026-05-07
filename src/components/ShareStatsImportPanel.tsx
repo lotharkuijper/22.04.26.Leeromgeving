@@ -172,7 +172,49 @@ export function ShareStatsImportPanel() {
   // via `concept_itembank_sections`. Zo verschijnen ShareStats-vragen direct
   // in de begrippenlijst van Quiz zonder dat een docent eerst handmatig
   // mappings hoeft te leggen.
-  const runAutoLink = async (topSegments: string[]) => {
+  const runAutoLink = async (topicsForLink: string[]) => {
+    if (!activeCourseId || topicsForLink.length === 0) return;
+    setAutoLinking(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Geen actieve sessie');
+      // We sturen de geselecteerde GitHub-foldernamen mee. De server
+      // zoekt zélf de werkelijk in de database aanwezige exsection-
+      // paden op zodat ook eerder geïmporteerde items worden meegenomen
+      // en de begrippenlijst bij elke (re-)import bijgewerkt blijft.
+      const res = await fetch('/api/admin/sharestats/auto-link-concepts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: activeCourseId, selectedTopics: topicsForLink }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setAutoLinkResult({
+        created: data.created || 0,
+        linked: data.linked || 0,
+        courseName: activeCourse?.name || '',
+      });
+    } catch (err) {
+      console.warn('Auto-koppelen mislukt:', err);
+      setNotice({
+        kind: 'warning',
+        message: 'Vragen zijn geïmporteerd, maar automatisch koppelen aan begrippen lukte niet: '
+          + (err instanceof Error ? err.message : 'onbekende fout')
+          + '. Je kunt de mappings handmatig leggen in Beheer → Quiz-bronnen.',
+      });
+    }
+    setAutoLinking(false);
+  };
+
+  // Variant voor de volledige-sync-flow: we hebben geen geselecteerde
+  // topics, dus sturen we de daadwerkelijke top-segmenten (legacy pad).
+  const runAutoLinkSegments = async (topSegments: string[]) => {
     if (!activeCourseId || topSegments.length === 0) return;
     setAutoLinking(true);
     try {
@@ -198,12 +240,6 @@ export function ShareStatsImportPanel() {
       });
     } catch (err) {
       console.warn('Auto-koppelen mislukt:', err);
-      setNotice({
-        kind: 'warning',
-        message: 'Vragen zijn geïmporteerd, maar automatisch koppelen aan begrippen lukte niet: '
-          + (err instanceof Error ? err.message : 'onbekende fout')
-          + '. Je kunt de mappings handmatig leggen in Beheer → Quiz-bronnen.',
-      });
     }
     setAutoLinking(false);
   };
@@ -226,9 +262,18 @@ export function ShareStatsImportPanel() {
         kind: 'success',
         message: `Klaar — ${importResult.imported} geïmporteerd, ${importResult.skipped} overgeslagen, ${importResult.errors} fouten.`,
       });
-      // Autom. koppelen aan begrippen in de actieve cursus.
-      if (activeCourseId && importResult.importedTopSegments && importResult.importedTopSegments.length > 0) {
-        await runAutoLink(importResult.importedTopSegments);
+      // Autom. koppelen aan begrippen in de actieve cursus. Bij een
+      // selectieve import baseren we dit op de gekozen topic-folders
+      // (zodat ook re-imports en volledig overgeslagen imports het
+      // concept netjes aanmaken). Bij een volledige sync (geen
+      // expliciete topics) gebruiken we de zojuist nieuw ingevoerde
+      // top-segmenten als trigger.
+      if (activeCourseId) {
+        if (topicsToImport.length > 0) {
+          await runAutoLink(topicsToImport);
+        } else if (importResult.importedTopSegments && importResult.importedTopSegments.length > 0) {
+          await runAutoLinkSegments(importResult.importedTopSegments);
+        }
       }
       // Update last_synced_at na succesvolle import.
       const now = new Date().toISOString();

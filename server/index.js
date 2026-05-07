@@ -3225,9 +3225,18 @@ app.put('/api/admin/itembank-mappings/:courseId', async (req, res) => {
 app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
-  const { courseId, topSegments } = req.body || {};
-  if (!courseId || !Array.isArray(topSegments)) {
-    return res.status(400).json({ error: 'courseId en topSegments (array) vereist' });
+  // Twee modi:
+  //  - `selectedTopics`: lijst van GitHub-folder-namen die de docent zojuist
+  //    heeft geïmporteerd. Server zoekt zélf de echte exsection_path[0]-
+  //    waarden op in quiz_questions zodat we niets missen wanneer items
+  //    al eerder waren geïmporteerd (skip-pad geeft anders een lege set).
+  //  - `topSegments` (legacy): expliciete lijst van top-level
+  //    exsection-segmenten. Behouden voor backwards-compat.
+  const { courseId, topSegments, selectedTopics } = req.body || {};
+  const hasSelected = Array.isArray(selectedTopics) && selectedTopics.length > 0;
+  const hasSegments = Array.isArray(topSegments) && topSegments.length > 0;
+  if (!courseId || (!hasSelected && !hasSegments)) {
+    return res.status(400).json({ error: 'courseId en (niet-lege selectedTopics of topSegments) vereist' });
   }
   if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
     return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
@@ -3269,16 +3278,50 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
     return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
   }
 
-  // Filter lege/triviale segmenten.
-  const segments = [...new Set(topSegments.map(s => String(s || '').trim()).filter(Boolean))];
-  if (segments.length === 0) {
-    return res.json({ created: 0, linked: 0, conceptsByPath: {} });
+  // Bouw een lijst van { topic, segments[] }-paren waar het endpoint
+  // op gaat werken. Per topic krijg je één begrip; alle gevonden
+  // exsection-segmenten worden daaraan gekoppeld zodat álle vragen
+  // van dat topic zichtbaar worden in Quiz, ongeacht hoe diep hun
+  // exsection-pad is gecodeerd.
+  const topicJobs = [];
+  if (hasSelected) {
+    const cleanTopics = [...new Set(selectedTopics.map(s => String(s || '').trim()).filter(Boolean))];
+    for (const topic of cleanTopics) {
+      // Haal de werkelijk in de database aanwezige exsection-paden op voor
+      // dit topic. We pakken álle items (mcq én open) van source=sharestats.
+      const { data: rows, error: qErr } = await supabaseAdmin
+        .from('quiz_questions')
+        .select('exsection_path')
+        .eq('source', 'sharestats')
+        .eq('topic', topic);
+      if (qErr) {
+        console.error('[auto-link] Kon exsection-paden niet ophalen voor topic', topic, qErr);
+      }
+      const segs = new Set();
+      for (const row of rows || []) {
+        const path = Array.isArray(row.exsection_path) ? row.exsection_path : [];
+        if (path.length > 0 && path[0]) segs.add(String(path[0]).trim());
+      }
+      // Fallback: nog geen items in de DB? Toch alvast het concept met
+      // mapping op de foldernaam aanmaken zodat een latere import
+      // automatisch in de quiz verschijnt.
+      if (segs.size === 0) segs.add(topic);
+      topicJobs.push({ topic, segments: [...segs] });
+    }
+  } else {
+    // Legacy-pad: één topic-job per top-segment, label = segment zelf.
+    const segs = [...new Set(topSegments.map(s => String(s || '').trim()).filter(Boolean))];
+    for (const seg of segs) topicJobs.push({ topic: seg, segments: [seg] });
+  }
+
+  if (topicJobs.length === 0) {
+    return res.json({ created: 0, linked: 0, conceptsByTopic: {} });
   }
 
   try {
     let created = 0;
     let linked = 0;
-    const conceptsByPath = {};
+    const conceptsByTopic = {};
 
     // Bestaande concepten in deze cursus ophalen (zowel course_id-pad als
     // key_points-fallback) zodat we case-insensitive op naam kunnen matchen.
@@ -3301,8 +3344,8 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
     }
     const byNameLc = new Map(existingForCourse.map(c => [String(c.name || '').toLowerCase().trim(), c]));
 
-    for (const seg of segments) {
-      const dutchName = humanizeSegment(seg);
+    for (const job of topicJobs) {
+      const dutchName = humanizeSegment(job.topic);
       const key = dutchName.toLowerCase().trim();
       let concept = byNameLc.get(key);
 
@@ -3312,7 +3355,7 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
           ? {
               name: dutchName,
               category: 'ShareStats',
-              definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (sectie "${seg}"). Vul de definitie aan via de begrippen-beheerpagina.`,
+              definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (topic "${job.topic}"). Vul de definitie aan via de begrippen-beheerpagina.`,
               key_points: ['[Geïmporteerd vanuit ShareStats]'],
               examples: [],
               course_id: courseId,
@@ -3320,7 +3363,7 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
           : {
               name: dutchName,
               category: 'ShareStats',
-              definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (sectie "${seg}"). Vul de definitie aan via de begrippen-beheerpagina.`,
+              definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (topic "${job.topic}"). Vul de definitie aan via de begrippen-beheerpagina.`,
               key_points: [`course_id:${courseId}`, '[Geïmporteerd vanuit ShareStats]'],
               examples: [],
             };
@@ -3330,7 +3373,7 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
           .select('id, name')
           .single();
         if (insErr) {
-          console.error('[auto-link] Begrip aanmaken mislukt voor', seg, insErr);
+          console.error('[auto-link] Begrip aanmaken mislukt voor', job.topic, insErr);
           continue;
         }
         concept = ins;
@@ -3338,37 +3381,40 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
         byNameLc.set(key, concept);
       }
 
-      // Mapping leggen via blinde insert. De UNIQUE-constraint
-      // (concept_id, exsection_path) garandeert idempotentie: een tweede
-      // aanroep met hetzelfde segment gooit een duplicate-key fout, die
-      // we als "bestond al" interpreteren — `linked` telt dus alléén
-      // daadwerkelijk nieuwe koppelingen. Een `contains`-prefilter zou
-      // diepere paden zoals ["Probability","ConditionalProbability"]
-      // ten onrechte als bestaand zien voor segment "Probability" en
-      // de top-level mapping overslaan.
-      const { error: mapErr } = await supabaseAdmin
-        .from('concept_itembank_sections')
-        .insert({
-          concept_id: concept.id,
-          course_id: courseId,
-          exsection_path: [seg],
-          created_by: auth.user.id,
-        });
-      if (mapErr) {
-        if (/duplicate key|unique constraint|23505/i.test(mapErr.message || '')) {
-          // Mapping bestond al — niet meetellen, geen fout.
+      // Voor elk gevonden exsection-segment één mapping leggen via blinde
+      // insert. De UNIQUE-constraint (concept_id, exsection_path) garandeert
+      // idempotentie: een tweede aanroep met hetzelfde segment gooit een
+      // duplicate-key fout, die we als "bestond al" interpreteren —
+      // `linked` telt dus alléén daadwerkelijk nieuwe koppelingen.
+      const mappedSegments = [];
+      for (const seg of job.segments) {
+        const { error: mapErr } = await supabaseAdmin
+          .from('concept_itembank_sections')
+          .insert({
+            concept_id: concept.id,
+            course_id: courseId,
+            exsection_path: [seg],
+            created_by: auth.user.id,
+          });
+        if (mapErr) {
+          if (!/duplicate key|unique constraint|23505/i.test(mapErr.message || '')) {
+            console.error('[auto-link] Mapping aanmaken mislukt voor', seg, mapErr);
+            continue;
+          }
         } else {
-          console.error('[auto-link] Mapping aanmaken mislukt voor', seg, mapErr);
-          continue;
+          linked++;
         }
-      } else {
-        linked++;
+        mappedSegments.push(seg);
       }
 
-      conceptsByPath[seg] = { conceptId: concept.id, conceptName: concept.name };
+      conceptsByTopic[job.topic] = {
+        conceptId: concept.id,
+        conceptName: concept.name,
+        mappedSegments,
+      };
     }
 
-    return res.json({ created, linked, conceptsByPath });
+    return res.json({ created, linked, conceptsByTopic });
   } catch (err) {
     console.error('[auto-link] Onverwachte fout:', err);
     return res.status(500).json({ error: err.message || 'Onbekende fout' });
