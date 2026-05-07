@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader2, CheckCircle, AlertTriangle, XCircle, RefreshCw, Save, Info, X } from 'lucide-react';
+import { Download, Loader2, CheckCircle, AlertTriangle, XCircle, RefreshCw, Save, Info, X, Link2 } from 'lucide-react';
 import {
   importQuestionsFromShareStats,
   ImportProgress,
@@ -9,6 +9,8 @@ import {
   parseRepoUrl,
 } from '../services/sharestats-integration.service';
 import { getRepositoryTopics, setItembankRepo } from '../services/github-parser.service';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
+import { supabase } from '../lib/supabase';
 
 interface ImportResult {
   imported: number;
@@ -17,6 +19,40 @@ interface ImportResult {
   skipped: number;
   errors: number;
   skippedReasons?: Record<string, number>;
+  importedTopSegments?: string[];
+}
+
+interface AutoLinkResult {
+  created: number;
+  linked: number;
+  courseName: string;
+}
+
+// Engelse ShareStats-topicfolders → Nederlandstalig label voor de UI.
+// De interne waarde (key) blijft de echte foldernaam — die wordt naar de
+// import-API gestuurd. Onbekende topics vallen terug op een
+// genormaliseerde versie van de foldernaam (zie `topicLabel` hieronder).
+const TOPIC_LABEL_NL: Record<string, string> = {
+  Assumptions: 'Aannames',
+  'Descriptive-statistics': 'Beschrijvende statistiek',
+  Distributions: 'Verdelingen',
+  'Factor-analysis': 'Factoranalyse',
+  Inferential_Statistics: 'Inferentiële statistiek',
+  'Inferential-Statistics': 'Inferentiële statistiek',
+  'Measurement-Level': 'Meetniveau',
+  Probability: 'Kansrekening',
+  Reliability: 'Betrouwbaarheid',
+  'Variable-type': 'Variabeletype',
+  Variance: 'Variantie',
+  packaging: 'Verpakking (technisch)',
+  scripts: 'Scripts (technisch)',
+};
+
+function topicLabel(folder: string): string {
+  if (TOPIC_LABEL_NL[folder]) return TOPIC_LABEL_NL[folder];
+  const spaced = folder.replace(/[-_]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+  if (!spaced) return folder;
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
 type NoticeKind = 'info' | 'warning' | 'error' | 'success';
@@ -41,6 +77,9 @@ const SKIP_REASON_LABELS: Record<string, string> = {
 };
 
 export function ShareStatsImportPanel() {
+  const { activeCourseId, activeCourse } = useActiveCourse();
+  const [autoLinkResult, setAutoLinkResult] = useState<AutoLinkResult | null>(null);
+  const [autoLinking, setAutoLinking] = useState(false);
   const [repoUrl, setRepoUrl] = useState<string>('https://github.com/ShareStats/itembank');
   const [savedRepoUrl, setSavedRepoUrl] = useState<string>('');
   const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(undefined);
@@ -128,10 +167,52 @@ export function ShareStatsImportPanel() {
     }
   };
 
+  // Roept de server aan om voor elk geïmporteerd top-level exsection-segment
+  // automatisch een begrip in de actieve cursus aan te maken én te koppelen
+  // via `concept_itembank_sections`. Zo verschijnen ShareStats-vragen direct
+  // in de begrippenlijst van Quiz zonder dat een docent eerst handmatig
+  // mappings hoeft te leggen.
+  const runAutoLink = async (topSegments: string[]) => {
+    if (!activeCourseId || topSegments.length === 0) return;
+    setAutoLinking(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Geen actieve sessie');
+      const res = await fetch('/api/admin/sharestats/auto-link-concepts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: activeCourseId, topSegments }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setAutoLinkResult({
+        created: data.created || 0,
+        linked: data.linked || 0,
+        courseName: activeCourse?.name || '',
+      });
+    } catch (err) {
+      console.warn('Auto-koppelen mislukt:', err);
+      setNotice({
+        kind: 'warning',
+        message: 'Vragen zijn geïmporteerd, maar automatisch koppelen aan begrippen lukte niet: '
+          + (err instanceof Error ? err.message : 'onbekende fout')
+          + '. Je kunt de mappings handmatig leggen in Beheer → Quiz-bronnen.',
+      });
+    }
+    setAutoLinking(false);
+  };
+
   const runImport = async (topicsToImport: string[], startMessage: string) => {
     setImporting(true);
     setResult(null);
     setProgress(null);
+    setAutoLinkResult(null);
     setNotice({ kind: 'info', message: startMessage });
 
     try {
@@ -145,6 +226,10 @@ export function ShareStatsImportPanel() {
         kind: 'success',
         message: `Klaar — ${importResult.imported} geïmporteerd, ${importResult.skipped} overgeslagen, ${importResult.errors} fouten.`,
       });
+      // Autom. koppelen aan begrippen in de actieve cursus.
+      if (activeCourseId && importResult.importedTopSegments && importResult.importedTopSegments.length > 0) {
+        await runAutoLink(importResult.importedTopSegments);
+      }
       // Update last_synced_at na succesvolle import.
       const now = new Date().toISOString();
       setLastSyncedAt(now);
@@ -299,9 +384,27 @@ export function ShareStatsImportPanel() {
                   onChange={() => handleTopicToggle(topic)}
                   className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
                 />
-                <span className="text-sm font-medium text-gray-700">{topic}</span>
+                <span className="text-sm font-medium text-gray-700" title={topic}>{topicLabel(topic)}</span>
               </label>
             ))}
+          </div>
+
+          {/* Cursus-indicator voor auto-koppelen aan begrippen */}
+          <div className="mb-4 flex items-start gap-2 text-xs bg-blue-50 border border-blue-200 rounded-lg p-3" data-testid="text-active-course-indicator">
+            <Link2 className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+            <div className="text-blue-900">
+              {activeCourseId && activeCourse ? (
+                <>
+                  <strong>Auto-koppelen actief:</strong> de geïmporteerde topics worden meteen als begrip toegevoegd aan
+                  cursus <strong>{activeCourse.name}</strong>, zodat studenten er direct quizvragen over kunnen oefenen.
+                </>
+              ) : (
+                <>
+                  <strong>Geen actieve cursus:</strong> de vragen worden wel opgeslagen, maar je moet ze later handmatig aan begrippen
+                  koppelen via Beheer → Quiz-bronnen. Wissel naar een cursus om automatisch koppelen te activeren.
+                </>
+              )}
+            </div>
           </div>
 
           <button
@@ -374,6 +477,28 @@ export function ShareStatsImportPanel() {
                     .filter(([, n]) => n > 0)
                     .map(([k, n]) => `${SKIP_REASON_LABELS[k] || k}: ${n}`)
                     .join(' · ') || '—'}
+                </div>
+              )}
+
+              {/* Resultaat van het automatisch koppelen aan begrippen. */}
+              {(autoLinking || autoLinkResult) && (
+                <div className="text-xs bg-blue-50 border border-blue-200 rounded p-3 flex items-start gap-2" data-testid="text-auto-link-result">
+                  {autoLinking ? (
+                    <>
+                      <Loader2 className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5 animate-spin" />
+                      <span className="text-blue-900">Begrippen koppelen aan cursus...</span>
+                    </>
+                  ) : autoLinkResult && (
+                    <>
+                      <Link2 className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                      <span className="text-blue-900">
+                        <strong>{autoLinkResult.created}</strong> nieuw begrip{autoLinkResult.created === 1 ? '' : 'pen'} aangemaakt
+                        en <strong>{autoLinkResult.linked}</strong> koppeling{autoLinkResult.linked === 1 ? '' : 'en'} gelegd
+                        {autoLinkResult.courseName && <> in <strong>{autoLinkResult.courseName}</strong></>}.
+                        De geïmporteerde vragen zijn nu zichtbaar in de begrippenlijst van Quiz.
+                      </span>
+                    </>
+                  )}
                 </div>
               )}
             </div>

@@ -45,12 +45,17 @@ export async function importQuestionsFromShareStats(
   repositoryUrl: string,
   topics: string[],
   onProgress?: ImportProgressCallback
-): Promise<{ imported: number; importedMcq: number; importedOpen: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
+): Promise<{ imported: number; importedMcq: number; importedOpen: number; skipped: number; skippedReasons: Record<string, number>; errors: number; importedTopSegments: string[] }> {
   let imported = 0;
   let importedMcq = 0;
   let importedOpen = 0;
   let skipped = 0;
   let errors = 0;
+  // Verzamelt het eerste segment van elk geïmporteerd `exsection_path`
+  // (bijv. "Probability", "Variance"). De UI gebruikt deze om automatisch
+  // begrippen aan de actieve cursus te koppelen, zodat studenten de
+  // geïmporteerde vragen direct kunnen oefenen via de begrippenlijst.
+  const importedTopSegmentSet = new Set<string>();
   const skippedReasons: Record<string, number> = {
     not_dutch: 0,
     unsupported_extype: 0,
@@ -286,6 +291,7 @@ export async function importQuestionsFromShareStats(
         } else {
           imported++;
           if (itemType === 'mcq') importedMcq++; else importedOpen++;
+          if (exsectionPath.length > 0) importedTopSegmentSet.add(exsectionPath[0]);
         }
 
         processedItems++;
@@ -309,7 +315,15 @@ export async function importQuestionsFromShareStats(
       totalQuestions: totalItems,
     });
 
-    return { imported, importedMcq, importedOpen, skipped, skippedReasons, errors };
+    return {
+      imported,
+      importedMcq,
+      importedOpen,
+      skipped,
+      skippedReasons,
+      errors,
+      importedTopSegments: [...importedTopSegmentSet].sort(),
+    };
   } catch (error) {
     console.error('Fout bij importeren ShareStats vragen:', error);
     onProgress?.({
@@ -324,7 +338,7 @@ export async function importQuestionsFromShareStats(
 export async function syncShareStatsQuestions(
   repositoryUrl?: string,
   onProgress?: ImportProgressCallback
-): Promise<{ imported: number; importedMcq: number; importedOpen: number; skipped: number; skippedReasons: Record<string, number>; errors: number }> {
+): Promise<{ imported: number; importedMcq: number; importedOpen: number; skipped: number; skippedReasons: Record<string, number>; errors: number; importedTopSegments: string[] }> {
   const url = repositoryUrl || (await getShareStatsConfig()).repositoryUrl || DEFAULT_REPO_URL;
   const result = await importQuestionsFromShareStats(url, [], onProgress);
 

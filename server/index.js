@@ -3214,6 +3214,167 @@ app.put('/api/admin/itembank-mappings/:courseId', async (req, res) => {
   }
 });
 
+// ---- Endpoint: auto-koppel ShareStats-imports aan begrippen in een cursus --
+// Na een ShareStats-import bevatten de items een `exsection_path` (bv.
+// ["Probability","ConditionalProbability"]). Studenten kunnen die items pas
+// als quiz oefenen wanneer er een `concepts`-rij bestaat in hun cursus die
+// via `concept_itembank_sections` aan dat pad gekoppeld is. Deze endpoint
+// doet dat volautomatisch voor de top-level segmenten die door de import
+// zijn aangeleverd: per segment een begrip aanmaken (als het nog niet
+// bestaat) en een 1-op-1 mapping leggen op `[segment]`.
+app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  const { courseId, topSegments } = req.body || {};
+  if (!courseId || !Array.isArray(topSegments)) {
+    return res.status(400).json({ error: 'courseId en topSegments (array) vereist' });
+  }
+  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
+    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  }
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
+  }
+
+  // Engelse folder/segment-naam → leesbare Nederlandse begrip-naam.
+  // Onbekende segmenten worden netjes genormaliseerd (koppeltekens en
+  // underscores naar spaties, eerste letter hoofdletter) zodat ook nieuwe
+  // ShareStats-topics een fatsoenlijk label krijgen zonder code-wijziging.
+  const SEGMENT_TRANSLATIONS = {
+    Probability: 'Kansrekening',
+    ConditionalProbability: 'Voorwaardelijke kans',
+    ElementaryProbability: 'Elementaire kans',
+    Events: 'Gebeurtenissen',
+    SampleSpace: 'Uitkomstenruimte',
+    ExpectedValue: 'Verwachte waarde',
+    Variance: 'Variantie',
+    StandardDeviation: 'Standaardafwijking',
+    Distributions: 'Verdelingen',
+    NormalDistribution: 'Normale verdeling',
+    BinomialDistribution: 'Binomiale verdeling',
+    Assumptions: 'Aannames',
+    Reliability: 'Betrouwbaarheid',
+    'Descriptive-statistics': 'Beschrijvende statistiek',
+    'Inferential_Statistics': 'Inferentiële statistiek',
+    'Inferential-Statistics': 'Inferentiële statistiek',
+    'Factor-analysis': 'Factoranalyse',
+    'Measurement-Level': 'Meetniveau',
+    'Variable-type': 'Variabeletype',
+    Union: 'Vereniging',
+  };
+  function humanizeSegment(seg) {
+    if (SEGMENT_TRANSLATIONS[seg]) return SEGMENT_TRANSLATIONS[seg];
+    const spaced = String(seg).replace(/[-_]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+    if (!spaced) return seg;
+    return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+  }
+
+  // Filter lege/triviale segmenten.
+  const segments = [...new Set(topSegments.map(s => String(s || '').trim()).filter(Boolean))];
+  if (segments.length === 0) {
+    return res.json({ created: 0, linked: 0, conceptsByPath: {} });
+  }
+
+  try {
+    let created = 0;
+    let linked = 0;
+    const conceptsByPath = {};
+
+    // Bestaande concepten in deze cursus ophalen (zowel course_id-pad als
+    // key_points-fallback) zodat we case-insensitive op naam kunnen matchen.
+    const courseMarker = `[RAG-geëxtraheerd uit cursusmateriaal]`;
+    let existingForCourse = [];
+    if (conceptsHasCourseId) {
+      const { data, error } = await supabaseAdmin
+        .from('concepts')
+        .select('id, name')
+        .eq('course_id', courseId);
+      if (error) throw error;
+      existingForCourse = data || [];
+    } else {
+      // Fallback: alle concepts ophalen, filteren op course-marker.
+      const { data, error } = await supabaseAdmin
+        .from('concepts')
+        .select('id, name, key_points');
+      if (error) throw error;
+      existingForCourse = (data || []).filter(c => (c.key_points || []).includes(`course_id:${courseId}`));
+    }
+    const byNameLc = new Map(existingForCourse.map(c => [String(c.name || '').toLowerCase().trim(), c]));
+
+    for (const seg of segments) {
+      const dutchName = humanizeSegment(seg);
+      const key = dutchName.toLowerCase().trim();
+      let concept = byNameLc.get(key);
+
+      // Begrip aanmaken als het nog niet bestaat.
+      if (!concept) {
+        const insertRow = conceptsHasCourseId
+          ? {
+              name: dutchName,
+              category: 'ShareStats',
+              definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (sectie "${seg}"). Vul de definitie aan via de begrippen-beheerpagina.`,
+              key_points: ['[Geïmporteerd vanuit ShareStats]'],
+              examples: [],
+              course_id: courseId,
+            }
+          : {
+              name: dutchName,
+              category: 'ShareStats',
+              definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (sectie "${seg}"). Vul de definitie aan via de begrippen-beheerpagina.`,
+              key_points: [`course_id:${courseId}`, '[Geïmporteerd vanuit ShareStats]'],
+              examples: [],
+            };
+        const { data: ins, error: insErr } = await supabaseAdmin
+          .from('concepts')
+          .insert(insertRow)
+          .select('id, name')
+          .single();
+        if (insErr) {
+          console.error('[auto-link] Begrip aanmaken mislukt voor', seg, insErr);
+          continue;
+        }
+        concept = ins;
+        created++;
+        byNameLc.set(key, concept);
+      }
+
+      // Mapping leggen via blinde insert. De UNIQUE-constraint
+      // (concept_id, exsection_path) garandeert idempotentie: een tweede
+      // aanroep met hetzelfde segment gooit een duplicate-key fout, die
+      // we als "bestond al" interpreteren — `linked` telt dus alléén
+      // daadwerkelijk nieuwe koppelingen. Een `contains`-prefilter zou
+      // diepere paden zoals ["Probability","ConditionalProbability"]
+      // ten onrechte als bestaand zien voor segment "Probability" en
+      // de top-level mapping overslaan.
+      const { error: mapErr } = await supabaseAdmin
+        .from('concept_itembank_sections')
+        .insert({
+          concept_id: concept.id,
+          course_id: courseId,
+          exsection_path: [seg],
+          created_by: auth.user.id,
+        });
+      if (mapErr) {
+        if (/duplicate key|unique constraint|23505/i.test(mapErr.message || '')) {
+          // Mapping bestond al — niet meetellen, geen fout.
+        } else {
+          console.error('[auto-link] Mapping aanmaken mislukt voor', seg, mapErr);
+          continue;
+        }
+      } else {
+        linked++;
+      }
+
+      conceptsByPath[seg] = { conceptId: concept.id, conceptName: concept.name };
+    }
+
+    return res.json({ created, linked, conceptsByPath });
+  } catch (err) {
+    console.error('[auto-link] Onverwachte fout:', err);
+    return res.status(500).json({ error: err.message || 'Onbekende fout' });
+  }
+});
+
 // Lijst van unieke exsection_path-waarden in de database — handig voor de
 // docent-UI om uit te kiezen.
 app.get('/api/admin/itembank-sections', async (req, res) => {
