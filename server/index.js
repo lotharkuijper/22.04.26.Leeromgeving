@@ -822,7 +822,10 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
 
 app.get('/api/github/*path', async (req, res) => {
   const token = process.env.GITHUB_TOKEN;
-  const path = req.params.path;
+  // In Express 5 levert de named wildcard `*path` een array van segmenten op.
+  // Voor backwards-compat met Express 4 (string) ondersteunen we beide vormen.
+  const rawPath = req.params.path;
+  const path = Array.isArray(rawPath) ? rawPath.join('/') : (rawPath || '');
   const query = req.url.split('?')[1] ? '?' + req.url.split('?')[1] : '';
   const url = `https://api.github.com/${path}${query}`;
 
