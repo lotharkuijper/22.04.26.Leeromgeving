@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { getShareStatsRepository, getRmdFileInFolder, setItembankRepo } from './github-parser.service';
+import { getAllRmdFiles, fetchFileContent, setItembankRepo } from './github-parser.service';
 import { parseShareStatsItem } from './rmd-parser.service';
 import { validateQuizQuestion } from './quiz-validation.service';
 
@@ -74,216 +74,215 @@ export async function importQuestionsFromShareStats(
     }
     setItembankRepo(parsedRepo.owner, parsedRepo.repo);
 
-    onProgress?.({ stage: 'fetching', progress: 0, message: 'Repository structuur ophalen...' });
+    onProgress?.({ stage: 'fetching', progress: 0, message: 'Repository-structuur doorzoeken op .Rmd-bestanden...' });
 
-    const repoStructure = await getShareStatsRepository(topics.length > 0 ? topics : undefined);
-
-    let totalItems = 0;
-    for (const items of repoStructure.itemsByTopic.values()) {
-      totalItems += items.length;
-    }
+    const rmdFiles = await getAllRmdFiles(topics.length > 0 ? topics : undefined);
+    const totalItems = rmdFiles.length;
+    const topicsCovered = new Set(rmdFiles.map((f) => f.topic)).size;
 
     onProgress?.({
       stage: 'fetching',
       progress: 10,
-      message: `${totalItems} items gevonden in ${repoStructure.topics.length} topics`,
+      message: `${totalItems} .Rmd-bestand(en) gevonden in ${topicsCovered} topic(s)`,
       totalQuestions: totalItems,
     });
 
     let processedItems = 0;
 
-    for (const [topic, items] of repoStructure.itemsByTopic.entries()) {
-      for (const item of items) {
+    for (const rmdFile of rmdFiles) {
+      const { topic, folderName, downloadUrl } = rmdFile;
+      try {
+        // Filter 1 (voorlopig): folderNaam-segmenten checken op 'nl'.
+        // Echte beslissing valt pas na parsen, met fallback op
+        // metadata.exlang — anders missen we items met taalcode in
+        // metadata maar niet in foldernaam.
+        const folderSegments = folderName.split('-');
+        const folderHasNl = folderSegments.includes('nl');
+
+        onProgress?.({
+          stage: 'parsing',
+          progress: 10 + (processedItems / Math.max(totalItems, 1)) * 40,
+          message: `Verwerken: ${folderName}`,
+          questionsProcessed: processedItems,
+          totalQuestions: totalItems,
+        });
+
+        let rmdContent: string | null = null;
         try {
-          const folderName = item.name;
-          const folderPath = item.path;
+          rmdContent = await fetchFileContent(downloadUrl);
+        } catch (fetchErr) {
+          console.error(`Kon .Rmd-bestand niet ophalen: ${rmdFile.filePath}`, fetchErr);
+          rmdContent = null;
+        }
+        if (!rmdContent) {
+          skipped++;
+          skippedReasons.no_rmd++;
+          processedItems++;
+          continue;
+        }
 
-          // Filter 1 (voorlopig): folderNaam-segmenten checken op 'nl'.
-          // Echte beslissing valt pas na parsen, met fallback op
-          // metadata.exlang — anders missen we items met taalcode in
-          // metadata maar niet in foldernaam.
-          const folderSegments = folderName.split('-');
-          const folderHasNl = folderSegments.includes('nl');
+        const parsedItem = parseShareStatsItem(folderName, rmdContent);
+        if (!parsedItem) {
+          skipped++;
+          skippedReasons.parse_failed++;
+          processedItems++;
+          continue;
+        }
 
-          onProgress?.({
-            stage: 'parsing',
-            progress: 10 + (processedItems / Math.max(totalItems, 1)) * 40,
-            message: `Verwerken: ${folderName}`,
-            questionsProcessed: processedItems,
-            totalQuestions: totalItems,
+        // Filter 1b: NL-beslissing met OR-logica. Item is NL als
+        // folderHasNl OF metadata.exlang met 'nl' begint. Als exlang
+        // expliciet niet-nl is, overrulet die altijd de folder.
+        const exlang = (parsedItem.question.metaInformation?.exlang || '').toLowerCase().trim();
+        const exlangIsNl = exlang.startsWith('nl');
+        const exlangIsNonNl = exlang.length > 0 && !exlangIsNl;
+        const isDutch = exlangIsNl || (folderHasNl && !exlangIsNonNl);
+        if (!isDutch) {
+          skipped++;
+          skippedReasons.not_dutch++;
+          processedItems++;
+          continue;
+        }
+
+        // Filter 2: vraagtype bepalen via extype.
+        const extype = (parsedItem.question.metaInformation?.extype || '').toLowerCase().trim();
+        let itemType: 'mcq' | 'open';
+        if (MCQ_EXTYPES.has(extype)) {
+          itemType = 'mcq';
+        } else if (OPEN_EXTYPES.has(extype)) {
+          itemType = 'open';
+        } else {
+          skipped++;
+          skippedReasons.unsupported_extype++;
+          processedItems++;
+          continue;
+        }
+
+        // Bestaande items overslaan op basis van sharestats_id (folderName).
+        const { data: existingQuestion } = await supabase
+          .from('quiz_questions')
+          .select('id')
+          .eq('sharestats_id', folderName)
+          .maybeSingle();
+
+        if (existingQuestion) {
+          skipped++;
+          skippedReasons.already_imported++;
+          processedItems++;
+          continue;
+        }
+
+        const answerOptions: { [key: string]: string } = {};
+        let correctAnswer = '';
+
+        if (itemType === 'mcq') {
+          parsedItem.question.answerOptions.forEach((option, index) => {
+            const key = String.fromCharCode(65 + index);
+            answerOptions[key] = option.text;
+            if (option.correct && !correctAnswer) {
+              correctAnswer = key;
+            }
           });
 
-          const rmdContent = await getRmdFileInFolder(folderPath);
-          if (!rmdContent) {
-            skipped++;
-            skippedReasons.no_rmd++;
-            processedItems++;
-            continue;
-          }
-
-          const parsedItem = parseShareStatsItem(folderName, rmdContent);
-          if (!parsedItem) {
+          // Geen juist antwoord gevonden? Sla over (corrupte item).
+          if (!correctAnswer) {
             skipped++;
             skippedReasons.parse_failed++;
             processedItems++;
             continue;
           }
-
-          // Filter 1b: NL-beslissing met OR-logica. Item is NL als
-          // folderHasNl OF metadata.exlang met 'nl' begint. Als exlang
-          // expliciet niet-nl is, overrulet die altijd de folder.
-          const exlang = (parsedItem.question.metaInformation?.exlang || '').toLowerCase().trim();
-          const exlangIsNl = exlang.startsWith('nl');
-          const exlangIsNonNl = exlang.length > 0 && !exlangIsNl;
-          const isDutch = exlangIsNl || (folderHasNl && !exlangIsNonNl);
-          if (!isDutch) {
+        } else {
+          // Open vraag: het modelantwoord komt uit de Solution-sectie.
+          // Voor `num` staat het numerieke antwoord vaak in metadata.exsolution.
+          const exsolution = parsedItem.question.metaInformation?.exsolution;
+          if (exsolution) {
+            correctAnswer = String(exsolution).trim();
+          }
+          // Als de vraag geen Solution én geen exsolution heeft, kunnen we
+          // hem niet evalueren; sla over.
+          if (!correctAnswer && !(parsedItem.question.solution || '').trim()) {
             skipped++;
-            skippedReasons.not_dutch++;
+            skippedReasons.parse_failed++;
             processedItems++;
             continue;
           }
+        }
 
-          // Filter 2: vraagtype bepalen via extype.
-          const extype = (parsedItem.question.metaInformation?.extype || '').toLowerCase().trim();
-          let itemType: 'mcq' | 'open';
-          if (MCQ_EXTYPES.has(extype)) {
-            itemType = 'mcq';
-          } else if (OPEN_EXTYPES.has(extype)) {
-            itemType = 'open';
-          } else {
-            skipped++;
-            skippedReasons.unsupported_extype++;
-            processedItems++;
-            continue;
+        onProgress?.({
+          stage: 'validating',
+          progress: 50 + (processedItems / Math.max(totalItems, 1)) * 30,
+          message: `Valideren: ${folderName}`,
+          questionsProcessed: processedItems,
+          totalQuestions: totalItems,
+        });
+
+        const validation = await validateQuizQuestion(
+          parsedItem.question.question,
+          parsedItem.question.solution
+        );
+
+        // Exsection-pad: hiërarchie waarmee mapping op cursus-begrippen werkt.
+        const exsectionPath = parseExsectionPath(parsedItem.question.metaInformation?.exsection);
+
+        const insertPayload: Record<string, any> = {
+          question_text: parsedItem.question.question,
+          answer_options: answerOptions,
+          correct_answer: correctAnswer,
+          explanation: parsedItem.question.solution,
+          source: 'sharestats',
+          sharestats_id: folderName,
+          topic,
+          subtopic: parsedItem.subtopic,
+          language: parsedItem.language,
+          institution: parsedItem.institution,
+          metadata: parsedItem.question.metaInformation,
+          difficulty: 'intermediate',
+          validation_status: validation.isValid ? 'validated' : 'not_validated',
+          validation_score: validation.similarityScore,
+          exsection_path: exsectionPath.length > 0 ? exsectionPath : null,
+          source_repo: repositoryUrl,
+          item_type: itemType,
+        };
+
+        const { error: insertError } = await supabase
+          .from('quiz_questions')
+          .insert(insertPayload);
+
+        if (insertError) {
+          // Defensief: als de migratie nog niet is toegepast, kunnen
+          // optionele kolommen ontbreken. We verwijderen alleen exact
+          // de kolom die in de foutmelding voorkomt en proberen het
+          // opnieuw, maximaal 4x. Zo behouden we item_type wanneer die
+          // kolom wél bestaat (gangbare situatie na migratie T001).
+          const optionalCols = ['exsection_path', 'source_repo', 'source_commit_sha', 'item_type'];
+          const missingColRe = /column "?([a-z_]+)"? .*does not exist|schema cache.*?"([a-z_]+)"/i;
+          let lastError: typeof insertError | null = insertError;
+          for (let attempt = 0; attempt < optionalCols.length && lastError; attempt++) {
+            const m = (lastError.message || '').match(missingColRe);
+            const col = m?.[1] || m?.[2];
+            if (!col || !optionalCols.includes(col)) break;
+            delete insertPayload[col];
+            const { error: retryError } = await supabase
+              .from('quiz_questions')
+              .insert(insertPayload);
+            lastError = retryError ?? null;
           }
-
-          // Bestaande items overslaan op basis van sharestats_id (folderName).
-          const { data: existingQuestion } = await supabase
-            .from('quiz_questions')
-            .select('id')
-            .eq('sharestats_id', folderName)
-            .maybeSingle();
-
-          if (existingQuestion) {
-            skipped++;
-            skippedReasons.already_imported++;
-            processedItems++;
-            continue;
-          }
-
-          const answerOptions: { [key: string]: string } = {};
-          let correctAnswer = '';
-
-          if (itemType === 'mcq') {
-            parsedItem.question.answerOptions.forEach((option, index) => {
-              const key = String.fromCharCode(65 + index);
-              answerOptions[key] = option.text;
-              if (option.correct && !correctAnswer) {
-                correctAnswer = key;
-              }
-            });
-
-            // Geen juist antwoord gevonden? Sla over (corrupte item).
-            if (!correctAnswer) {
-              skipped++;
-              skippedReasons.parse_failed++;
-              processedItems++;
-              continue;
-            }
-          } else {
-            // Open vraag: het modelantwoord komt uit de Solution-sectie.
-            // Voor `num` staat het numerieke antwoord vaak in metadata.exsolution.
-            const exsolution = parsedItem.question.metaInformation?.exsolution;
-            if (exsolution) {
-              correctAnswer = String(exsolution).trim();
-            }
-            // Als de vraag geen Solution én geen exsolution heeft, kunnen we
-            // hem niet evalueren; sla over.
-            if (!correctAnswer && !(parsedItem.question.solution || '').trim()) {
-              skipped++;
-              skippedReasons.parse_failed++;
-              processedItems++;
-              continue;
-            }
-          }
-
-          onProgress?.({
-            stage: 'validating',
-            progress: 50 + (processedItems / Math.max(totalItems, 1)) * 30,
-            message: `Valideren: ${folderName}`,
-            questionsProcessed: processedItems,
-            totalQuestions: totalItems,
-          });
-
-          const validation = await validateQuizQuestion(
-            parsedItem.question.question,
-            parsedItem.question.solution
-          );
-
-          // Exsection-pad: hiërarchie waarmee mapping op cursus-begrippen werkt.
-          const exsectionPath = parseExsectionPath(parsedItem.question.metaInformation?.exsection);
-
-          const insertPayload: Record<string, any> = {
-            question_text: parsedItem.question.question,
-            answer_options: answerOptions,
-            correct_answer: correctAnswer,
-            explanation: parsedItem.question.solution,
-            source: 'sharestats',
-            sharestats_id: folderName,
-            topic,
-            subtopic: parsedItem.subtopic,
-            language: parsedItem.language,
-            institution: parsedItem.institution,
-            metadata: parsedItem.question.metaInformation,
-            difficulty: 'intermediate',
-            validation_status: validation.isValid ? 'validated' : 'not_validated',
-            validation_score: validation.similarityScore,
-            exsection_path: exsectionPath.length > 0 ? exsectionPath : null,
-            source_repo: repositoryUrl,
-            item_type: itemType,
-          };
-
-          const { error: insertError } = await supabase
-            .from('quiz_questions')
-            .insert(insertPayload);
-
-          if (insertError) {
-            // Defensief: als de migratie nog niet is toegepast, kunnen
-            // optionele kolommen ontbreken. We verwijderen alleen exact
-            // de kolom die in de foutmelding voorkomt en proberen het
-            // opnieuw, maximaal 4x. Zo behouden we item_type wanneer die
-            // kolom wél bestaat (gangbare situatie na migratie T001).
-            const optionalCols = ['exsection_path', 'source_repo', 'source_commit_sha', 'item_type'];
-            const missingColRe = /column "?([a-z_]+)"? .*does not exist|schema cache.*?"([a-z_]+)"/i;
-            let lastError: typeof insertError | null = insertError;
-            for (let attempt = 0; attempt < optionalCols.length && lastError; attempt++) {
-              const m = (lastError.message || '').match(missingColRe);
-              const col = m?.[1] || m?.[2];
-              if (!col || !optionalCols.includes(col)) break;
-              delete insertPayload[col];
-              const { error: retryError } = await supabase
-                .from('quiz_questions')
-                .insert(insertPayload);
-              lastError = retryError ?? null;
-            }
-            if (lastError) {
-              console.error(`Fout bij opslaan vraag ${folderName}:`, lastError);
-              errors++;
-            } else {
-              imported++;
-              if (itemType === 'mcq') importedMcq++; else importedOpen++;
-            }
+          if (lastError) {
+            console.error(`Fout bij opslaan vraag ${folderName}:`, lastError);
+            errors++;
           } else {
             imported++;
             if (itemType === 'mcq') importedMcq++; else importedOpen++;
           }
-
-          processedItems++;
-        } catch (itemError) {
-          console.error(`Fout bij verwerken item ${item.name}:`, itemError);
-          errors++;
-          processedItems++;
+        } else {
+          imported++;
+          if (itemType === 'mcq') importedMcq++; else importedOpen++;
         }
+
+        processedItems++;
+      } catch (itemError) {
+        console.error(`Fout bij verwerken item ${folderName}:`, itemError);
+        errors++;
+        processedItems++;
       }
     }
 
