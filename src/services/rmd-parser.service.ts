@@ -184,7 +184,7 @@ export function parseRmdFile(content: string): RmdQuestion | null {
       // Genummerde of afwijkende Answerlist-headers (Answerlist1,
       // Answerlist 2, ...) kunnen door de splitter gemist worden — pak
       // alle voorkomens via een hele-content-regex.
-      const all = fallbackExtractAllSections(content, 'Answerlist[0-9]*');
+      const all = fallbackExtractAllSections(content, 'Answerlist[ \\t]*[0-9]*');
       for (const body of all) answerlistBodies.push(body);
     }
 
