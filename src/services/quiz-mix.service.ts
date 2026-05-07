@@ -221,6 +221,7 @@ export async function generateMixedQuiz(args: {
   const llmCount = counts.llm + itembankShortfall;
 
   // 2) RAG (LLM met context)
+  let ragActual = 0;
   if (counts.rag > 0) {
     try {
       const ragQs = await generateQuiz(
@@ -233,6 +234,7 @@ export async function generateMixedQuiz(args: {
         ragPersona,
       );
       ragQs.forEach(q => { (q as MCQQuestion).source = 'rag'; });
+      ragActual = ragQs.length;
       out.push(...ragQs);
     } catch (err) {
       console.warn('[quiz-mix] RAG-bron mislukt:', err);
@@ -240,6 +242,7 @@ export async function generateMixedQuiz(args: {
   }
 
   // 3) LLM-creatief (zonder context)
+  let llmActual = 0;
   if (llmCount > 0) {
     try {
       const llmQs = await generateQuiz(
@@ -252,6 +255,7 @@ export async function generateMixedQuiz(args: {
         llmPersona,
       );
       llmQs.forEach(q => { (q as MCQQuestion).source = 'llm'; });
+      llmActual = llmQs.length;
       out.push(...llmQs);
     } catch (err) {
       console.warn('[quiz-mix] LLM-creatieve bron mislukt:', err);
@@ -264,9 +268,12 @@ export async function generateMixedQuiz(args: {
     [out[i], out[j]] = [out[j], out[i]];
   }
 
+  // Rapporteer de werkelijk geleverde aantallen per bron — niet de
+  // geplande. Zo ziet de UI eerlijk dat ItemBank is aangevuld door LLM
+  // en hoeveel RAG/LLM daadwerkelijk hebben opgeleverd.
   return {
     questions: out,
-    counts: { ...counts, itembank: itembankActual },
+    counts: { rag: ragActual, itembank: itembankActual, llm: llmActual },
     effectiveMix: mix,
   };
 }

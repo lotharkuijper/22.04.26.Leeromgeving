@@ -173,6 +173,8 @@ export function QuizPage() {
     primary_folder_id: string | null;
     rag_doc_count: number | null;
     itembank_question_count: number;
+    itembank_mcq_count?: number;
+    itembank_open_count?: number;
     itembank_count_truncated?: boolean;
   };
   const [conceptAvailability, setConceptAvailability] = useState<Record<string, ConceptAvailability>>({});
@@ -791,9 +793,14 @@ export function QuizPage() {
                                 </span>
                                 <span
                                   className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${hasIb ? 'bg-blue-100 text-blue-800' : 'bg-gray-200 text-gray-600'}`}
-                                  title={a?.itembank_count_truncated
-                                    ? `Ten minste ${ibCount} ItemBank-vraag/vragen — exacte telling beperkt door cap`
-                                    : `${ibCount} ItemBank-vraag/vragen via koppelingen`}
+                                  title={(() => {
+                                    const mcq = a?.itembank_mcq_count ?? 0;
+                                    const open = a?.itembank_open_count ?? 0;
+                                    const split = (mcq > 0 || open > 0) ? ` (${mcq} mcq · ${open} open)` : '';
+                                    return a?.itembank_count_truncated
+                                      ? `Ten minste ${ibCount} ItemBank-vraag/vragen${split} — exacte telling beperkt door cap`
+                                      : `${ibCount} ItemBank-vraag/vragen${split} via koppelingen`;
+                                  })()}
                                   data-testid={`avail-itembank-${t.id}`}
                                 >
                                   IB: {a?.itembank_count_truncated ? `≥${ibCount}` : ibCount}

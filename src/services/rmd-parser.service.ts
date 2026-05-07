@@ -34,10 +34,51 @@ export function parseFolderName(folderName: string): {
   };
 }
 
-function extractSection(content: string, sectionName: string): string {
-  const regex = new RegExp(`${sectionName}\\s*=+\\s*\\n([\\s\\S]*?)(?=\\n[A-Z][a-z]+\\s*=+|$)`, 'i');
-  const match = content.match(regex);
-  return match ? match[1].trim() : '';
+// Een R/exams .Rmd-sectie ziet er zo uit (zie ook fallbackExtractSection
+// onderaan voor de hele-content-fallback):
+//
+//   Question
+//   ========
+//   ...inhoud...
+//
+//   Meta-information
+//   ================
+//   ...inhoud...
+//
+// Of, voor lager niveau (bv. Answerlist):
+//
+//   Answerlist
+//   ----------
+//   * optie a
+//
+// Splitter: een sectiekop is een regel met een woord (mag koppeltekens of
+// cijfers bevatten) gevolgd door een regel met minimaal drie '=' of '-'.
+// Dit pikt zowel `Question`, `Meta-information` als `Answerlist` op.
+interface RawSection {
+  name: string;
+  body: string;
+}
+
+function splitIntoSections(content: string): RawSection[] {
+  const lines = content.split('\n');
+  const sections: RawSection[] = [];
+  let current: RawSection | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = i + 1 < lines.length ? lines[i + 1] : '';
+    if (/^[A-Z][A-Za-z0-9_-]*\s*$/.test(line) && /^[=-]{3,}\s*$/.test(next)) {
+      if (current) sections.push(current);
+      current = { name: line.trim(), body: '' };
+      i++; // sla de underline-regel over
+      continue;
+    }
+    if (current) {
+      current.body += (current.body ? '\n' : '') + line;
+    }
+  }
+  if (current) sections.push(current);
+  return sections;
 }
 
 function parseAnswerList(content: string): string[] {
@@ -96,47 +137,78 @@ function parseMetaInformation(content: string): Record<string, string> {
 
 export function parseRmdFile(content: string): RmdQuestion | null {
   try {
-    const sections = content.split(/\n(?=[A-Z][a-z]+\s*=+)/);
+    const sections = splitIntoSections(content);
 
     let questionText = '';
-    let answerOptionsText = '';
     let solutionText = '';
-    let answerLabelsText = '';
     let metaInformationText = '';
+    const answerlistBodies: string[] = [];
 
     for (const section of sections) {
-      const lines = section.split('\n');
-      const header = lines[0].toLowerCase();
-
-      if (header.includes('question')) {
-        questionText = extractSection(content, 'Question');
-      } else if (header.includes('solution')) {
-        solutionText = extractSection(content, 'Solution');
-      } else if (header.includes('meta-information')) {
-        metaInformationText = extractSection(content, 'Meta-information');
-      } else if (header.includes('answerlist')) {
-        if (!answerOptionsText) {
-          answerOptionsText = section.substring(lines[0].length).trim();
-        } else if (!answerLabelsText) {
-          answerLabelsText = section.substring(lines[0].length).trim();
-        }
+      const name = section.name.toLowerCase();
+      if (name === 'question') {
+        questionText = section.body.trim();
+      } else if (name === 'solution') {
+        solutionText = section.body.trim();
+      } else if (name === 'meta-information' || name === 'meta_information') {
+        metaInformationText = section.body.trim();
+      } else if (name === 'answerlist') {
+        answerlistBodies.push(section.body);
       }
     }
 
-    const rawAnswers = parseAnswerList(answerOptionsText);
-    const labels = parseAnswerLabels(answerLabelsText);
-
-    if (rawAnswers.length !== labels.length) {
-      console.warn('Mismatch between answer options and labels');
-      return null;
+    // Defensieve fallback: als de splitter een belangrijke sectie miste
+    // (bijv. door een afwijkende underline of leestekens in de header),
+    // probeer dan toch de inhoud te vinden via een directe regex op de
+    // hele content. Zo blijft één rare item geen 700 anderen blokkeren.
+    if (!metaInformationText) {
+      metaInformationText = fallbackExtractSection(content, 'Meta-information');
+    }
+    if (!questionText) {
+      questionText = fallbackExtractSection(content, 'Question');
+    }
+    if (!solutionText) {
+      solutionText = fallbackExtractSection(content, 'Solution');
     }
 
-    const answerOptions = rawAnswers.map((text, index) => ({
-      text,
-      correct: labels[index] || false,
-    }));
-
     const metaInformation = parseMetaInformation(metaInformationText);
+
+    // R/exams kent twee patronen voor het juiste antwoord van mchoice/schoice:
+    //  (a) Tweede Answerlist-sectie met True/False per regel.
+    //  (b) `exsolution` als binaire string in Meta-information, bv. `1000`
+    //      = optie 1 is correct, `0110` = opties 2 en 3, etc.
+    // ShareStats gebruikt overwegend variant (b). Hieronder ondersteunen we
+    // beide; als er geen labels af te leiden zijn, blijven de opties leeg
+    // en kan de import-laag de item afwijzen.
+    const answerOptionsText = answerlistBodies[0] || '';
+    const answerLabelsText = answerlistBodies[1] || '';
+    const rawAnswers = parseAnswerList(answerOptionsText);
+
+    let labels: boolean[] = [];
+    if (answerLabelsText) {
+      labels = parseAnswerLabels(answerLabelsText);
+    }
+    if (labels.length === 0 && rawAnswers.length > 0) {
+      const exsolution = (metaInformation.exsolution || '').trim();
+      if (/^[01]+$/.test(exsolution) && exsolution.length === rawAnswers.length) {
+        labels = exsolution.split('').map((c) => c === '1');
+      }
+    }
+
+    let answerOptions: Array<{ text: string; correct: boolean }> = [];
+    if (rawAnswers.length > 0) {
+      if (labels.length > 0 && labels.length !== rawAnswers.length) {
+        // Antwoordopties zonder bijbehorende labels: corrupte mchoice.
+        // Niet meer hard de hele item afkeuren — open-vragen hebben
+        // helemaal geen answerlist en moeten gewoon doorlopen.
+        console.warn('Mismatch tussen answer options en labels — opties genegeerd');
+      } else {
+        answerOptions = rawAnswers.map((text, index) => ({
+          text,
+          correct: labels[index] || false,
+        }));
+      }
+    }
 
     return {
       question: questionText,
@@ -148,6 +220,18 @@ export function parseRmdFile(content: string): RmdQuestion | null {
     console.error('Error parsing Rmd file:', error);
     return null;
   }
+}
+
+// Fallback: pak alles tussen `<Section>\n=====` en de volgende sectie of EOF.
+// Werkt ook voor sectienamen met koppeltekens of cijfers.
+function fallbackExtractSection(content: string, sectionName: string): string {
+  const escaped = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(
+    `^${escaped}[ \\t]*\\r?\\n[=-]{3,}[ \\t]*\\r?\\n([\\s\\S]*?)(?=\\r?\\n[A-Z][A-Za-z0-9_-]*[ \\t]*\\r?\\n[=-]{3,}|$)`,
+    'im'
+  );
+  const match = content.match(regex);
+  return match ? match[1].trim() : '';
 }
 
 export function parseShareStatsItem(
