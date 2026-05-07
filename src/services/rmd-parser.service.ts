@@ -60,14 +60,19 @@ interface RawSection {
 }
 
 function splitIntoSections(content: string): RawSection[] {
-  const lines = content.split('\n');
+  // Normaliseer CRLF → LF zodat trailing \r geen header-detectie blokkeert.
+  const normalized = content.replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
   const sections: RawSection[] = [];
   let current: RawSection | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const next = i + 1 < lines.length ? lines[i + 1] : '';
-    if (/^[A-Z][A-Za-z0-9_-]*\s*$/.test(line) && /^[=-]{3,}\s*$/.test(next)) {
+    // Header: woord met letters/cijfers/_-/spaties, evt. gevolgd door
+    // een nummer (bv. `Answerlist1`, `Answerlist 2`). Volgende regel
+    // is een setext-underline met minimaal drie '=' of '-'.
+    if (/^[A-Z][A-Za-z0-9_-]*( ?\d+)?\s*$/.test(line) && /^[=-]{3,}\s*$/.test(next)) {
       if (current) sections.push(current);
       current = { name: line.trim(), body: '' };
       i++; // sla de underline-regel over
@@ -146,13 +151,18 @@ export function parseRmdFile(content: string): RmdQuestion | null {
 
     for (const section of sections) {
       const name = section.name.toLowerCase();
-      if (name === 'question') {
+      // Tolerant matching: case-insensitief en op `startsWith`/`includes`,
+      // zodat varianten als `Answerlist1`, `Answerlist 2` of
+      // `Meta_Information` ook landen op het juiste type.
+      if (name.startsWith('question') && !questionText) {
         questionText = section.body.trim();
-      } else if (name === 'solution') {
+      } else if (name.startsWith('solution') && !solutionText) {
         solutionText = section.body.trim();
-      } else if (name === 'meta-information' || name === 'meta_information') {
-        metaInformationText = section.body.trim();
-      } else if (name === 'answerlist') {
+      } else if (name.includes('meta-information') || name.includes('meta_information') || name.includes('metainformation')) {
+        if (!metaInformationText) metaInformationText = section.body.trim();
+      } else if (name.startsWith('answerlist')) {
+        // Meerdere Answerlist-secties worden in volgorde verzameld
+        // (eerst opties, daarna labels) — ook als ze genummerd zijn.
         answerlistBodies.push(section.body);
       }
     }
@@ -169,6 +179,13 @@ export function parseRmdFile(content: string): RmdQuestion | null {
     }
     if (!solutionText) {
       solutionText = fallbackExtractSection(content, 'Solution');
+    }
+    if (answerlistBodies.length === 0) {
+      // Genummerde of afwijkende Answerlist-headers (Answerlist1,
+      // Answerlist 2, ...) kunnen door de splitter gemist worden — pak
+      // alle voorkomens via een hele-content-regex.
+      const all = fallbackExtractAllSections(content, 'Answerlist[0-9]*');
+      for (const body of all) answerlistBodies.push(body);
     }
 
     const metaInformation = parseMetaInformation(metaInformationText);
@@ -223,15 +240,25 @@ export function parseRmdFile(content: string): RmdQuestion | null {
 }
 
 // Fallback: pak alles tussen `<Section>\n=====` en de volgende sectie of EOF.
-// Werkt ook voor sectienamen met koppeltekens of cijfers.
+// Werkt ook voor sectienamen met koppeltekens of cijfers. `sectionName` mag
+// een regex-fragment zijn (bv. `Answerlist[0-9]*`) — geen escape voor dat
+// fragment.
 function fallbackExtractSection(content: string, sectionName: string): string {
-  const escaped = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const all = fallbackExtractAllSections(content, sectionName);
+  return all[0] || '';
+}
+
+function fallbackExtractAllSections(content: string, sectionPattern: string): string[] {
   const regex = new RegExp(
-    `^${escaped}[ \\t]*\\r?\\n[=-]{3,}[ \\t]*\\r?\\n([\\s\\S]*?)(?=\\r?\\n[A-Z][A-Za-z0-9_-]*[ \\t]*\\r?\\n[=-]{3,}|$)`,
-    'im'
+    `(?:^|\\n)(?:${sectionPattern})[ \\t]*\\r?\\n[=-]{3,}[ \\t]*\\r?\\n([\\s\\S]*?)(?=\\r?\\n[A-Z][A-Za-z0-9_-]*( ?\\d+)?[ \\t]*\\r?\\n[=-]{3,}|$)`,
+    'gim'
   );
-  const match = content.match(regex);
-  return match ? match[1].trim() : '';
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(content)) !== null) {
+    out.push(m[1].trim());
+  }
+  return out;
 }
 
 export function parseShareStatsItem(
