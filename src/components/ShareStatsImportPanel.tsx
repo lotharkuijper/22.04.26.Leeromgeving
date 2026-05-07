@@ -58,6 +58,14 @@ export function ShareStatsImportPanel() {
     void loadConfigAndTopics();
   }, []);
 
+  useEffect(() => {
+    if (!notice) return;
+    if (notice.kind !== 'success' && notice.kind !== 'info') return;
+    if (notice.kind === 'info' && importing) return;
+    const timer = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [notice, importing]);
+
   const loadConfigAndTopics = async () => {
     setLoading(true);
     try {
