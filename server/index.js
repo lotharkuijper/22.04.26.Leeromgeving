@@ -3042,14 +3042,15 @@ async function requireAdminOrDocent(req, res) {
     }
     const { data: profile } = await supabaseAdmin
       .from('profiles')
-      .select('role')
+      .select('role, email')
       .eq('id', user.id)
       .maybeSingle();
-    if (!profile || !['admin', 'docent'].includes(profile.role)) {
+    const isSuperuser = profile?.email === SUPERUSER_EMAIL;
+    if (!profile || (!isSuperuser && !['admin', 'docent'].includes(profile.role))) {
       res.status(403).json({ error: 'Geen toegang' });
       return null;
     }
-    return { user, role: profile.role };
+    return { user, profile, role: profile.role };
   } catch (err) {
     res.status(401).json({ error: 'Authenticatie mislukt: ' + err.message });
     return null;
@@ -3153,10 +3154,13 @@ app.put('/api/admin/quiz-prompts/:name', async (req, res) => {
 app.get('/api/admin/itembank-mappings/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
+  const { courseId } = req.params;
+  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
+    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
   }
-  const { courseId } = req.params;
   try {
     const { data, error } = await supabaseAdmin
       .from('concept_itembank_sections')
@@ -3172,10 +3176,13 @@ app.get('/api/admin/itembank-mappings/:courseId', async (req, res) => {
 app.put('/api/admin/itembank-mappings/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
+  const { courseId } = req.params;
+  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
+    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
   }
-  const { courseId } = req.params;
   const { mappings } = req.body || {};
   if (!Array.isArray(mappings)) {
     return res.status(400).json({ error: 'mappings moet een array zijn' });
@@ -3239,10 +3246,13 @@ app.get('/api/admin/itembank-sections', async (req, res) => {
 app.get('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
+  const { courseId } = req.params;
+  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
+    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
   }
-  const { courseId } = req.params;
   try {
     const { data, error } = await supabaseAdmin
       .from('concept_rag_sources')
@@ -3258,10 +3268,13 @@ app.get('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
 app.put('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
+  const { courseId } = req.params;
+  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
+    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
   }
-  const { courseId } = req.params;
   const { sources } = req.body || {};
   if (!Array.isArray(sources)) {
     return res.status(400).json({ error: 'sources moet een array zijn' });
@@ -3306,11 +3319,17 @@ function normalizeMix(mix) {
 }
 
 app.get('/api/quiz-sources-mix/:courseId', async (req, res) => {
-  // Lezen mag iedere geauthenticeerde gebruiker (RLS staat dat toe).
+  // Lezen mag iedereen die toegang tot de cursus heeft (student of docent in
+  // course_members, of admin/superuser).
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId } = req.params;
+  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
+    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  }
   if (!quizSourcesSchemaReady) {
     return res.json({ mix: { pct_rag: 50, pct_itembank: 0, pct_llm: 50 }, schema_ready: false });
   }
-  const { courseId } = req.params;
   try {
     const { data, error } = await supabaseAdmin
       .from('quiz_sources_mix')
@@ -3331,10 +3350,13 @@ app.get('/api/quiz-sources-mix/:courseId', async (req, res) => {
 app.put('/api/admin/quiz-sources-mix/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
+  const { courseId } = req.params;
+  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
+    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
   }
-  const { courseId } = req.params;
   const normalized = normalizeMix(req.body || {});
   try {
     const { data: existing } = await supabaseAdmin
