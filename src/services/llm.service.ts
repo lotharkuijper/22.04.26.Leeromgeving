@@ -250,6 +250,12 @@ export interface OpenQuestion {
   modelAnswer: string;
   rubric: string;
   source?: QuizSource;
+  // Optionele meta-data voor ItemBank-vragen, zodat de evaluator de juiste
+  // beoordelingsmethode kan kiezen (numeriek vs tekst/cloze) en in de feedback
+  // kan vermelden welke methode is gebruikt (Task #67).
+  extype?: 'num' | 'string' | 'cloze' | string;
+  numericExpected?: number;
+  numericTolerance?: number;
 }
 
 export interface CasusQuestion {
@@ -541,12 +547,95 @@ Geef je antwoord UITSLUITEND als één JSON-object met deze structuur, zonder ex
   };
 }
 
+/**
+ * Probeert een numeriek antwoord uit een vrij tekstantwoord te halen. Accepteert
+ * komma als decimaalteken, optioneel teken, en negeert eenheden of toelichting.
+ * Geeft `null` terug als er geen bruikbaar getal is.
+ */
+function parseNumericAnswer(text: string): number | null {
+  if (!text) return null;
+  const normalized = text.replace(/,/g, '.');
+  const match = normalized.match(/-?\d+(?:\.\d+)?(?:[eE]-?\d+)?/);
+  if (!match) return null;
+  const n = Number(match[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Numerieke beoordeling à la R/exams `extol`: het studentantwoord is correct
+ * als |student − verwacht| ≤ tolerantie. Bij ontbrekende of nul-tolerantie
+ * wordt strikt vergeleken (met een kleine epsilon voor afrondingsruis).
+ */
+function evaluateNumericAnswer(
+  expected: number,
+  toleranceRaw: number | undefined,
+  studentAnswer: string,
+  modelAnswer: string,
+): AnswerEvaluation {
+  const tolerance = Number.isFinite(toleranceRaw as number) && (toleranceRaw as number) > 0
+    ? (toleranceRaw as number)
+    : 0;
+  const student = parseNumericAnswer(studentAnswer);
+  const formatExpected = () => {
+    const t = tolerance > 0 ? ` (tolerantie ± ${tolerance})` : '';
+    return `${expected}${t}`;
+  };
+  const methodNote = tolerance > 0
+    ? `Beoordelingsmethode: numerieke tolerantie-check (±${tolerance}, op basis van het ItemBank-veld extol).`
+    : `Beoordelingsmethode: strikte numerieke vergelijking (geen extol-tolerantie opgegeven in de ItemBank).`;
+  const modelNote = modelAnswer && modelAnswer.trim().length > 0
+    ? `\n\nUitleg uit het modelantwoord:\n${modelAnswer.trim()}`
+    : '';
+
+  if (student === null) {
+    return {
+      feedback: `Je hebt geen numeriek antwoord gegeven dat ik kon herleiden. Het verwachte antwoord is ${formatExpected()}. ${methodNote}${modelNote}`,
+      feedforward: `Schrijf je antwoord als één getal (bijv. ${expected}). Een korte toelichting mag, maar zorg dat het getal duidelijk in je antwoord staat.`,
+      score: 0,
+    };
+  }
+
+  const diff = Math.abs(student - expected);
+  const epsilon = tolerance > 0 ? tolerance : 1e-9;
+  const correct = diff <= epsilon;
+
+  if (correct) {
+    return {
+      feedback: `Je antwoord ${student} komt overeen met het verwachte antwoord ${formatExpected()}. ${methodNote}${modelNote}`,
+      feedforward: `Goed zo — bij vergelijkbare numerieke vragen blijf je telkens controleren of je tussenstappen en eenheden kloppen.`,
+      score: 100,
+    };
+  }
+
+  return {
+    feedback: `Je antwoord ${student} wijkt af van het verwachte antwoord ${formatExpected()}; het verschil is ${Number(diff.toPrecision(4))}. ${methodNote}${modelNote}`,
+    feedforward: `Reken de berekening stap voor stap opnieuw door en let op eenheden, afronding en welk getal precies gevraagd wordt.`,
+    score: 0,
+  };
+}
+
 export async function evaluateOpenAnswer(
   question: OpenQuestion,
   studentAnswer: string,
   systemPromptOverride?: string,
 ): Promise<AnswerEvaluation> {
-  return evaluateFreeTextAnswer({
+  // Numerieke ItemBank-vragen (extype: num): lokale tolerantie-check is
+  // eerlijker dan een LLM-vergelijking en vermeldt expliciet dat extol is
+  // toegepast. Vereist een geldig verwacht getal; valt anders terug op LLM.
+  if (
+    question.extype === 'num'
+    && typeof question.numericExpected === 'number'
+    && Number.isFinite(question.numericExpected)
+  ) {
+    return evaluateNumericAnswer(
+      question.numericExpected,
+      question.numericTolerance,
+      studentAnswer,
+      question.modelAnswer,
+    );
+  }
+
+  const evaluation = await evaluateFreeTextAnswer({
     systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt jouw antwoord op een open vraag.`,
     questionBlock: `Open vraag:\n${question.question}`,
     modelAnswer: question.modelAnswer,
@@ -554,6 +643,20 @@ export async function evaluateOpenAnswer(
     studentAnswer,
     systemPromptOverride,
   });
+
+  // Vermeld in de feedback welke beoordelingsmethode is gebruikt zodat
+  // studenten begrijpen waarom hun tekst- of cloze-antwoord is gescoord
+  // tegen het ShareStats-modelantwoord (Task #67).
+  if (question.source === 'itembank') {
+    const methodNote = question.extype === 'cloze'
+      ? `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (cloze-vraag uit de ItemBank).`
+      : `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (open vraag uit de ItemBank).`;
+    return {
+      ...evaluation,
+      feedback: evaluation.feedback ? `${evaluation.feedback}\n\n${methodNote}` : methodNote,
+    };
+  }
+  return evaluation;
 }
 
 export async function evaluateCasusAnswer(

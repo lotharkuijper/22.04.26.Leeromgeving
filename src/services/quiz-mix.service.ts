@@ -56,6 +56,12 @@ export interface ItembankRawOpenQuestion {
   modelAnswer: string;
   explanation?: string;
   exsection_path?: string[];
+  // R/exams-meta voor type-specifieke beoordeling (Task #67):
+  // - extype 'num' → numerieke tolerantie-check via extol
+  // - extype 'string'/'cloze' → tekstuele vergelijking met modelantwoord
+  extype?: string;
+  numericExpected?: number;
+  numericTolerance?: number;
 }
 
 export type ItembankRawQuestion = ItembankRawMcqQuestion | ItembankRawOpenQuestion;
@@ -169,12 +175,43 @@ export function convertItembankMcqQuestion(q: ItembankRawMcqQuestion): MCQQuesti
 export const convertItembankQuestion = convertItembankMcqQuestion;
 
 export function convertItembankOpenQuestion(q: ItembankRawOpenQuestion): OpenQuestion {
+  const extype = (q.extype || '').toLowerCase();
+  // Type-specifieke rubriek (Task #67). Voor numerieke vragen verwijzen we
+  // expliciet naar extol; voor tekst/cloze leggen we de nadruk op het
+  // ShareStats-modelantwoord uit de Solution-sectie.
+  let rubric: string;
+  if (extype === 'num' && typeof q.numericExpected === 'number') {
+    const tol = q.numericTolerance && q.numericTolerance > 0
+      ? `binnen een tolerantie van ±${q.numericTolerance} (R/exams extol)`
+      : 'strikt (geen extol-tolerantie opgegeven)';
+    rubric = `- Numeriek antwoord: het verwachte getal is ${q.numericExpected}.\n`
+      + `- Beoordeel ${tol}.\n`
+      + `- Negeer eenheden, korte toelichting of komma vs. punt; vergelijk alleen het getal.`;
+  } else if (extype === 'cloze') {
+    rubric = `- Cloze-vraag uit de ItemBank: vergelijk elk deelantwoord met het ShareStats-modelantwoord hieronder.\n`
+      + `- Geef alleen volle punten als alle deelantwoorden inhoudelijk kloppen; bij gedeeltelijk juiste invulling proportioneel scoren.\n`
+      + `- Wees mild met spelling/notatie zolang de bedoelde term ondubbelzinnig is.`;
+  } else if (extype === 'string') {
+    rubric = `- Open ItemBank-tekstvraag: het ShareStats-modelantwoord (Solution) is leidend.\n`
+      + `- Beoordeel of de kerntermen en kernredeneringen uit het modelantwoord aanwezig zijn.\n`
+      + `- Accepteer synoniemen of een eigen verwoording, mits de vakinhoud klopt.`;
+  } else if (q.explanation && q.explanation.trim().length > 0) {
+    // Fallback: gebruik de Solution-tekst als rubriek wanneer extype onbekend
+    // is, maar maak expliciet dat het uit de ItemBank komt.
+    rubric = `Vergelijk het studentantwoord met het ShareStats-modelantwoord uit de ItemBank:\n${q.explanation.trim()}`;
+  } else {
+    rubric = 'Beoordeel of het antwoord van de student inhoudelijk overeenkomt met het modelantwoord uit de ItemBank.';
+  }
+
   return {
     type: 'open',
     question: q.question,
     modelAnswer: q.modelAnswer || '',
-    rubric: q.explanation || 'Beoordeel of het antwoord van de student inhoudelijk overeenkomt met het modelantwoord uit de ItemBank.',
+    rubric,
     source: 'itembank' as QuizSource,
+    extype: q.extype,
+    numericExpected: q.numericExpected,
+    numericTolerance: q.numericTolerance,
   };
 }
 

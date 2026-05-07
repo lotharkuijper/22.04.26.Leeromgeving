@@ -3473,16 +3473,50 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
     const picked = matches.slice(0, Math.max(1, Math.min(limit, 50)));
 
     // Normaliseer naar het frontend-format. Voor open vragen geven we het
-    // modelantwoord terug (uit Solution + eventueel exsolution-numeric) zodat
-    // de open-evaluator van de quiz daarop kan beoordelen.
+    // modelantwoord terug (uit Solution + eventueel exsolution-numeric) plus
+    // het R/exams-extype + exsolution + extol, zodat de evaluator kan kiezen
+    // tussen numerieke tolerantie-check (extype=num) en tekstuele beoordeling
+    // tegen het ShareStats-modelantwoord (Task #67).
+    const parseNumberLoose = (raw) => {
+      if (raw === null || raw === undefined) return null;
+      const s = String(raw).replace(/,/g, '.').trim();
+      const m = s.match(/-?\d+(?:\.\d+)?(?:[eE]-?\d+)?/);
+      if (!m) return null;
+      const n = Number(m[0]);
+      return Number.isFinite(n) ? n : null;
+    };
     const questions = picked.map(q => {
       const itemType = q.item_type || 'mcq';
       if (itemType === 'open') {
+        const meta = (q.metadata && typeof q.metadata === 'object') ? q.metadata : {};
+        const extype = String(meta.extype || '').toLowerCase().trim() || undefined;
         const numericSolution = q.correct_answer || '';
         const writtenSolution = q.explanation || '';
-        const modelAnswer = numericSolution
-          ? (writtenSolution ? `${numericSolution}\n\n${writtenSolution}` : numericSolution)
-          : writtenSolution;
+        // Bij numerieke vragen houden we het exacte getal apart, zodat de
+        // evaluator een echte tolerantie-check kan doen i.p.v. LLM-vergelijking.
+        const numericExpected = extype === 'num' ? parseNumberLoose(numericSolution) : null;
+        // R/exams `extol` is meestal een absolute tolerantie. Wanneer de
+        // metadata een lijst/range bevat, nemen we het grootste positieve
+        // verschil als tolerantie — strikt genoeg om vals-positieven te
+        // voorkomen en ruim genoeg om afronding op te vangen.
+        let numericTolerance = null;
+        const extolRaw = meta.extol;
+        if (Array.isArray(extolRaw)) {
+          const nums = extolRaw.map(parseNumberLoose).filter(n => n !== null && n >= 0);
+          if (nums.length > 0) numericTolerance = Math.max(...nums);
+        } else if (extolRaw !== undefined && extolRaw !== null && String(extolRaw).trim() !== '') {
+          const t = parseNumberLoose(extolRaw);
+          if (t !== null && t >= 0) numericTolerance = t;
+        }
+        // Voor numerieke vragen is `modelAnswer` puur de geschreven uitleg
+        // (Solution); het verwachte getal staat al apart in numericExpected.
+        // Voor tekst/cloze vallen we terug op de oude samenvoeging zodat de
+        // LLM zoveel mogelijk context krijgt.
+        const modelAnswer = extype === 'num'
+          ? writtenSolution
+          : (numericSolution
+              ? (writtenSolution ? `${numericSolution}\n\n${writtenSolution}` : numericSolution)
+              : writtenSolution);
         return {
           id: `itembank-${q.id}`,
           type: 'open',
@@ -3492,6 +3526,9 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
           modelAnswer,
           explanation: writtenSolution,
           exsection_path: q.exsection_path,
+          extype,
+          numericExpected: numericExpected ?? undefined,
+          numericTolerance: numericTolerance ?? undefined,
         };
       }
       return {
