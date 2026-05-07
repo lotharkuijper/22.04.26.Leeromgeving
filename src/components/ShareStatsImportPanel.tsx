@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader2, CheckCircle, AlertTriangle, XCircle, RefreshCw, Save } from 'lucide-react';
+import { Download, Loader2, CheckCircle, AlertTriangle, XCircle, RefreshCw, Save, Info, X } from 'lucide-react';
 import {
   importQuestionsFromShareStats,
   ImportProgress,
@@ -18,6 +18,19 @@ interface ImportResult {
   errors: number;
   skippedReasons?: Record<string, number>;
 }
+
+type NoticeKind = 'info' | 'warning' | 'error' | 'success';
+interface Notice {
+  kind: NoticeKind;
+  message: string;
+}
+
+const NOTICE_STYLES: Record<NoticeKind, { box: string; icon: string }> = {
+  info: { box: 'bg-blue-50 border-blue-200 text-blue-900', icon: 'text-blue-600' },
+  warning: { box: 'bg-yellow-50 border-yellow-200 text-yellow-900', icon: 'text-yellow-600' },
+  error: { box: 'bg-red-50 border-red-200 text-red-900', icon: 'text-red-600' },
+  success: { box: 'bg-emerald-50 border-emerald-200 text-emerald-900', icon: 'text-emerald-600' },
+};
 
 const SKIP_REASON_LABELS: Record<string, string> = {
   not_dutch: 'Niet-Nederlands',
@@ -39,6 +52,7 @@ export function ShareStatsImportPanel() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
   useEffect(() => {
     void loadConfigAndTopics();
@@ -62,7 +76,7 @@ export function ShareStatsImportPanel() {
       setTopics(availableTopics);
     } catch (error) {
       console.error('Error loading topics:', error);
-      alert('Kon topics niet laden van GitHub. Controleer de repo-URL.');
+      setNotice({ kind: 'error', message: 'Kon topics niet laden van GitHub. Controleer de repo-URL.' });
     }
     setLoading(false);
   };
@@ -70,7 +84,7 @@ export function ShareStatsImportPanel() {
   const handleSaveRepoUrl = async () => {
     const parsed = parseRepoUrl(repoUrl);
     if (!parsed) {
-      alert('Ongeldige GitHub-URL. Verwacht: https://github.com/<owner>/<repo>');
+      setNotice({ kind: 'warning', message: 'Ongeldige GitHub-URL. Verwacht het formaat https://github.com/<owner>/<repo>.' });
       return;
     }
     setSavingConfig(true);
@@ -84,9 +98,10 @@ export function ShareStatsImportPanel() {
       setTopics(availableTopics);
       setSelectedTopics([]);
       setLoading(false);
+      setNotice({ kind: 'success', message: 'Repo-URL opgeslagen en topics opnieuw geladen.' });
     } catch (err) {
       console.error('Kon repo-URL niet opslaan:', err);
-      alert('Opslaan mislukt: ' + (err instanceof Error ? err.message : 'Onbekende fout'));
+      setNotice({ kind: 'error', message: 'Opslaan mislukt: ' + (err instanceof Error ? err.message : 'Onbekende fout') });
     }
     setSavingConfig(false);
   };
@@ -105,12 +120,11 @@ export function ShareStatsImportPanel() {
     }
   };
 
-  const runImport = async (topicsToImport: string[], confirmMessage: string) => {
-    if (!confirm(confirmMessage)) return;
-
+  const runImport = async (topicsToImport: string[], startMessage: string) => {
     setImporting(true);
     setResult(null);
     setProgress(null);
+    setNotice({ kind: 'info', message: startMessage });
 
     try {
       const importResult = await importQuestionsFromShareStats(
@@ -119,6 +133,10 @@ export function ShareStatsImportPanel() {
         setProgress as ImportProgressCallback
       );
       setResult(importResult);
+      setNotice({
+        kind: 'success',
+        message: `Klaar — ${importResult.imported} geïmporteerd, ${importResult.skipped} overgeslagen, ${importResult.errors} fouten.`,
+      });
       // Update last_synced_at na succesvolle import.
       const now = new Date().toISOString();
       setLastSyncedAt(now);
@@ -129,7 +147,10 @@ export function ShareStatsImportPanel() {
       }
     } catch (error) {
       console.error('Error importing questions:', error);
-      alert('Fout bij importeren: ' + (error instanceof Error ? error.message : 'Onbekende fout'));
+      setNotice({
+        kind: 'error',
+        message: 'Importeren mislukt: ' + (error instanceof Error ? error.message : 'Onbekende fout'),
+      });
     }
 
     setImporting(false);
@@ -137,24 +158,52 @@ export function ShareStatsImportPanel() {
 
   const handleImport = () => {
     if (selectedTopics.length === 0) {
-      alert('Selecteer minimaal één topic om te importeren');
+      setNotice({ kind: 'warning', message: 'Selecteer minimaal één onderwerp om te importeren.' });
       return;
     }
     void runImport(
       selectedTopics,
-      `${selectedTopics.length} topic(s) importeren? Dit kan enkele minuten duren. Alleen Nederlandstalige meerkeuze- en open vragen worden geïmporteerd.`
+      `Import gestart vanuit ShareStats voor ${selectedTopics.length} onderwerp(en) — dit kan even duren.`
     );
   };
 
   const handleSyncAll = () => {
     void runImport(
       [],
-      'De volledige itembank synchroniseren? Dit duurt enkele minuten. Bestaande vragen worden overgeslagen, alleen Nederlandse meerkeuzevragen worden geïmporteerd.'
+      'Volledige synchronisatie met ShareStats gestart — dit kan een paar minuten duren.'
     );
+  };
+
+  const renderNoticeIcon = (kind: NoticeKind, className: string) => {
+    if (kind === 'success') return <CheckCircle className={className} />;
+    if (kind === 'warning') return <AlertTriangle className={className} />;
+    if (kind === 'error') return <XCircle className={className} />;
+    return <Info className={className} />;
   };
 
   return (
     <div className="space-y-6" data-testid="panel-sharestats-import">
+      {notice && (
+        <div
+          className={`flex items-start gap-3 border rounded-lg p-4 ${NOTICE_STYLES[notice.kind].box}`}
+          role={notice.kind === 'error' || notice.kind === 'warning' ? 'alert' : 'status'}
+          aria-live={notice.kind === 'error' || notice.kind === 'warning' ? 'assertive' : 'polite'}
+          data-testid={`notice-${notice.kind}`}
+        >
+          {renderNoticeIcon(notice.kind, `w-5 h-5 mt-0.5 ${NOTICE_STYLES[notice.kind].icon}`)}
+          <p className="flex-1 text-sm">{notice.message}</p>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="opacity-70 hover:opacity-100"
+            aria-label="Sluit melding"
+            data-testid="button-dismiss-notice"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <div className="flex items-start gap-3">
           <Download className="w-5 h-5 text-blue-700 mt-0.5" />
