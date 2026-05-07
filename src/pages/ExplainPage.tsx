@@ -787,6 +787,7 @@ export function ExplainPage() {
                         maxSimilarity={retrievedStats.maxSimilarity}
                         candidatesConsidered={retrievedStats.candidatesConsidered}
                         searchPerformed={retrievedStats.searchPerformed}
+                        viewerRole={profile?.role}
                       />
                     </div>
                   )}

@@ -522,6 +522,7 @@ export function ChatPage() {
                           maxSimilarity={msg.retrievedContext.stats.maxSimilarity}
                           candidatesConsidered={msg.retrievedContext.stats.candidatesConsidered}
                           searchPerformed={msg.retrievedContext.stats.searchPerformed}
+                          viewerRole={profile?.role}
                         />
                       </div>
                     )}

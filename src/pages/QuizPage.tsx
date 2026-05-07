@@ -1092,6 +1092,7 @@ export function QuizPage() {
                 maxSimilarity={ragStats.maxSimilarity}
                 candidatesConsidered={ragStats.candidatesConsidered}
                 searchPerformed={ragStats.searchPerformed}
+                viewerRole={profile?.role}
               />
             </div>
           )}
@@ -1140,6 +1141,7 @@ export function QuizPage() {
                   maxSimilarity={ragStats.maxSimilarity}
                   candidatesConsidered={ragStats.candidatesConsidered}
                   searchPerformed={ragStats.searchPerformed}
+                  viewerRole={profile?.role}
                 />
               </div>
             )}
@@ -1449,6 +1451,7 @@ export function QuizPage() {
                 maxSimilarity={ragStats.maxSimilarity}
                 candidatesConsidered={ragStats.candidatesConsidered}
                 searchPerformed={ragStats.searchPerformed}
+                viewerRole={profile?.role}
               />
             </div>
           )}

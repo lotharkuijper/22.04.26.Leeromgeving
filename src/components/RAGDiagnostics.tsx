@@ -5,6 +5,7 @@ interface RAGDiagnosticsProps {
   candidatesConsidered?: number;
   searchPerformed?: boolean;
   className?: string;
+  viewerRole?: string | null;
 }
 
 export function RAGDiagnostics({
@@ -14,7 +15,12 @@ export function RAGDiagnostics({
   candidatesConsidered,
   searchPerformed = true,
   className = '',
+  viewerRole,
 }: RAGDiagnosticsProps) {
+  if (viewerRole === 'student') {
+    return null;
+  }
+
   const formatScore = (n: number) => n.toFixed(2);
 
   if (!searchPerformed) {
