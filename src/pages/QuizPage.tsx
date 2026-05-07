@@ -42,6 +42,7 @@ import {
   Calendar,
 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
+import { NoticeBanner, useNotice } from '../components/Notice';
 
 type QuizState = 'setup' | 'ready' | 'active' | 'completed';
 
@@ -187,6 +188,7 @@ export function QuizPage() {
   const [expandedAttemptId, setExpandedAttemptId] = useState<string | null>(null);
   const [archiveDialog, setArchiveDialog] = useState<{ id: string; label: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
+  const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
 
   // Direct opslaan-flow op het "Quiz voltooid!"-scherm. Werkt ook als de
   // quiz_attempts-rij niet bewaard kon worden, dus losgekoppeld van de
@@ -628,10 +630,13 @@ export function QuizPage() {
       setArchiveDialog(null);
 
       if (generateSummary && result.summaryFailed) {
-        alert('De quiz is verwijderd, maar de samenvatting kon niet in je leerdagboek worden opgeslagen. Probeer het later opnieuw.');
+        setPageNotice({
+          kind: 'warning',
+          message: 'De quiz is verwijderd, maar de samenvatting kon niet in je leerdagboek worden opgeslagen. Probeer het later opnieuw.',
+        });
       }
     } catch (err: any) {
-      alert(`Fout bij verwijderen: ${err.message}`);
+      setPageNotice({ kind: 'error', message: `Fout bij verwijderen: ${err.message}` });
     } finally {
       setArchiving(false);
     }
@@ -646,6 +651,7 @@ export function QuizPage() {
   if (state === 'setup') {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
+        <NoticeBanner notice={pageNotice} onDismiss={clearPageNotice} />
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz</h1>
           <p className="text-gray-600">

@@ -10,6 +10,7 @@ import {
 } from '../services/concept-extraction.service';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
 
 export function ConceptReviewPanel() {
   const { profile } = useAuth();
@@ -19,6 +20,8 @@ export function ConceptReviewPanel() {
   const [extractionProgress, setExtractionProgress] = useState<ExtractionProgress | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<string | null>(null);
   const [documents, setDocuments] = useState<any[]>([]);
+  const [confirmExtractAll, setConfirmExtractAll] = useState(false);
+  const { notice, setNotice, clearNotice } = useNotice();
 
   useEffect(() => {
     loadConcepts();
@@ -53,7 +56,7 @@ export function ConceptReviewPanel() {
       loadConcepts();
     } catch (error) {
       console.error('Error approving concept:', error);
-      alert('Fout bij goedkeuren');
+      setNotice({ kind: 'error', message: 'Goedkeuren mislukt. Probeer het opnieuw.' });
     }
   };
 
@@ -64,7 +67,7 @@ export function ConceptReviewPanel() {
       loadConcepts();
     } catch (error) {
       console.error('Error rejecting concept:', error);
-      alert('Fout bij afwijzen');
+      setNotice({ kind: 'error', message: 'Afwijzen mislukt. Probeer het opnieuw.' });
     }
   };
 
@@ -75,28 +78,31 @@ export function ConceptReviewPanel() {
       await extractConceptsFromDocument(selectedDocument, profile.id, setExtractionProgress);
       loadConcepts();
       setSelectedDocument(null);
+      setNotice({ kind: 'success', message: 'Begrippen-extractie voltooid voor het geselecteerde document.' });
     } catch (error) {
       console.error('Error extracting concepts:', error);
-      alert('Fout bij extractie');
+      setNotice({ kind: 'error', message: 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
     }
     setExtracting(false);
     setExtractionProgress(null);
   };
 
-  const handleExtractFromAll = async () => {
+  const runExtractFromAll = async () => {
     if (!profile?.id) return;
-    if (!confirm('Begrippen extractie uit alle documenten kan lang duren. Doorgaan?')) return;
-
+    setConfirmExtractAll(false);
     setExtracting(true);
     try {
-      const result = await extractConceptsFromAllDocuments(profile.id, (docId, progress) => {
+      const result = await extractConceptsFromAllDocuments(profile.id, (_docId, progress) => {
         setExtractionProgress(progress);
       });
-      alert(`${result.totalConcepts} begrippen geëxtraheerd uit ${result.processedDocuments} documenten`);
+      setNotice({
+        kind: 'success',
+        message: `${result.totalConcepts} begrippen geëxtraheerd uit ${result.processedDocuments} documenten.`,
+      });
       loadConcepts();
     } catch (error) {
       console.error('Error extracting concepts:', error);
-      alert('Fout bij extractie');
+      setNotice({ kind: 'error', message: 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
     }
     setExtracting(false);
     setExtractionProgress(null);
@@ -104,6 +110,8 @@ export function ConceptReviewPanel() {
 
   return (
     <div className="space-y-6">
+      <NoticeBanner notice={notice} onDismiss={clearNotice} />
+
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <h3 className="font-semibold text-gray-900 mb-3">Begrippen Extractie</h3>
 
@@ -118,6 +126,7 @@ export function ConceptReviewPanel() {
                 onChange={(e) => setSelectedDocument(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 disabled={extracting}
+                data-testid="select-extract-document"
               >
                 <option value="">Kies een document...</option>
                 {documents.map((doc) => (
@@ -131,6 +140,7 @@ export function ConceptReviewPanel() {
               onClick={handleExtractFromDocument}
               disabled={!selectedDocument || extracting}
               className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              data-testid="button-extract-document"
             >
               <FileText className="w-4 h-4" />
               Extracteer
@@ -138,9 +148,10 @@ export function ConceptReviewPanel() {
           </div>
 
           <button
-            onClick={handleExtractFromAll}
+            onClick={() => setConfirmExtractAll(true)}
             disabled={extracting}
             className="w-full px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="button-extract-all"
           >
             Extracteer Begrippen uit Alle Documenten
           </button>
@@ -238,6 +249,7 @@ export function ConceptReviewPanel() {
                     onClick={() => handleApprove(concept.id)}
                     className="p-2 text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors"
                     title="Goedkeuren"
+                    data-testid={`button-approve-concept-${concept.id}`}
                   >
                     <CheckCircle className="w-5 h-5" />
                   </button>
@@ -245,6 +257,7 @@ export function ConceptReviewPanel() {
                     onClick={() => handleReject(concept.id)}
                     className="p-2 text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
                     title="Afwijzen"
+                    data-testid={`button-reject-concept-${concept.id}`}
                   >
                     <XCircle className="w-5 h-5" />
                   </button>
@@ -254,6 +267,15 @@ export function ConceptReviewPanel() {
           ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmExtractAll}
+        title="Begrippen extraheren uit alle documenten?"
+        description="Begrippen-extractie uit alle documenten kan lang duren. Wil je doorgaan?"
+        confirmLabel="Doorgaan"
+        onConfirm={() => { void runExtractFromAll(); }}
+        onCancel={() => setConfirmExtractAll(false)}
+      />
     </div>
   );
 }

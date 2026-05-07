@@ -10,6 +10,7 @@ import {
   type Dataset,
 } from '../services/dataset.service';
 import { getFolders, type Folder } from '../services/folder.service';
+import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
 
 export function DatasetManagement() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -18,6 +19,9 @@ export function DatasetManagement() {
   const [uploading, setUploading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Dataset | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { notice, setNotice, clearNotice } = useNotice();
 
   const [uploadForm, setUploadForm] = useState({
     file: null as File | null,
@@ -70,15 +74,15 @@ export function DatasetManagement() {
       );
 
       if (result.success) {
-        alert('Dataset succesvol geüpload!');
+        setNotice({ kind: 'success', message: 'Dataset succesvol geüpload!' });
         setShowUploadModal(false);
         setUploadForm({ file: null, name: '', description: '', folderId: null });
         loadData();
       } else {
-        alert(`Fout bij uploaden: ${result.error}`);
+        setNotice({ kind: 'error', message: `Fout bij uploaden: ${result.error}` });
       }
     } catch (error: any) {
-      alert(`Fout bij uploaden: ${error.message}`);
+      setNotice({ kind: 'error', message: `Fout bij uploaden: ${error.message}` });
     } finally {
       setUploading(false);
     }
@@ -98,27 +102,29 @@ export function DatasetManagement() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } else {
-        alert(`Fout bij downloaden: ${result.error}`);
+        setNotice({ kind: 'error', message: `Fout bij downloaden: ${result.error}` });
       }
     } catch (error: any) {
-      alert(`Fout bij downloaden: ${error.message}`);
+      setNotice({ kind: 'error', message: `Fout bij downloaden: ${error.message}` });
     }
   };
 
-  const handleDelete = async (dataset: Dataset) => {
-    if (!confirm(`Weet je zeker dat je "${dataset.name}" wilt verwijderen?`)) return;
-
+  const confirmDeleteDataset = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      const result = await deleteDataset(dataset.id, dataset.file_path);
-
+      const result = await deleteDataset(deleteTarget.id, deleteTarget.file_path);
       if (result.success) {
-        alert('Dataset verwijderd!');
+        setNotice({ kind: 'success', message: 'Dataset verwijderd.' });
         loadData();
       } else {
-        alert(`Fout bij verwijderen: ${result.error}`);
+        setNotice({ kind: 'error', message: `Fout bij verwijderen: ${result.error}` });
       }
     } catch (error: any) {
-      alert(`Fout bij verwijderen: ${error.message}`);
+      setNotice({ kind: 'error', message: `Fout bij verwijderen: ${error.message}` });
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
     }
   };
 
@@ -126,6 +132,8 @@ export function DatasetManagement() {
 
   return (
     <div className="space-y-6">
+      <NoticeBanner notice={notice} onDismiss={clearNotice} />
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Dataset Beheer</h2>
@@ -136,6 +144,7 @@ export function DatasetManagement() {
         <button
           onClick={() => setShowUploadModal(true)}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          data-testid="button-open-upload-dataset"
         >
           <Upload className="w-4 h-4" />
           Upload Dataset
@@ -202,13 +211,15 @@ export function DatasetManagement() {
                     onClick={() => handleDownload(dataset)}
                     className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                     title="Download"
+                    data-testid={`button-download-dataset-${dataset.id}`}
                   >
                     <Download className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => handleDelete(dataset)}
+                    onClick={() => setDeleteTarget(dataset)}
                     className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                     title="Verwijder"
+                    data-testid={`button-delete-dataset-${dataset.id}`}
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -311,6 +322,21 @@ export function DatasetManagement() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Dataset verwijderen?"
+        description={
+          deleteTarget
+            ? `Weet je zeker dat je "${deleteTarget.name}" wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.`
+            : ''
+        }
+        confirmLabel="Verwijderen"
+        variant="danger"
+        busy={deleting}
+        onConfirm={() => { void confirmDeleteDataset(); }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

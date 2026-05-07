@@ -11,6 +11,7 @@ import {
   canUserEditFolder
 } from '../services/folder.service';
 import { useAuth } from '../contexts/AuthContext';
+import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
 
 interface FolderTreeViewProps {
   rootFolder: FolderWithDocumentCount;
@@ -140,13 +141,15 @@ export function FolderTreeView({ rootFolder, onFolderSelect, selectedFolderId, o
   const [newFolderDescription, setNewFolderDescription] = useState('');
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
   const [canEdit, setCanEdit] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { notice, setNotice, clearNotice } = useNotice();
+
 const openNewFolderForSelected = () => {
   if (!selectedFolderId) {
-    alert('Selecteer eerst een map in de boomstructuur.');
+    setNotice({ kind: 'warning', message: 'Selecteer eerst een map in de boomstructuur.' });
     return;
   }
-
-  const isRoot = rootFolder.id === selectedFolderId;
 
   setShowNewFolderModal(true);
   setNewFolderName('');
@@ -191,7 +194,7 @@ const handleCreateFolder = async () => {
   const parentId = selectedFolderId;
 
   if (!parentId || !user || !newFolderName.trim()) {
-    alert('Selecteer eerst een map in de boomstructuur.');
+    setNotice({ kind: 'warning', message: 'Selecteer eerst een map in de boomstructuur.' });
     return;
   }
 
@@ -230,7 +233,7 @@ const handleCreateFolder = async () => {
 
   } catch (error) {
     console.error('Error creating folder:', error);
-    alert('Fout bij aanmaken van map.');
+    setNotice({ kind: 'error', message: 'Map aanmaken mislukt.' });
   }
 };
 
@@ -244,41 +247,82 @@ const handleRenameFolder = async () => {
     onRefresh();
   } catch (error) {
     console.error('Error renaming folder:', error);
-    alert('Fout bij hernoemen van map. Mogelijk bestaat er al een map met deze naam.');
+    setNotice({
+      kind: 'error',
+      message: 'Hernoemen van map mislukt. Mogelijk bestaat er al een map met deze naam.',
+    });
   }
 };
 
-const handleDeleteFolder = async () => {
-  if (!selectedFolderId) return;
-
-  const folderName = selectedFolderId === rootFolder.id
-    ? rootFolder.name
-    : ''; // of haal de naam op uit je folderstructuur als je die hebt
-
-  if (!confirm(`Weet je zeker dat je de map "${folderName}" wilt verwijderen?`)) {
+const askDeleteFolder = () => {
+  if (!selectedFolderId) {
+    setNotice({ kind: 'warning', message: 'Selecteer eerst een map in de boomstructuur.' });
     return;
   }
+  const folderName =
+    selectedFolderId === rootFolder.id
+      ? rootFolder.name
+      : breadcrumbs[breadcrumbs.length - 1]?.name || 'deze map';
+  setConfirmDelete({ id: selectedFolderId, name: folderName });
+};
 
+const runDeleteFolder = async () => {
+  if (!confirmDelete) return;
+  setDeleting(true);
   try {
-    await deleteFolder(selectedFolderId);
+    await deleteFolder(confirmDelete.id);
+    setConfirmDelete(null);
     onRefresh();
   } catch (error: any) {
     console.error('Error deleting folder:', error);
-    alert(error.message || 'Fout bij verwijderen van map.');
+    setNotice({ kind: 'error', message: error.message || 'Verwijderen van map mislukt.' });
+  } finally {
+    setDeleting(false);
   }
 };
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      {notice && (
+        <div className="p-4 pb-0">
+          <NoticeBanner notice={notice} onDismiss={clearNotice} />
+        </div>
+      )}
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title="Map verwijderen?"
+        description={
+          confirmDelete
+            ? `Weet je zeker dat je de map "${confirmDelete.name}" wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.`
+            : ''
+        }
+        confirmLabel="Verwijderen"
+        variant="danger"
+        busy={deleting}
+        onConfirm={() => { void runDeleteFolder(); }}
+        onCancel={() => setConfirmDelete(null)}
+      />
       <div className="border-b border-gray-200 p-4 flex items-center justify-between">
   <h3 className="text-lg font-semibold text-gray-900">Bestandenomgeving</h3>
 
-  <button
-    onClick={openNewFolderForSelected}
-    className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-  >
-    Nieuwe map
-  </button>
+  <div className="flex items-center gap-2">
+    <button
+      onClick={openNewFolderForSelected}
+      className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+      data-testid="button-new-folder"
+    >
+      Nieuwe map
+    </button>
+    {selectedFolderId && selectedFolderId !== rootFolder.id && canEdit && (
+      <button
+        onClick={askDeleteFolder}
+        className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+        data-testid="button-delete-folder"
+      >
+        Verwijder map
+      </button>
+    )}
+  </div>
 </div>
 
         {breadcrumbs.length > 0 && (

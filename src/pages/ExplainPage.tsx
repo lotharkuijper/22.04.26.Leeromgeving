@@ -9,6 +9,7 @@ import { SourceList } from '../components/SourceList';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import type { Database } from '../lib/database.types';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
+import { NoticeBanner, useNotice } from '../components/Notice';
 
 type Concept = Database['public']['Tables']['concepts']['Row'];
 
@@ -73,6 +74,7 @@ export function ExplainPage() {
   const [archiving, setArchiving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [historyItemBusy, setHistoryItemBusy] = useState<string | null>(null);
+  const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
@@ -141,7 +143,7 @@ export function ExplainPage() {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) {
-        alert('Kon uitleg niet laden.');
+        setPageNotice({ kind: 'error', message: 'Kon uitleg niet laden.' });
         return;
       }
       const data = await res.json();
@@ -175,7 +177,7 @@ export function ExplainPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(`Verwijderen mislukt: ${err.error || res.status}`);
+        setPageNotice({ kind: 'error', message: `Verwijderen mislukt: ${err.error || res.status}` });
         return;
       }
       setDeleteConfirm(null);
@@ -187,7 +189,7 @@ export function ExplainPage() {
       }
       await loadHistory();
     } catch (err: any) {
-      alert(`Fout bij verwijderen: ${err?.message || 'onbekend'}`);
+      setPageNotice({ kind: 'error', message: `Fout bij verwijderen: ${err?.message || 'onbekend'}` });
     } finally {
       setHistoryItemBusy(null);
     }
@@ -205,7 +207,7 @@ export function ExplainPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(`Verplaatsen naar leerdagboek mislukt: ${err.error || res.status}`);
+        setPageNotice({ kind: 'error', message: `Verplaatsen naar leerdagboek mislukt: ${err.error || res.status}` });
         return;
       }
       const result = await res.json();
@@ -218,10 +220,13 @@ export function ExplainPage() {
       }
       await loadHistory();
       if (generateSummary && result.summaryFailed) {
-        alert('De uitleg is verwijderd, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.');
+        setPageNotice({
+          kind: 'warning',
+          message: 'De uitleg is verwijderd, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
+        });
       }
     } catch (err: any) {
-      alert(`Fout bij archiveren: ${err?.message || 'onbekend'}`);
+      setPageNotice({ kind: 'error', message: `Fout bij archiveren: ${err?.message || 'onbekend'}` });
     } finally {
       setArchiving(false);
     }
@@ -437,6 +442,7 @@ export function ExplainPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
+      <NoticeBanner notice={pageNotice} onDismiss={clearPageNotice} />
       <div>
         <h1 className="text-3xl font-bold text-gray-900 mb-2">Ik Leg Uit</h1>
         <p className="text-gray-600">

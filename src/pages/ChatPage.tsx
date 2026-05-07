@@ -8,6 +8,7 @@ import { SourceList } from '../components/SourceList';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
+import { NoticeBanner, useNotice } from '../components/Notice';
 
 
 interface ChatMessage extends Message {
@@ -59,6 +60,7 @@ export function ChatPage() {
   const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
   const [pendingRetry, setPendingRetry] = useState<{ history: Message[]; isFirstMessage: boolean } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
@@ -123,7 +125,10 @@ export function ChatPage() {
 
       if (error) {
         console.error('[CHAT] Error loading conversations:', error);
-        alert('Kon conversaties niet laden. Probeer de pagina te vernieuwen.');
+        setPageNotice({
+          kind: 'error',
+          message: 'Kon conversaties niet laden. Probeer de pagina te vernieuwen.',
+        });
         return;
       }
 
@@ -134,7 +139,10 @@ export function ChatPage() {
       }
     } catch (error) {
       console.error('[CHAT] Unexpected error loading conversations:', error);
-      alert('Er is een onverwachte fout opgetreden bij het laden van conversaties.');
+      setPageNotice({
+        kind: 'error',
+        message: 'Er is een onverwachte fout opgetreden bij het laden van conversaties.',
+      });
     }
   };
 
@@ -162,7 +170,10 @@ export function ChatPage() {
   const createNewConversation = async () => {
     if (!profile) {
       console.error('No profile found');
-      alert('Je profiel is niet geladen. Probeer opnieuw in te loggen.');
+      setPageNotice({
+        kind: 'error',
+        message: 'Je profiel is niet geladen. Probeer opnieuw in te loggen.',
+      });
       return;
     }
 
@@ -180,7 +191,10 @@ export function ChatPage() {
 
     if (error) {
       console.error('Error creating conversation:', error);
-      alert(`Kon geen conversatie aanmaken: ${error.message}`);
+      setPageNotice({
+        kind: 'error',
+        message: `Kon geen conversatie aanmaken: ${error.message}`,
+      });
       return;
     }
 
@@ -218,10 +232,13 @@ export function ChatPage() {
       setArchiveDialog(null);
 
       if (generateSummary && result.summaryFailed) {
-        alert('Het gesprek is afgesloten, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.');
+        setPageNotice({
+          kind: 'warning',
+          message: 'Het gesprek is afgesloten, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
+        });
       }
     } catch (err: any) {
-      alert(`Fout bij archiveren: ${err.message}`);
+      setPageNotice({ kind: 'error', message: `Fout bij archiveren: ${err.message}` });
     } finally {
       setArchiving(false);
     }
@@ -432,6 +449,11 @@ export function ChatPage() {
 
   return (
     <>
+    {pageNotice && (
+      <div className="mb-3">
+        <NoticeBanner notice={pageNotice} onDismiss={clearPageNotice} />
+      </div>
+    )}
     <div className="h-[calc(100vh-8rem)] flex gap-4">
       <div className="w-64 bg-white rounded-2xl border border-gray-200 p-4 flex flex-col">
         <button

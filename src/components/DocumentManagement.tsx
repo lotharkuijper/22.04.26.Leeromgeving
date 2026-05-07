@@ -20,6 +20,7 @@ import {
   updateFolder,
 } from '../services/folder.service';
 import { useAuth } from '../contexts/AuthContext';
+import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
 
 interface DocumentItem {
   id: string;
@@ -54,6 +55,9 @@ export default function DocumentManagement({
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderDescription, setNewFolderDescription] = useState('');
+  const [confirmDeleteFolder, setConfirmDeleteFolder] = useState<{ id: string; name: string } | null>(null);
+  const [deletingFolder, setDeletingFolder] = useState(false);
+  const { notice, setNotice, clearNotice } = useNotice();
 
   useEffect(() => {
     initializeRoot();
@@ -131,7 +135,10 @@ export default function DocumentManagement({
       await loadCurrentFolder();
     } catch (error) {
       console.error('Error creating folder:', error);
-      alert('Fout bij aanmaken van map. Mogelijk bestaat er al een map met deze naam.');
+      setNotice({
+        kind: 'error',
+        message: 'Map aanmaken mislukt. Mogelijk bestaat er al een map met deze naam.',
+      });
     }
   }
 
@@ -146,24 +153,28 @@ export default function DocumentManagement({
       await loadCurrentFolder();
     } catch (error) {
       console.error('Error renaming folder:', error);
-      alert('Fout bij hernoemen van map.');
+      setNotice({ kind: 'error', message: 'Hernoemen van map mislukt.' });
     }
   }
 
-  async function handleDeleteFolder() {
+  function handleDeleteFolder() {
     if (!selectedItem || selectedItem.type !== 'folder') return;
+    setConfirmDeleteFolder({ id: selectedItem.id, name: selectedItem.name });
+  }
 
-    if (!confirm(`Weet je zeker dat je de map "${selectedItem.name}" wilt verwijderen?`)) {
-      return;
-    }
-
+  async function confirmDeleteFolderAction() {
+    if (!confirmDeleteFolder) return;
+    setDeletingFolder(true);
     try {
-      await deleteFolder(selectedItem.id);
+      await deleteFolder(confirmDeleteFolder.id);
       setSelectedItem(null);
+      setConfirmDeleteFolder(null);
       await loadCurrentFolder();
     } catch (error: any) {
       console.error('Error deleting folder:', error);
-      alert(error.message || 'Fout bij verwijderen van map.');
+      setNotice({ kind: 'error', message: error.message || 'Verwijderen van map mislukt.' });
+    } finally {
+      setDeletingFolder(false);
     }
   }
 
@@ -197,6 +208,7 @@ export default function DocumentManagement({
 
   return (
     <div className="space-y-4">
+      <NoticeBanner notice={notice} onDismiss={clearNotice} />
       <div className="flex items-center justify-between bg-white border border-gray-200 rounded-lg p-4">
         <div className="flex items-center gap-2 text-sm flex-1">
           {breadcrumbs.map((crumb, index) => (
@@ -397,6 +409,21 @@ export default function DocumentManagement({
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteFolder !== null}
+        title="Map verwijderen?"
+        description={
+          confirmDeleteFolder
+            ? `Weet je zeker dat je de map "${confirmDeleteFolder.name}" wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.`
+            : ''
+        }
+        confirmLabel="Verwijderen"
+        variant="danger"
+        busy={deletingFolder}
+        onConfirm={() => { void confirmDeleteFolderAction(); }}
+        onCancel={() => setConfirmDeleteFolder(null)}
+      />
 
       {showRenameModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

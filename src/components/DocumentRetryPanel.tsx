@@ -2,12 +2,15 @@ import { useState, useEffect } from 'react';
 import { RefreshCw, AlertTriangle, CheckCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { retryFailedDocument, UploadProgress } from '../services/document-upload.service';
+import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
 
 export function DocumentRetryPanel() {
   const [documents, setDocuments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [retryingDocId, setRetryingDocId] = useState<string | null>(null);
   const [retryProgress, setRetryProgress] = useState<UploadProgress | null>(null);
+  const [confirmRetryAll, setConfirmRetryAll] = useState(false);
+  const { notice, setNotice, clearNotice } = useNotice();
 
   useEffect(() => {
     loadDocuments();
@@ -32,21 +35,21 @@ export function DocumentRetryPanel() {
     try {
       await retryFailedDocument(documentId, setRetryProgress);
       await loadDocuments();
-      alert('Document succesvol verwerkt!');
+      setNotice({ kind: 'success', message: 'Document succesvol verwerkt!' });
     } catch (error) {
       console.error('Retry failed:', error);
-      alert('Fout bij opnieuw verwerken: ' + (error instanceof Error ? error.message : 'Onbekende fout'));
+      setNotice({
+        kind: 'error',
+        message: 'Fout bij opnieuw verwerken: ' + (error instanceof Error ? error.message : 'Onbekende fout'),
+      });
     } finally {
       setRetryingDocId(null);
       setRetryProgress(null);
     }
   };
 
-  const handleRetryAll = async () => {
-    if (!confirm(`${documents.length} documenten opnieuw verwerken? Dit kan lang duren.`)) {
-      return;
-    }
-
+  const runRetryAll = async () => {
+    setConfirmRetryAll(false);
     for (const doc of documents) {
       try {
         await handleRetry(doc.id);
@@ -73,6 +76,8 @@ export function DocumentRetryPanel() {
 
   return (
     <div className="space-y-6">
+      <NoticeBanner notice={notice} onDismiss={clearNotice} />
+
       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
         <div className="flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-yellow-700 mt-0.5" />
@@ -89,9 +94,10 @@ export function DocumentRetryPanel() {
       </div>
 
       <button
-        onClick={handleRetryAll}
+        onClick={() => setConfirmRetryAll(true)}
         disabled={retryingDocId !== null}
         className="w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        data-testid="button-retry-all"
       >
         <RefreshCw className={`w-5 h-5 ${retryingDocId ? 'animate-spin' : ''}`} />
         Verwerk Alle Documenten Opnieuw
@@ -149,6 +155,7 @@ export function DocumentRetryPanel() {
               disabled={retryingDocId !== null}
               className="p-3 text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               title="Opnieuw verwerken"
+              data-testid={`button-retry-${doc.id}`}
             >
               <RefreshCw
                 className={`w-5 h-5 ${retryingDocId === doc.id ? 'animate-spin' : ''}`}
@@ -157,6 +164,15 @@ export function DocumentRetryPanel() {
           </div>
         ))}
       </div>
+
+      <ConfirmDialog
+        open={confirmRetryAll}
+        title="Alle documenten opnieuw verwerken?"
+        description={`${documents.length} document${documents.length !== 1 ? 'en' : ''} opnieuw verwerken? Dit kan lang duren.`}
+        confirmLabel="Doorgaan"
+        onConfirm={() => { void runRetryAll(); }}
+        onCancel={() => setConfirmRetryAll(false)}
+      />
     </div>
   );
 }
