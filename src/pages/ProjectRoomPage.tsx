@@ -255,10 +255,16 @@ export function ProjectRoomPage() {
     setSubmittingCheckpoint(true);
     setError(null);
     try {
+      // Idempotency: client-side gegenereerde UUID; bij retry/dubbele submit
+      // herkent de server hetzelfde request en geeft het bestaande checkpoint
+      // terug i.p.v. een nieuwe rij + extra journal-entries.
+      const requestId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const r = await fetch(`/api/projects/groups/${groupId}/checkpoint`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ kind: showCheckpointModal, reflection: reflection.trim() }),
+        body: JSON.stringify({ kind: showCheckpointModal, reflection: reflection.trim(), requestId }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Checkpoint mislukt');

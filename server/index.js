@@ -4411,8 +4411,24 @@ app.post('/api/projects/groups', async (req, res) => {
 
   try {
     const { data: project } = await supabaseAdmin
-      .from('projects').select('id, title').eq('id', projectId).maybeSingle();
+      .from('projects').select('id, title, course_id, allow_self_signup, status').eq('id', projectId).maybeSingle();
     if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    if (project.status === 'archived') return res.status(400).json({ error: 'Dit project is gearchiveerd' });
+
+    // Autorisatie: alleen leden van de cursus (of staff) mogen een groep
+    // aanmaken. Voorkomt dat een willekeurige ingelogde user buiten de cursus
+    // groepen aanmaakt op andermans projecten.
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff) {
+      if (!project.course_id || !(await userHasCourseAccess(auth.user, profile, project.course_id))) {
+        return res.status(403).json({ error: 'Geen toegang tot de cursus van dit project' });
+      }
+      if (project.allow_self_signup === false) {
+        return res.status(403).json({ error: 'Self-signup voor dit project staat uit' });
+      }
+    }
 
     const inviteCode = genInviteCode();
     const { data: group, error: gErr } = await supabaseAdmin
@@ -4456,6 +4472,18 @@ app.post('/api/projects/groups/join', async (req, res) => {
     if (!group) return res.status(404).json({ error: 'Geen groep gevonden bij deze code' });
     if (group.status === 'finalized') {
       return res.status(400).json({ error: 'Deze groep is al afgesloten' });
+    }
+
+    // Autorisatie: alleen users met toegang tot de cursus van dit project
+    // mogen aansluiten. Een geldige invite-code is niet voldoende — anders kan
+    // een gelekte code een buitenstaander toegang tot de chat geven.
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', group.project_id).maybeSingle();
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff && project?.course_id && !(await userHasCourseAccess(auth.user, profile, project.course_id))) {
+      return res.status(403).json({ error: 'Geen toegang tot de cursus van dit project' });
     }
 
     // Idempotent — als je al lid bent, gewoon de groep teruggeven. Race-safe:
@@ -4771,7 +4799,7 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId } = req.params;
-  const { kind = 'checkpoint', reflection } = req.body || {};
+  const { kind = 'checkpoint', reflection, requestId } = req.body || {};
   if (!['checkpoint', 'final'].includes(kind)) {
     return res.status(400).json({ error: "kind moet 'checkpoint' of 'final' zijn" });
   }
@@ -4789,6 +4817,19 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
     if (!group) return res.status(404).json({ error: 'Groep niet gevonden' });
     if (group.status === 'finalized' && kind === 'final') {
       return res.status(400).json({ error: 'Deze groep is al afgesloten' });
+    }
+
+    // Idempotentie: als de client een requestId meestuurt en er bestaat al een
+    // checkpoint met diezelfde request_id binnen deze groep, geef dat terug
+    // i.p.v. opnieuw te schrijven (voorkomt dubbele journal-entries bij retry
+    // of dubbele submit). Stille degradatie als de kolom (nog) ontbreekt.
+    if (requestId) {
+      try {
+        const { data: dup } = await supabaseAdmin
+          .from('group_checkpoints')
+          .select('*').eq('group_id', groupId).eq('request_id', requestId).maybeSingle();
+        if (dup) return res.json({ checkpoint: dup, deduped: true });
+      } catch { /* request_id-kolom nog niet aanwezig — negeren */ }
     }
 
     const { data: project } = await supabaseAdmin
@@ -4871,17 +4912,35 @@ ${reflection}`;
       aiSummary = data.choices?.[0]?.message?.content || '';
     }
 
-    const { data: cp, error: cpErr } = await supabaseAdmin
-      .from('group_checkpoints')
-      .insert({
-        group_id: groupId,
-        kind,
-        reflection,
-        ai_summary: aiSummary,
-        rubric_feedback: rubricFeedback,
-        created_by: auth.user.id,
-      })
-      .select('*').single();
+    const insertRow = {
+      group_id: groupId,
+      kind,
+      reflection,
+      ai_summary: aiSummary,
+      rubric_feedback: rubricFeedback,
+      created_by: auth.user.id,
+      request_id: requestId || null,
+    };
+    let cp;
+    let cpErr;
+    {
+      const r = await supabaseAdmin.from('group_checkpoints').insert(insertRow).select('*').single();
+      cp = r.data; cpErr = r.error;
+    }
+    // Defensief: kolom request_id bestaat pas vanaf migratie 20260508140000.
+    if (cpErr && /request_id/i.test(cpErr.message || '')) {
+      const { request_id, ...rest } = insertRow;
+      const r = await supabaseAdmin.from('group_checkpoints').insert(rest).select('*').single();
+      cp = r.data; cpErr = r.error;
+    }
+    // Race-conditie: gelijktijdige retry met dezelfde request_id leverde 23505
+    // op — lees de winnaar terug en geef die.
+    if (cpErr && (cpErr.code === '23505' || /duplicate key/i.test(cpErr.message || ''))) {
+      const { data: dup } = await supabaseAdmin
+        .from('group_checkpoints')
+        .select('*').eq('group_id', groupId).eq('request_id', requestId).maybeSingle();
+      if (dup) return res.json({ checkpoint: dup, deduped: true });
+    }
     if (cpErr) return res.status(500).json({ error: cpErr.message });
 
     // Journal-entry per lid.
