@@ -15,6 +15,7 @@ const ChatPage = lazy(() => import('./pages/ChatPage').then(m => ({ default: m.C
 const ExplainPage = lazy(() => import('./pages/ExplainPage').then(m => ({ default: m.ExplainPage })));
 const QuizPage = lazy(() => import('./pages/QuizPage').then(m => ({ default: m.QuizPage })));
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
+const ProjectRoomPage = lazy(() => import('./pages/ProjectRoomPage').then(m => ({ default: m.ProjectRoomPage })));
 const CollaboratePage = lazy(() => import('./pages/CollaboratePage').then(m => ({ default: m.CollaboratePage })));
 const FeedbackPage = lazy(() => import('./pages/FeedbackPage').then(m => ({ default: m.FeedbackPage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
@@ -107,6 +108,15 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ProjectsPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/projects/:projectId/group/:groupId"
+        element={
+          <ProtectedRoute>
+            <ProjectRoomPage />
           </ProtectedRoute>
         }
       />
