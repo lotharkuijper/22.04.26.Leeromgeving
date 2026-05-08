@@ -5360,9 +5360,12 @@ app.post('/api/projects/:projectId/personas/:personaId/documents',
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const staffAccess = await requireProjectStaff(projectId, auth.user, profile);
-    if (!staffAccess.ok && !(await isGroupMember(groupId, auth.user.id))) {
-      return res.status(403).json({ error: 'Geen toegang tot deze groep of dit project' });
+    // Schrijven = groepsleden. Admin/superuser mag als noodgreep ook
+    // uploaden (bijv. om voor een groep een document recht te zetten);
+    // docent zonder groepslidmaatschap mag niet schrijven.
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    if (!isAdmin && !(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Alleen groepsleden mogen documenten uploaden' });
     }
     // Groep moet bij dit project horen.
     const { data: group } = await supabaseAdmin
