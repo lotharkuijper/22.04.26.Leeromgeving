@@ -1,7 +1,21 @@
 import express from 'express';
 import cors from 'cors';
+import multer from 'multer';
+import officeParserPkg from 'officeparser';
+const parseOfficeAsync = (buffer) => new Promise((resolve, reject) => {
+  officeParserPkg.parseOffice(buffer, (data, err) => {
+    if (err) reject(err); else resolve(data);
+  });
+});
 import { createClient } from '@supabase/supabase-js';
 import { expandQuery } from './queryExpansion.js';
+
+// 15 MB ruwe upload-cap; tekstextractie kan kleiner uitkomen en wordt
+// daarna nog eens beperkt door MAX_DOC_CHARS.
+const docUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -5298,22 +5312,51 @@ app.get('/api/projects/:projectId/personas/:personaId/documents', async (req, re
   }
 });
 
-// POST /api/projects/:projectId/personas/:personaId/documents — upload tekst.
-// Body: { groupId, filename, contentText }. Alleen leden van de opgegeven
-// groep (of staff) mogen uploaden; de upload is voor díé groep zichtbaar.
+// POST /api/projects/:projectId/personas/:personaId/documents — upload bestand
+// als multipart/form-data. Velden: file (binary), groupId. Ondersteunde
+// formaten: tekst (.txt/.md/.csv/.tsv/.json) en kantoor-formaten (.pdf,
+// .docx, .pptx, .xlsx, .odt, .ods, .odp). Voor kantoor-formaten wordt de
+// platte tekst geëxtraheerd via officeparser.
 const MAX_DOC_CHARS = 200000;
-app.post('/api/projects/:projectId/personas/:personaId/documents', async (req, res) => {
+const TEXT_EXT_RE = /\.(txt|md|markdown|csv|tsv|json|log)$/i;
+const OFFICE_EXT_RE = /\.(pdf|docx|pptx|xlsx|odt|ods|odp)$/i;
+
+async function extractTextFromUpload(file) {
+  const name = file.originalname || 'upload';
+  if (TEXT_EXT_RE.test(name) || (file.mimetype || '').startsWith('text/')) {
+    return file.buffer.toString('utf8');
+  }
+  if (OFFICE_EXT_RE.test(name)) {
+    // officeparser herkent het type aan de inhoud van de buffer.
+    const text = await parseOfficeAsync(file.buffer);
+    return String(text || '').trim();
+  }
+  throw new Error('Bestandstype niet ondersteund — kies .txt, .md, .csv, .tsv, .json, .pdf, .docx, .pptx, .xlsx, .odt, .ods of .odp');
+}
+
+app.post('/api/projects/:projectId/personas/:personaId/documents',
+  docUpload.single('file'),
+  async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { projectId, personaId } = req.params;
-  const { groupId, filename, contentText } = req.body || {};
-  if (!groupId || !filename || !contentText) return res.status(400).json({ error: 'groupId, filename en contentText vereist' });
-  const text = String(contentText);
-  if (text.length === 0) return res.status(400).json({ error: 'Bestand is leeg' });
-  if (text.length > MAX_DOC_CHARS) {
-    return res.status(413).json({ error: `Document te groot (max ${MAX_DOC_CHARS.toLocaleString('nl-NL')} tekens)` });
+  const groupId = req.body?.groupId;
+  if (!groupId) return res.status(400).json({ error: 'groupId vereist' });
+  if (!req.file) return res.status(400).json({ error: 'Geen bestand ontvangen (veld "file")' });
+  let text;
+  try {
+    text = await extractTextFromUpload(req.file);
+  } catch (e) {
+    return res.status(400).json({ error: e.message || 'Kon tekst niet uit bestand halen' });
   }
+  if (!text || text.length === 0) {
+    return res.status(400).json({ error: 'Geen leesbare tekst gevonden in dit bestand' });
+  }
+  if (text.length > MAX_DOC_CHARS) {
+    text = text.slice(0, MAX_DOC_CHARS) + `\n\n…[afgekapt op ${MAX_DOC_CHARS.toLocaleString('nl-NL')} tekens]`;
+  }
+  const filename = req.file.originalname || 'upload';
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
@@ -5335,7 +5378,7 @@ app.post('/api/projects/:projectId/personas/:personaId/documents', async (req, r
       .from('project_persona_documents').insert({
         project_id: projectId, persona_id: personaId, group_id: groupId,
         filename: String(filename).slice(0, 200),
-        content_text: text, byte_size: Buffer.byteLength(text, 'utf8'),
+        content_text: text, byte_size: req.file.size || Buffer.byteLength(text, 'utf8'),
         uploaded_by: auth.user.id,
       }).select('id, filename, byte_size, uploaded_by, created_at').single();
     if (e) return res.status(500).json({ error: e.message });

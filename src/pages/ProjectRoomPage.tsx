@@ -173,23 +173,25 @@ export function ProjectRoomPage() {
       setError('Voeg eerst een echte persona toe in het beheerpaneel.');
       return;
     }
-    const ALLOWED = /\.(txt|md|markdown|csv|tsv|json)$/i;
+    const ALLOWED = /\.(txt|md|markdown|csv|tsv|json|log|pdf|docx|pptx|xlsx|odt|ods|odp)$/i;
     if (!ALLOWED.test(file.name)) {
-      setError('Alleen .txt, .md, .csv, .tsv of .json worden ondersteund.');
+      setError('Ondersteunde formaten: .txt, .md, .csv, .tsv, .json, .pdf, .docx, .pptx, .xlsx, .odt, .ods, .odp.');
       return;
     }
-    if (file.size > 1_000_000) {
-      setError('Bestand is groter dan 1 MB.');
+    if (file.size > 15_000_000) {
+      setError('Bestand is groter dan 15 MB.');
       return;
     }
     setUploadingDoc(true);
     setError(null);
     try {
-      const text = await file.text();
+      const fd = new FormData();
+      fd.append('groupId', groupId!);
+      fd.append('file', file, file.name);
       const r = await fetch(`/api/projects/${projectId}/personas/${activePersonaId}/documents`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ groupId, filename: file.name, contentText: text }),
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Upload mislukt');
@@ -465,7 +467,7 @@ export function ProjectRoomPage() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".txt,.md,.markdown,.csv,.tsv,.json,text/plain,text/markdown,text/csv,application/json"
+                    accept=".txt,.md,.markdown,.csv,.tsv,.json,.log,.pdf,.docx,.pptx,.xlsx,.odt,.ods,.odp"
                     className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f); }}
                     disabled={uploadingDoc || isFinalized}
