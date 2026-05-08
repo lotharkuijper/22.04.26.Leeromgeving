@@ -1291,13 +1291,29 @@ app.get('/api/admin/concepts-meta', async (req, res) => {
     }
 
     const courseMarker = `[RAG-geëxtraheerd uit cursusmateriaal]`;
+    const courseTag = `course_id:${courseId}`;
 
-    let query = supabaseAdmin
-      .from('concepts')
-      .select('id, key_points, extraction_method, extracted_at, created_at')
-      .or(`course_id.eq.${courseId},key_points.cs.{"course_id:${courseId}"}`);
+    // Sommige Supabase-instances hebben de `concepts.course_id` migratie nog
+    // niet doorgevoerd — dan staat de cursuskoppeling in `key_points` als
+    // `course_id:<uuid>`. Probeer eerst de combineerde OR, val terug op de
+    // key_points-vorm wanneer Postgres roept dat de kolom niet bestaat.
+    async function fetchCourseConcepts() {
+      if (conceptsHasCourseId) {
+        const { data, error } = await supabaseAdmin
+          .from('concepts')
+          .select('id, key_points, extraction_method, extracted_at, created_at')
+          .or(`course_id.eq.${courseId},key_points.cs.{"${courseTag}"}`);
+        if (!error) return { data, error: null };
+        if (!String(error.message || '').includes('course_id')) return { data: null, error };
+      }
+      const { data, error } = await supabaseAdmin
+        .from('concepts')
+        .select('id, key_points, extraction_method, extracted_at, created_at')
+        .contains('key_points', [courseTag]);
+      return { data, error };
+    }
 
-    const { data: concepts, error: conceptsError } = await query;
+    const { data: concepts, error: conceptsError } = await fetchCourseConcepts();
 
     if (conceptsError) {
       console.error('[concepts-meta] query error:', conceptsError);
@@ -1468,7 +1484,14 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       }
     }
 
-    if (replace) {
+    // BELANGRIJK: de replace-actie (oude RAG-begrippen verwijderen) is
+    // verplaatst naar NA een succesvolle LLM-extractie. Voorheen werd er
+    // altijd eerst gewist; bij een rate-limit of andere LLM-fout bleef de
+    // cursus dan met een lege begrippenlijst achter. We voeren de replace
+    // pas uit zodra we daadwerkelijk nieuwe begrippen hebben om in te
+    // voegen — zie verderop in deze handler (`runReplace`).
+    async function runReplace() {
+      if (!replace) return;
       if (conceptsHasCourseId) {
         const { error: delErr } = await supabaseAdmin
           .from('concepts')
@@ -1477,47 +1500,47 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
           .contains('key_points', ['[RAG-geëxtraheerd uit cursusmateriaal]']);
         if (delErr) {
           console.error('[extract-concepts] Delete (replace) error:', delErr);
-          return res.status(500).json({ error: `Verwijderen mislukt: ${delErr.message}` });
+          throw new Error(`Verwijderen mislukt: ${delErr.message}`);
         }
         console.log(`[extract-concepts] Deleted extracted concepts for course ${courseId} (replace mode, course_id)`);
-      } else {
-        const { data: taggedConcepts, error: taggedErr } = await supabaseAdmin
-          .from('concepts')
-          .select('id, key_points')
-          .contains('key_points', [courseMarker]);
-
-        if (taggedErr) {
-          console.error('[extract-concepts] Tagged concepts query error on replace:', taggedErr);
-          return res.status(500).json({ error: `Ophalen mislukt: ${taggedErr.message}` });
-        }
-
-        const ragMarker = '[RAG-geëxtraheerd uit cursusmateriaal]';
-        const toDeleteIds = [];
-        const toUntag = [];
-
-        for (const concept of taggedConcepts || []) {
-          const isRagExtracted = (concept.key_points || []).includes(ragMarker);
-          if (isRagExtracted) {
-            toDeleteIds.push(concept.id);
-          } else {
-            toUntag.push({ id: concept.id, key_points: (concept.key_points || []).filter((kp) => kp !== courseMarker) });
-          }
-        }
-
-        if (toDeleteIds.length > 0) {
-          const { error: delErr } = await supabaseAdmin
-            .from('concepts')
-            .delete()
-            .in('id', toDeleteIds);
-          if (delErr) console.error('[extract-concepts] Delete (replace fallback) error:', delErr);
-        }
-
-        for (const u of toUntag) {
-          await supabaseAdmin.from('concepts').update({ key_points: u.key_points }).eq('id', u.id);
-        }
-
-        console.log(`[extract-concepts] Replace (fallback): deleted ${toDeleteIds.length} RAG-extracted, untagged ${toUntag.length} seeds`);
+        return;
       }
+      const { data: taggedConcepts, error: taggedErr } = await supabaseAdmin
+        .from('concepts')
+        .select('id, key_points')
+        .contains('key_points', [courseMarker]);
+
+      if (taggedErr) {
+        console.error('[extract-concepts] Tagged concepts query error on replace:', taggedErr);
+        throw new Error(`Ophalen mislukt: ${taggedErr.message}`);
+      }
+
+      const ragMarkerLocal = '[RAG-geëxtraheerd uit cursusmateriaal]';
+      const toDeleteIds = [];
+      const toUntag = [];
+
+      for (const concept of taggedConcepts || []) {
+        const isRagExtracted = (concept.key_points || []).includes(ragMarkerLocal);
+        if (isRagExtracted) {
+          toDeleteIds.push(concept.id);
+        } else {
+          toUntag.push({ id: concept.id, key_points: (concept.key_points || []).filter((kp) => kp !== courseMarker) });
+        }
+      }
+
+      if (toDeleteIds.length > 0) {
+        const { error: delErr } = await supabaseAdmin
+          .from('concepts')
+          .delete()
+          .in('id', toDeleteIds);
+        if (delErr) console.error('[extract-concepts] Delete (replace fallback) error:', delErr);
+      }
+
+      for (const u of toUntag) {
+        await supabaseAdmin.from('concepts').update({ key_points: u.key_points }).eq('id', u.id);
+      }
+
+      console.log(`[extract-concepts] Replace (fallback): deleted ${toDeleteIds.length} RAG-extracted, untagged ${toUntag.length} seeds`);
     }
 
     const { data: assignments } = await supabaseAdmin
@@ -1613,24 +1636,46 @@ Geef UITSLUITEND een JSON-array terug, zonder extra tekst of uitleg:
 CURSUSMATERIAAL:
 ${combinedText}`;
 
-    const llmResponse = await fetch(GROQ_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${groqKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: extractionPrompt }],
-        temperature: 0.2,
-        max_tokens: 6000,
-      }),
-    });
+    // Groq heeft een tokens-per-minute-limiet; bij grote cursussen lopen
+    // we daar snel tegenaan. We doen 1 retry met backoff (we lezen de
+    // gevraagde wachttijd uit de foutmelding indien aanwezig). Als ook de
+    // tweede poging faalt, geven we een Nederlandstalige melding terug
+    // — en omdat de replace-stap pas later in deze handler draait,
+    // verliest de cursus géén begrippen meer als de extractie crasht.
+    async function callGroq(maxRetries = 1) {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const resp = await fetch(GROQ_API_URL, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            messages: [{ role: 'user', content: extractionPrompt }],
+            temperature: 0.2,
+            max_tokens: 6000,
+          }),
+        });
+        if (resp.ok) return { resp, errData: null };
+        const errData = await resp.json().catch(() => ({}));
+        const isRateLimit = resp.status === 429 || errData?.error?.code === 'rate_limit_exceeded';
+        if (!isRateLimit || attempt === maxRetries) return { resp, errData };
+        const msg = errData?.error?.message || '';
+        const m = msg.match(/try again in ([\d.]+)s/i);
+        const waitMs = m ? Math.min(60000, Math.ceil(parseFloat(m[1]) * 1000) + 500) : 5000;
+        console.warn(`[extract-concepts] Groq rate-limit, wacht ${waitMs}ms en probeer opnieuw…`);
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
+      return { resp: null, errData: { error: { message: 'Onbereikbaar' } } };
+    }
 
-    if (!llmResponse.ok) {
-      const errData = await llmResponse.json().catch(() => ({}));
-      console.error('[extract-concepts] LLM error:', errData);
-      return res.status(500).json({ error: 'LLM extractie mislukt', details: errData });
+    const { resp: llmResponse, errData: llmErrData } = await callGroq(1);
+
+    if (!llmResponse || !llmResponse.ok) {
+      console.error('[extract-concepts] LLM error:', llmErrData);
+      const isRateLimit = llmErrData?.error?.code === 'rate_limit_exceeded';
+      const friendly = isRateLimit
+        ? 'De LLM-aanbieder heeft een token-limiet bereikt. Wacht een minuutje en probeer opnieuw, of selecteer minder documenten in één keer.'
+        : 'LLM-extractie mislukt. Bestaande begrippen zijn ongemoeid gelaten.';
+      return res.status(503).json({ error: friendly, details: llmErrData });
     }
 
     const llmData = await llmResponse.json();
@@ -1696,6 +1741,31 @@ ${combinedText}`;
       console.log(`[extract-concepts] Voorbeeld afgewezen: ${sample}`);
     }
 
+    // Niets te schrijven? Geef een duidelijke melding TERUG zonder de
+    // bestaande begrippen weg te gooien. De gebruiker kan dan in
+    // Beheer → RAG-instellingen → Extractie de drempels verlagen.
+    if (validConcepts.length === 0) {
+      const sampleNames = rejectedConcepts.slice(0, 6).map((r) => r.concept.name).join(', ');
+      const msg = rawValidConcepts.length === 0
+        ? 'De LLM vond geen begrippen in dit cursusmateriaal.'
+        : `De LLM stelde ${rawValidConcepts.length} begrippen voor, maar geen enkele haalde de RAG-verificatiedrempel (similarity ≥ ${verifyThreshold.toFixed(2)}, ≥ ${minEvidence} chunks). Verlaag de drempels via Beheer → RAG-instellingen → Extractie en probeer opnieuw. Voorbeelden: ${sampleNames}.`;
+      await writeRegenTimestamp().catch(() => {});
+      return res.json({
+        concepts: [],
+        updated: 0,
+        skipped: 0,
+        verificationRejected: rejectedConcepts.length,
+        candidatesFromLLM: rawValidConcepts.length,
+        message: msg,
+      });
+    }
+
+    // Volgorde: eerst inserten/updaten, daarna pas eventueel oude
+    // RAG-begrippen wissen. Zo blijven bestaande begrippen behouden als
+    // de schrijfactie zelf faalt (bv. transient DB-fout). In replace-modus
+    // negeren we bestaande RAG-begrippen bij de duplicaat-check, want die
+    // worden direct na de succesvolle insert weggegooid.
+    const ragMarker = '[RAG-geëxtraheerd uit cursusmateriaal]';
     let inserted = [];
     let updatedCount = 0;
     let skipped = 0;
@@ -1704,11 +1774,13 @@ ${combinedText}`;
     if (conceptsHasCourseId) {
       const { data: existingForCourse } = await supabaseAdmin
         .from('concepts')
-        .select('id, name')
+        .select('id, name, key_points')
         .eq('course_id', courseId);
 
       const alreadyByCourse = new Set(
-        (existingForCourse || []).map((c) => c.name.toLowerCase().trim())
+        (existingForCourse || [])
+          .filter((c) => !replace || !(c.key_points || []).includes(ragMarker))
+          .map((c) => c.name.toLowerCase().trim())
       );
 
       const toInsert = [];
@@ -1719,7 +1791,7 @@ ${combinedText}`;
           name: c.name.trim(),
           category: c.category,
           definition: c.definition.trim(),
-          key_points: ['[RAG-geëxtraheerd uit cursusmateriaal]'],
+          key_points: [ragMarker],
           examples: [],
           course_id: courseId,
         });
@@ -1748,6 +1820,7 @@ ${combinedText}`;
       const alreadyTaggedForCourse = new Set(
         (allExisting || [])
           .filter((c) => (c.key_points || []).includes(courseMarker))
+          .filter((c) => !replace || !(c.key_points || []).includes(ragMarker))
           .map((c) => c.name.toLowerCase().trim())
       );
 
@@ -1759,7 +1832,10 @@ ${combinedText}`;
         if (alreadyTaggedForCourse.has(key)) { skipped++; continue; }
 
         const existing = existingByName.get(key);
-        if (existing) {
+        // In replace-modus skipt de update-tak ook bestaande RAG-extracten;
+        // die worden door runReplace() verwijderd, dus we voegen het begrip
+        // gewoon opnieuw in.
+        if (existing && !(replace && (existing.key_points || []).includes(ragMarker))) {
           const updatedKeyPoints = [...new Set([...(existing.key_points || []), courseMarker])];
           toUpdate.push({ id: existing.id, key_points: updatedKeyPoints });
         } else {
@@ -1767,7 +1843,7 @@ ${combinedText}`;
             name: c.name.trim(),
             category: c.category,
             definition: c.definition.trim(),
-            key_points: [courseMarker, '[RAG-geëxtraheerd uit cursusmateriaal]'],
+            key_points: [courseMarker, ragMarker],
             examples: [],
           });
         }
@@ -1793,6 +1869,15 @@ ${combinedText}`;
         }
         inserted = ins || [];
       }
+    }
+
+    // Schrijven gelukt — nu pas de oude RAG-begrippen wissen (replace-modus).
+    // Als runReplace faalt, hebben we al een geslaagde insert; we loggen de
+    // fout maar laten de nieuwe begrippen staan.
+    try {
+      await runReplace();
+    } catch (replaceErr) {
+      console.error('[extract-concepts] runReplace na insert mislukt:', replaceErr);
     }
 
     const totalAdded = inserted.length + updatedCount;
