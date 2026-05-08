@@ -82,6 +82,9 @@ export function ProjectRoomPage() {
   const [showCheckpointModal, setShowCheckpointModal] = useState<null | 'checkpoint' | 'final'>(null);
   const [reflection, setReflection] = useState('');
   const [submittingCheckpoint, setSubmittingCheckpoint] = useState(false);
+  // Stabiele requestId per checkpoint-poging: pas resetten na succesvolle
+  // submit, zodat netwerk-retries van dezelfde knopdruk dedupeer-baar blijven.
+  const [checkpointRequestId, setCheckpointRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingRoom, setLoadingRoom] = useState(true);
   const personaScrollRef = useRef<HTMLDivElement>(null);
@@ -255,12 +258,15 @@ export function ProjectRoomPage() {
     setSubmittingCheckpoint(true);
     setError(null);
     try {
-      // Idempotency: client-side gegenereerde UUID; bij retry/dubbele submit
-      // herkent de server hetzelfde request en geeft het bestaande checkpoint
-      // terug i.p.v. een nieuwe rij + extra journal-entries.
-      const requestId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // Idempotency: hergebruik dezelfde requestId tot een succesvolle submit.
+      // Een netwerkfout-retry stuurt zo dezelfde id mee en dedupes server-side
+      // i.p.v. een tweede checkpoint + journal-entries aan te maken.
+      const requestId = checkpointRequestId || (
+        (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      if (!checkpointRequestId) setCheckpointRequestId(requestId);
       const r = await fetch(`/api/projects/groups/${groupId}/checkpoint`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -271,6 +277,7 @@ export function ProjectRoomPage() {
       setCheckpoints(prev => [data.checkpoint, ...prev]);
       setShowCheckpointModal(null);
       setReflection('');
+      setCheckpointRequestId(null);
       if (data.checkpoint?.kind === 'final') loadRoom();
     } catch (e: any) {
       setError(e.message);
