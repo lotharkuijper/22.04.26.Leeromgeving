@@ -302,28 +302,28 @@ const runDeleteFolder = async () => {
         onConfirm={() => { void runDeleteFolder(); }}
         onCancel={() => setConfirmDelete(null)}
       />
-      <div className="border-b border-gray-200 p-4 flex items-center justify-between">
-  <h3 className="text-lg font-semibold text-gray-900">Bestandenomgeving</h3>
-
-  <div className="flex items-center gap-2">
-    <button
-      onClick={openNewFolderForSelected}
-      className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-      data-testid="button-new-folder"
-    >
-      Nieuwe map
-    </button>
-    {selectedFolderId && selectedFolderId !== rootFolder.id && canEdit && (
-      <button
-        onClick={askDeleteFolder}
-        className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-        data-testid="button-delete-folder"
-      >
-        Verwijder map
-      </button>
-    )}
-  </div>
-</div>
+      <div className="border-b border-gray-200 p-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-gray-900">Bestandenomgeving</h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={openNewFolderForSelected}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              data-testid="button-new-folder"
+            >
+              Nieuwe map
+            </button>
+            {selectedFolderId && selectedFolderId !== rootFolder.id && canEdit && (
+              <button
+                onClick={askDeleteFolder}
+                className="inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                data-testid="button-delete-folder"
+              >
+                Verwijder map
+              </button>
+            )}
+          </div>
+        </div>
 
         {breadcrumbs.length > 0 && (
           <div className="flex items-center gap-2 mt-2 text-sm text-gray-600">
@@ -342,9 +342,7 @@ const runDeleteFolder = async () => {
         )}
       </div>
 
-      <div
-        className="overflow-y-auto max-h-96"
-      >
+      <div className="overflow-y-auto max-h-96">
         <FolderNode
           folder={rootFolder}
           level={0}
