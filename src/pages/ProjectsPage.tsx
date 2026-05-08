@@ -111,7 +111,7 @@ export function ProjectsPage() {
         .update({
           analysis_notes: notes,
           last_activity: new Date().toISOString(),
-        } as never)
+        })
         .eq('id', sessionId);
 
       if (error) throw error;
@@ -146,10 +146,11 @@ export function ProjectsPage() {
         message: `Een samenvatting van "${archiveDialog.title}" is in je leerdagboek gezet. Je vindt hem terug onder het vak "Projecten".`,
       });
       setArchiveDialog(null);
-    } catch (err: any) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'onbekende fout';
       setArchiveNotice({
         kind: 'error',
-        message: `Het opslaan in je leerdagboek is mislukt: ${err?.message || 'onbekende fout'}.`,
+        message: `Het opslaan in je leerdagboek is mislukt: ${message}.`,
       });
       setArchiveDialog(null);
     } finally {
@@ -344,7 +345,7 @@ export function ProjectsPage() {
                   </label>
                   <textarea
                     name="notes"
-                    defaultValue={(session as any).analysis_notes || session.notes || ''}
+                    defaultValue={session.analysis_notes || ''}
                     rows={10}
                     placeholder="Documenteer je analyse, bevindingen, conclusies..."
                     className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all outline-none resize-none"
@@ -366,11 +367,11 @@ export function ProjectsPage() {
                     Je hebt dit project op {new Date(session.completed_at!).toLocaleDateString('nl-NL')} afgerond.
                   </p>
                 </div>
-                {((session as any).analysis_notes || session.notes) && (
+                {session.analysis_notes && (
                   <div>
                     <h3 className="font-semibold text-gray-900 mb-2">Je Aantekeningen</h3>
                     <div className="p-4 bg-gray-50 rounded-lg whitespace-pre-wrap text-gray-700">
-                      {(session as any).analysis_notes || session.notes}
+                      {session.analysis_notes}
                     </div>
                   </div>
                 )}

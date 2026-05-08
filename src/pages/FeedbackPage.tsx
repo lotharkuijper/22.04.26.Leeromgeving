@@ -262,7 +262,11 @@ export function FeedbackPage() {
     setEditingEntry(entry);
     setTitle(entry.title);
     setContent(entry.content);
-    setActivityType(entry.activity_type);
+    // Onbekende/legacy activity_types horen bij "Overig" — normaliseer naar
+    // het bijbehorende form-keuzeveld zodat het dropdownmenu een geldige
+    // selectie toont in plaats van een lege waarde.
+    const known = GROUPS.some(g => g.activityType === entry.activity_type);
+    setActivityType(known ? entry.activity_type : 'reflection');
     setShowForm(true);
   };
 
