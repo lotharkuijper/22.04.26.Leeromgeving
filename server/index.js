@@ -3268,7 +3268,7 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
     'Inferential-Statistics': 'Inferentiële statistiek',
     'Factor-analysis': 'Factoranalyse',
     'Measurement-Level': 'Meetniveau',
-    'Variable-type': 'Variabeletype',
+    'Variable-type': 'Variabele type',
     Union: 'Vereniging',
   };
   function humanizeSegment(seg) {
@@ -3351,10 +3351,13 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
 
       // Begrip aanmaken als het nog niet bestaat.
       if (!concept) {
+        // De `concepts.category`-CHECK-constraint laat alleen
+        // 'epidemiologie' of 'biostatistiek' toe. ShareStats-items zijn
+        // statistische vragen → 'biostatistiek'.
         const insertRow = conceptsHasCourseId
           ? {
               name: dutchName,
-              category: 'ShareStats',
+              category: 'biostatistiek',
               definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (topic "${job.topic}"). Vul de definitie aan via de begrippen-beheerpagina.`,
               key_points: ['[Geïmporteerd vanuit ShareStats]'],
               examples: [],
@@ -3362,7 +3365,7 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
             }
           : {
               name: dutchName,
-              category: 'ShareStats',
+              category: 'biostatistiek',
               definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (topic "${job.topic}"). Vul de definitie aan via de begrippen-beheerpagina.`,
               key_points: [`course_id:${courseId}`, '[Geïmporteerd vanuit ShareStats]'],
               examples: [],

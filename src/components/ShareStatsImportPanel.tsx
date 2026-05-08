@@ -42,7 +42,7 @@ const TOPIC_LABEL_NL: Record<string, string> = {
   'Measurement-Level': 'Meetniveau',
   Probability: 'Kansrekening',
   Reliability: 'Betrouwbaarheid',
-  'Variable-type': 'Variabeletype',
+  'Variable-type': 'Variabele type',
   Variance: 'Variantie',
   packaging: 'Verpakking (technisch)',
   scripts: 'Scripts (technisch)',
