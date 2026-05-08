@@ -5280,9 +5280,11 @@ app.get('/api/projects/:projectId/personas/:personaId/documents', async (req, re
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff && !(await isGroupMember(groupId, auth.user.id))) {
-      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    // Toegang: groepslid, óf staff van de cursus van dit project. Een docent
+    // van een andere cursus krijgt geen toegang.
+    const staffAccess = await requireProjectStaff(projectId, auth.user, profile);
+    if (!staffAccess.ok && !(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep of dit project' });
     }
     const { data, error: e } = await supabaseAdmin
       .from('project_persona_documents')
@@ -5315,9 +5317,9 @@ app.post('/api/projects/:projectId/personas/:personaId/documents', async (req, r
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff && !(await isGroupMember(groupId, auth.user.id))) {
-      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    const staffAccess = await requireProjectStaff(projectId, auth.user, profile);
+    if (!staffAccess.ok && !(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep of dit project' });
     }
     // Groep moet bij dit project horen.
     const { data: group } = await supabaseAdmin
@@ -5355,14 +5357,15 @@ app.delete('/api/projects/:projectId/personas/:personaId/documents/:docId', asyn
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const staffAccess = await requireProjectStaff(projectId, auth.user, profile);
+    const isCourseStaff = staffAccess.ok;
     const { data: doc } = await supabaseAdmin
       .from('project_persona_documents').select('uploaded_by, group_id')
       .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId).maybeSingle();
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
-    if (!isStaff) {
+    if (!isCourseStaff) {
       if (doc.uploaded_by !== auth.user.id) {
-        return res.status(403).json({ error: 'Alleen de uploader of een docent mag verwijderen' });
+        return res.status(403).json({ error: 'Alleen de uploader of een docent van deze cursus mag verwijderen' });
       }
       // Extra check: huidige user moet nog steeds lid zijn van de groep waar
       // het document bij hoort. Voorkomt verwijderen na verlaten van groep.
