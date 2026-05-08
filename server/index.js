@@ -2812,9 +2812,12 @@ app.post('/api/projects/save-summary', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { sessionId } = req.body || {};
+  const { sessionId, force } = req.body || {};
   if (!sessionId || typeof sessionId !== 'string') {
     return res.status(400).json({ error: 'sessionId is vereist' });
+  }
+  if (force !== undefined && typeof force !== 'boolean') {
+    return res.status(400).json({ error: 'force moet een boolean zijn' });
   }
 
   try {
@@ -2863,6 +2866,34 @@ app.post('/api/projects/save-summary', async (req, res) => {
         error: 'Er is nog niets om samen te vatten.',
         detail: 'Vul eerst je hypothese, analyse-aantekeningen of conclusies in voor je een samenvatting in je leerdagboek zet.',
       });
+    }
+
+    // Voorkom dubbele projectreflecties: check of er al een eerdere
+    // reflectie voor exact dit project (zelfde titel) in het leerdagboek
+    // van deze student staat. Zo ja, en de student heeft niet expliciet
+    // bevestigd, vragen we eerst om bevestiging zodat het leerdagboek niet
+    // volloopt en we niet onnodig Groq-tokens verbruiken.
+    const titleProjectShort = projectTitle.length > 80 ? `${projectTitle.slice(0, 77)}...` : projectTitle;
+    const journalTitle = `Projectreflectie: ${titleProjectShort}`;
+    if (!force) {
+      const { data: existing, error: existingErr } = await supabaseAdmin
+        .from('learning_journal_entries')
+        .select('id, created_at')
+        .eq('user_id', user.id)
+        .eq('activity_type', 'project_reflection')
+        .eq('title', journalTitle)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existingErr) {
+        console.warn('[projects/save-summary] Kon dubbele-check niet uitvoeren:', existingErr.message);
+      } else if (existing) {
+        return res.status(409).json({
+          error: 'duplicate_reflection',
+          message: 'Er staat al een projectreflectie voor dit project in je leerdagboek.',
+          existingEntry: { id: existing.id, created_at: existing.created_at },
+        });
+      }
     }
 
     const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft aan een data-analyseproject gewerkt en wil daar in het leerdagboek op reflecteren. Schrijf een formatief reflectieverslag van 8 tot 14 regels in het Nederlands, gericht aan de student zelf.
@@ -2929,12 +2960,11 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
       });
     }
 
-    const titleProject = projectTitle.length > 80 ? `${projectTitle.slice(0, 77)}...` : projectTitle;
     const { data: entry, error: journalError } = await supabaseAdmin
       .from('learning_journal_entries')
       .insert({
         user_id: user.id,
-        title: `Projectreflectie: ${titleProject}`,
+        title: journalTitle,
         content: summaryContent,
         activity_type: 'project_reflection',
       })
