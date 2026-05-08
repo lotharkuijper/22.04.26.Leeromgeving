@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
-  Flag, Clipboard, Copy, Loader2, BookOpen,
+  Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText,
 } from 'lucide-react';
 
 interface Persona {
@@ -60,6 +60,13 @@ interface Checkpoint {
   rubric_feedback: any;
   created_at: string;
 }
+interface PersonaDoc {
+  id: string;
+  filename: string;
+  byte_size: number | null;
+  uploaded_by: string | null;
+  created_at: string;
+}
 
 const QUICK_REACTIONS = ['👍', '❤️', '🤔', '✅'];
 
@@ -87,6 +94,9 @@ export function ProjectRoomPage() {
   const [checkpointRequestId, setCheckpointRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingRoom, setLoadingRoom] = useState(true);
+  const [personaDocs, setPersonaDocs] = useState<PersonaDoc[]>([]);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const personaScrollRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
@@ -142,6 +152,72 @@ export function ProjectRoomPage() {
       .catch(() => { /* genegeerd — UI valt terug op leeg */ });
     return () => { cancelled = true; };
   }, [token, groupId, activePersonaId]);
+
+  // Documenten van de actieve persona ophalen.
+  const loadPersonaDocs = useCallback(async () => {
+    if (!token || !projectId || !groupId || !activePersonaId || activePersonaId === '__default__') {
+      setPersonaDocs([]); return;
+    }
+    try {
+      const r = await fetch(`/api/projects/${projectId}/personas/${activePersonaId}/documents?groupId=${groupId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await r.json();
+      if (r.ok) setPersonaDocs(d.documents || []);
+    } catch { /* stil */ }
+  }, [token, projectId, groupId, activePersonaId]);
+  useEffect(() => { loadPersonaDocs(); }, [loadPersonaDocs]);
+
+  const uploadFile = async (file: File) => {
+    if (!token || !projectId || !activePersonaId || activePersonaId === '__default__') {
+      setError('Voeg eerst een echte persona toe in het beheerpaneel.');
+      return;
+    }
+    const ALLOWED = /\.(txt|md|markdown|csv|tsv|json)$/i;
+    if (!ALLOWED.test(file.name)) {
+      setError('Alleen .txt, .md, .csv, .tsv of .json worden ondersteund.');
+      return;
+    }
+    if (file.size > 1_000_000) {
+      setError('Bestand is groter dan 1 MB.');
+      return;
+    }
+    setUploadingDoc(true);
+    setError(null);
+    try {
+      const text = await file.text();
+      const r = await fetch(`/api/projects/${projectId}/personas/${activePersonaId}/documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ groupId, filename: file.name, contentText: text }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Upload mislukt');
+      setPersonaDocs(prev => [d.document, ...prev]);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setUploadingDoc(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const deleteDoc = async (doc: PersonaDoc) => {
+    if (!token || !projectId || !activePersonaId) return;
+    if (!confirm(`Verwijder "${doc.filename}"?`)) return;
+    try {
+      const r = await fetch(`/api/projects/${projectId}/personas/${activePersonaId}/documents/${doc.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || 'Verwijderen mislukt');
+      }
+      setPersonaDocs(prev => prev.filter(d => d.id !== doc.id));
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
   // Initial load groepschat + realtime subscription.
   useEffect(() => {
@@ -352,7 +428,7 @@ export function ProjectRoomPage() {
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 min-h-0">
         {/* LEFT: persona-chat */}
         <div className="lg:col-span-7 flex flex-col bg-white rounded-xl border border-gray-200 min-h-0">
-          <div className="border-b border-gray-200 p-3">
+          <div className="border-b border-gray-200 p-3 space-y-2">
             <div className="flex items-center gap-2 overflow-x-auto pb-1">
               {personas.map(p => (
                 <button
@@ -368,6 +444,36 @@ export function ProjectRoomPage() {
                 </button>
               ))}
             </div>
+            {activePersona && activePersonaId !== '__default__' && (
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                  <span className="text-gray-500">Documenten ({personaDocs.length}):</span>
+                  {personaDocs.length === 0 && <span className="italic text-gray-400">geen</span>}
+                  {personaDocs.map(d => (
+                    <span key={d.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded" data-testid={`doc-${d.id}`}>
+                      <FileText className="w-3 h-3" />
+                      <span className="max-w-[120px] truncate" title={d.filename}>{d.filename}</span>
+                      <button onClick={() => deleteDoc(d)} className="text-red-500 hover:text-red-700" title="Verwijder" data-testid={`button-delete-doc-${d.id}`}>
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <label className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer ${uploadingDoc ? 'bg-gray-100 text-gray-400' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}`}>
+                  {uploadingDoc ? <Loader2 className="w-3 h-3 animate-spin" /> : <Paperclip className="w-3 h-3" />}
+                  Upload
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".txt,.md,.markdown,.csv,.tsv,.json,text/plain,text/markdown,text/csv,application/json"
+                    className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f); }}
+                    disabled={uploadingDoc || isFinalized}
+                    data-testid="input-upload-doc"
+                  />
+                </label>
+              </div>
+            )}
           </div>
           <div ref={personaScrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
             {personaMessages.length === 0 && activePersona && (

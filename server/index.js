@@ -4749,9 +4749,27 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       }
     }
 
-    const systemContent = context
-      ? `${persona.system_prompt}\n\nContext uit cursusmateriaal:\n${context}`
-      : persona.system_prompt;
+    // Geüploade documenten voor deze persona ophalen — uitsluitend van de
+    // huidige groep, zodat parallelle groepen elkaars uploads niet mengen.
+    let uploadedContext = '';
+    if (persona.id !== '__default__') {
+      const { data: docs } = await supabaseAdmin
+        .from('project_persona_documents')
+        .select('filename, content_text')
+        .eq('project_id', project.id).eq('persona_id', persona.id).eq('group_id', groupId)
+        .order('created_at', { ascending: true })
+        .limit(10);
+      if (docs && docs.length > 0) {
+        // Beperk per-doc tot ~6k tekens om context-window niet te overschrijden.
+        uploadedContext = docs.map(d =>
+          `[Document: ${d.filename}]\n${(d.content_text || '').slice(0, 6000)}`
+        ).join('\n\n');
+      }
+    }
+
+    const ragBlock = context ? `\n\nContext uit cursusmateriaal:\n${context}` : '';
+    const docBlock = uploadedContext ? `\n\nGeüploade documenten van de groep:\n${uploadedContext}` : '';
+    const systemContent = `${persona.system_prompt}${ragBlock}${docBlock}`;
 
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
@@ -5065,6 +5083,366 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
     const { error: iErr } = await supabaseAdmin.from('project_personas').insert(rows);
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.json({ copied: rows.length });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/projects/:projectId — docent/admin werkt projectvelden bij
+// (titel, onderzoeksvraag, briefing, doelen, rubrics, min/max, status,
+// allow_self_signup). Onbekende velden worden genegeerd.
+app.patch('/api/projects/:projectId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+
+    // course_id bewust niet wijzigbaar: een lopend project verplaatsen tussen
+    // cursussen laat groepslidmaatschappen + cursus-toegang inconsistent achter.
+    const allowed = ['title', 'research_question', 'description', 'briefing_markdown',
+      'goals', 'rubric_criteria', 'min_group_size', 'max_group_size',
+      'allow_self_signup', 'status'];
+    const patch = {};
+    for (const k of allowed) {
+      if (k in (req.body || {})) patch[k] = req.body[k];
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Geen wijzigingen' });
+    if (patch.min_group_size != null && patch.max_group_size != null
+        && Number(patch.min_group_size) > Number(patch.max_group_size)) {
+      return res.status(400).json({ error: 'Minimum groepsgrootte mag niet groter zijn dan het maximum' });
+    }
+    const { data, error: e } = await supabaseAdmin
+      .from('projects').update(patch).eq('id', projectId).select('*').single();
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ project: data });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/:projectId/personas — voeg één persona toe aan dit
+// project. Body: { coursePersonaId } om uit de bibliotheek te kopiëren, óf
+// { name, system_prompt, avatar_emoji, rag_enabled, rag_folder_ids } voor een
+// project-eigen persona.
+app.post('/api/projects/:projectId/personas', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+
+    const { coursePersonaId, name, system_prompt, avatar_emoji,
+      rag_enabled, rag_folder_ids } = req.body || {};
+
+    // Bepaal volgorde-index achteraan.
+    const { data: existing } = await supabaseAdmin
+      .from('project_personas').select('sort_order').eq('project_id', projectId)
+      .order('sort_order', { ascending: false }).limit(1);
+    const nextOrder = (existing && existing[0] ? Number(existing[0].sort_order || 0) : -1) + 1;
+
+    let row;
+    if (coursePersonaId) {
+      const { data: cp } = await supabaseAdmin
+        .from('course_personas').select('*').eq('id', coursePersonaId).maybeSingle();
+      if (!cp) return res.status(404).json({ error: 'Bibliotheek-persona niet gevonden' });
+      if (project.course_id && cp.course_id !== project.course_id) {
+        return res.status(400).json({ error: 'Persona hoort bij een andere cursus' });
+      }
+      // Voorkom dubbele kopie.
+      const { data: dup } = await supabaseAdmin
+        .from('project_personas').select('id')
+        .eq('project_id', projectId).eq('source_persona_id', cp.id).maybeSingle();
+      if (dup) return res.status(409).json({ error: 'Deze persona zit al in het project', personaId: dup.id });
+      row = {
+        project_id: projectId, source_persona_id: cp.id,
+        name: cp.name, avatar_emoji: cp.avatar_emoji,
+        system_prompt: cp.system_prompt, rag_enabled: cp.rag_enabled,
+        rag_folder_ids: cp.rag_folder_ids, visible_from_phase: cp.visible_from_phase,
+        sort_order: nextOrder,
+      };
+    } else {
+      if (!name || !String(name).trim()) return res.status(400).json({ error: 'Naam is vereist' });
+      row = {
+        project_id: projectId, source_persona_id: null,
+        name: String(name).trim(),
+        avatar_emoji: avatar_emoji || '🤖',
+        system_prompt: system_prompt || '',
+        rag_enabled: rag_enabled !== false,
+        rag_folder_ids: Array.isArray(rag_folder_ids) ? rag_folder_ids : [],
+        sort_order: nextOrder,
+      };
+    }
+    const { data: inserted, error: iErr } = await supabaseAdmin
+      .from('project_personas').insert(row).select('*').single();
+    if (iErr) return res.status(500).json({ error: iErr.message });
+    return res.json({ persona: inserted });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/projects/:projectId/personas/:personaId — bewerk één persona.
+app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+
+    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order'];
+    const patch = {};
+    for (const k of allowed) if (k in (req.body || {})) patch[k] = req.body[k];
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Geen wijzigingen' });
+    const { data, error: e } = await supabaseAdmin
+      .from('project_personas').update(patch)
+      .eq('id', personaId).eq('project_id', projectId).select('*').single();
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ persona: data });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/projects/:projectId/personas/:personaId — verwijder één persona
+// uit dit project. Threads/berichten worden via FK ON DELETE CASCADE opgeruimd.
+app.delete('/api/projects/:projectId/personas/:personaId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+    const { error: e } = await supabaseAdmin
+      .from('project_personas').delete()
+      .eq('id', personaId).eq('project_id', projectId);
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/projects/:projectId/personas/:personaId/documents?groupId=... —
+// lijst van documenten die deze groep voor deze persona heeft geüpload.
+// Documenten zijn group-scoped: parallelle groepen binnen hetzelfde project
+// zien elkaars uploads niet. Staff mag van iedere groep de lijst opvragen.
+app.get('/api/projects/:projectId/personas/:personaId/documents', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId } = req.params;
+  const groupId = req.query.groupId ? String(req.query.groupId) : null;
+  if (!groupId) return res.status(400).json({ error: 'groupId vereist' });
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff && !(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    const { data, error: e } = await supabaseAdmin
+      .from('project_persona_documents')
+      .select('id, filename, byte_size, uploaded_by, created_at')
+      .eq('project_id', projectId).eq('persona_id', personaId).eq('group_id', groupId)
+      .order('created_at', { ascending: false });
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ documents: data || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/:projectId/personas/:personaId/documents — upload tekst.
+// Body: { groupId, filename, contentText }. Alleen leden van de opgegeven
+// groep (of staff) mogen uploaden; de upload is voor díé groep zichtbaar.
+const MAX_DOC_CHARS = 200000;
+app.post('/api/projects/:projectId/personas/:personaId/documents', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId } = req.params;
+  const { groupId, filename, contentText } = req.body || {};
+  if (!groupId || !filename || !contentText) return res.status(400).json({ error: 'groupId, filename en contentText vereist' });
+  const text = String(contentText);
+  if (text.length === 0) return res.status(400).json({ error: 'Bestand is leeg' });
+  if (text.length > MAX_DOC_CHARS) {
+    return res.status(413).json({ error: `Document te groot (max ${MAX_DOC_CHARS.toLocaleString('nl-NL')} tekens)` });
+  }
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff && !(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    // Groep moet bij dit project horen.
+    const { data: group } = await supabaseAdmin
+      .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
+    if (!group || group.project_id !== projectId) {
+      return res.status(400).json({ error: 'Groep hoort niet bij dit project' });
+    }
+    // Persona moet bij dit project horen.
+    const { data: persona } = await supabaseAdmin
+      .from('project_personas').select('id').eq('id', personaId).eq('project_id', projectId).maybeSingle();
+    if (!persona) return res.status(404).json({ error: 'Persona niet in dit project' });
+    const { data, error: e } = await supabaseAdmin
+      .from('project_persona_documents').insert({
+        project_id: projectId, persona_id: personaId, group_id: groupId,
+        filename: String(filename).slice(0, 200),
+        content_text: text, byte_size: Buffer.byteLength(text, 'utf8'),
+        uploaded_by: auth.user.id,
+      }).select('id, filename, byte_size, uploaded_by, created_at').single();
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ document: data });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/projects/:projectId/personas/:personaId/documents/:docId?groupId=...
+// Alleen de uploader of een docent mag verwijderen; URL-parameters worden
+// strikt op de DELETE-query toegepast zodat een willekeurige docId niet
+// kan worden meegegeven met een onjuiste project/persona-combinatie.
+app.delete('/api/projects/:projectId/personas/:personaId/documents/:docId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId, docId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const { data: doc } = await supabaseAdmin
+      .from('project_persona_documents').select('uploaded_by, group_id')
+      .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    if (!isStaff) {
+      if (doc.uploaded_by !== auth.user.id) {
+        return res.status(403).json({ error: 'Alleen de uploader of een docent mag verwijderen' });
+      }
+      // Extra check: huidige user moet nog steeds lid zijn van de groep waar
+      // het document bij hoort. Voorkomt verwijderen na verlaten van groep.
+      if (doc.group_id && !(await isGroupMember(doc.group_id, auth.user.id))) {
+        return res.status(403).json({ error: 'Niet langer lid van deze groep' });
+      }
+    }
+    const { error: e } = await supabaseAdmin
+      .from('project_persona_documents').delete()
+      .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId);
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/projects/student-overview — lijst per cursus van projecten en
+// laatste sessie-status. Wordt door /projects gebruikt voor de drie keuzes
+// (start nieuw, vervolg laatste, herstart).
+app.get('/api/projects/student-overview', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  try {
+    // Cursussen waar de student lid van is.
+    const { data: memberships } = await supabaseAdmin
+      .from('course_members').select('course_id, courses(id, name)').eq('user_id', auth.user.id);
+    const courseIds = (memberships || []).map(m => m.course_id).filter(Boolean);
+    const courses = (memberships || []).map(m => m.courses).filter(Boolean);
+    if (courseIds.length === 0) return res.json({ courses: [] });
+
+    const { data: projects } = await supabaseAdmin
+      .from('projects').select('id, title, research_question, course_id, status, briefing_markdown, max_group_size, min_group_size')
+      .in('course_id', courseIds).eq('status', 'active');
+    const projectIds = (projects || []).map(p => p.id);
+
+    let sessions = [];
+    if (projectIds.length > 0) {
+      const { data: s } = await supabaseAdmin
+        .from('student_project_sessions').select('*')
+        .eq('student_id', auth.user.id).in('project_id', projectIds)
+        .order('started_at', { ascending: false });
+      sessions = s || [];
+    }
+
+    // Groepslidmaatschappen voor "vervolg in groep".
+    const { data: groupRows } = await supabaseAdmin
+      .from('project_group_members')
+      .select('group_id, project_groups!inner(id, project_id, name, status, invite_code)')
+      .eq('user_id', auth.user.id);
+    const groupsByProject = new Map();
+    for (const g of (groupRows || [])) {
+      const grp = g.project_groups;
+      if (!grp) continue;
+      const list = groupsByProject.get(grp.project_id) || [];
+      list.push(grp);
+      groupsByProject.set(grp.project_id, list);
+    }
+
+    const result = courses.map(c => {
+      const cps = (projects || []).filter(p => p.course_id === c.id).map(p => {
+        const pSessions = sessions.filter(s => s.project_id === p.id);
+        const lastSession = pSessions[0] || null;
+        const groups = groupsByProject.get(p.id) || [];
+        const activeGroup = groups.find(g => g.status === 'active') || null;
+        return { ...p, sessions: pSessions, lastSession, activeGroup };
+      });
+      return { course: c, projects: cps };
+    });
+    return res.json({ courses: result });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/student-restart — sluit lopende sessies/groepslidmaatschap
+// af en start opnieuw. Body: { projectId }.
+app.post('/api/projects/student-restart', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId } = req.body || {};
+  if (!projectId) return res.status(400).json({ error: 'projectId vereist' });
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id, status').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    if (project.status === 'archived') return res.status(400).json({ error: 'Project is gearchiveerd' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff && project.course_id && !(await userHasCourseAccess(auth.user, profile, project.course_id))) {
+      return res.status(403).json({ error: 'Geen toegang tot de cursus van dit project' });
+    }
+
+    // Markeer lopende sessies als afgerond zodat de student de oude voortgang
+    // terug kan vinden in de Afgerond-lijst.
+    await supabaseAdmin.from('student_project_sessions')
+      .update({ status: 'completed', completed_at: new Date().toISOString() })
+      .eq('student_id', auth.user.id).eq('project_id', projectId).neq('status', 'completed');
+
+    return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
