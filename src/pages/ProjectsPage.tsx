@@ -102,12 +102,16 @@ export function ProjectsPage() {
   const handleUpdateProgress = async (sessionId: string, notes: string) => {
     setLoading(true);
     try {
+      // De live-tabel kent geen `notes`-kolom; aantekeningen horen in
+      // `analysis_notes`. We schrijven naar de echte kolom zodat de
+      // voortgang ook persistent is en de leerdagboek-archivering iets
+      // heeft om samen te vatten.
       const { error } = await supabase
         .from('student_project_sessions')
         .update({
-          notes,
-          last_activity: new Date().toISOString()
-        })
+          analysis_notes: notes,
+          last_activity: new Date().toISOString(),
+        } as never)
         .eq('id', sessionId);
 
       if (error) throw error;
@@ -340,7 +344,7 @@ export function ProjectsPage() {
                   </label>
                   <textarea
                     name="notes"
-                    defaultValue={session.notes || ''}
+                    defaultValue={(session as any).analysis_notes || session.notes || ''}
                     rows={10}
                     placeholder="Documenteer je analyse, bevindingen, conclusies..."
                     className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all outline-none resize-none"
@@ -362,11 +366,11 @@ export function ProjectsPage() {
                     Je hebt dit project op {new Date(session.completed_at!).toLocaleDateString('nl-NL')} afgerond.
                   </p>
                 </div>
-                {session.notes && (
+                {((session as any).analysis_notes || session.notes) && (
                   <div>
                     <h3 className="font-semibold text-gray-900 mb-2">Je Aantekeningen</h3>
                     <div className="p-4 bg-gray-50 rounded-lg whitespace-pre-wrap text-gray-700">
-                      {session.notes}
+                      {(session as any).analysis_notes || session.notes}
                     </div>
                   </div>
                 )}

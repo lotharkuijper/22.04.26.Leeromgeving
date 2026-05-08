@@ -413,16 +413,16 @@ export function FeedbackPage() {
         </div>
       )}
 
-      {entries.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center" data-testid="empty-journal">
-          <BookText className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-          <h2 className="text-xl font-bold text-gray-900 mb-2">Nog geen notities</h2>
-          <p className="text-gray-600">
-            Sluit een chat, uitleg, quiz of project af en laat de leerassistent een samenvatting in je leerdagboek zetten — of gebruik "Nieuwe Notitie" voor een eigen reflectie.
+      {entries.length === 0 && (
+        <div className="bg-green-50 border border-green-200 rounded-2xl p-5 flex items-start gap-3" data-testid="empty-journal-banner">
+          <BookText className="w-5 h-5 text-green-700 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-green-800">
+            Nog geen notities. Sluit een chat, uitleg, quiz of project af en laat de leerassistent een samenvatting in je leerdagboek zetten — of gebruik "Nieuwe Notitie" voor een eigen reflectie. De vakken hieronder vullen zich vanzelf zodra je begint.
           </p>
         </div>
-      ) : (
-        <div className="space-y-4">
+      )}
+
+      <div className="space-y-4">
           {GROUPS.map(group => {
             const items = entriesByGroup[group.key];
             const isOpen = openGroups.has(group.key);
@@ -482,12 +482,20 @@ export function FeedbackPage() {
                                   <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" />
                                 )}
                                 <div className="min-w-0 flex-1">
-                                  <h3
-                                    className="text-base font-semibold text-gray-900 truncate"
-                                    data-testid={`title-${entry.id}`}
-                                  >
-                                    {entry.title}
-                                  </h3>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <h3
+                                      className="text-base font-semibold text-gray-900 truncate"
+                                      data-testid={`title-${entry.id}`}
+                                    >
+                                      {entry.title}
+                                    </h3>
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${group.badgeBg} ${group.badgeText}`}
+                                      data-testid={`type-label-${entry.id}`}
+                                    >
+                                      {group.label}
+                                    </span>
+                                  </div>
                                   <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
                                     <div className="flex items-center gap-1">
                                       <Calendar className="w-3.5 h-3.5" />
@@ -559,8 +567,7 @@ export function FeedbackPage() {
               </div>
             );
           })}
-        </div>
-      )}
+      </div>
     </div>
   );
 }
