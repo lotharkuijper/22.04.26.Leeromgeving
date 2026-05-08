@@ -142,7 +142,7 @@ export function FeedbackPage() {
     return session ? `Bearer ${session.access_token}` : '';
   };
 
-  const loadEntries = async () => {
+  const loadEntries = async (focusEntryId?: string) => {
     try {
       const auth = await getAuthHeader();
       const res = await fetch('/api/journal', { headers: { Authorization: auth } });
@@ -152,6 +152,30 @@ export function FeedbackPage() {
       }
       const data: JournalEntry[] = await res.json();
       setEntries(data);
+      if (focusEntryId) {
+        const focused = data.find(e => e.id === focusEntryId);
+        if (focused) {
+          const group = classifyActivity(focused.activity_type);
+          setOpenGroups(prev => {
+            if (prev.has(group)) return prev;
+            const next = new Set(prev);
+            next.add(group);
+            return next;
+          });
+          setOpenEntryIds(prev => {
+            if (prev.has(focusEntryId)) return prev;
+            const next = new Set(prev);
+            next.add(focusEntryId);
+            return next;
+          });
+          setTimeout(() => {
+            const el = document.querySelector(`[data-testid="entry-${focusEntryId}"]`);
+            if (el && 'scrollIntoView' in el) {
+              (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 50);
+        }
+      }
     } catch (err) {
       console.error('Error loading entries:', err);
     }
@@ -235,20 +259,24 @@ export function FeedbackPage() {
           console.error('Error updating entry:', err);
           alert('Er is een fout opgetreden bij het bijwerken van je dagboek');
         } else {
+          const focusId = editingEntry.id;
           resetForm();
-          void loadEntries();
+          void loadEntries(focusId);
         }
       } else {
-        const { error } = await supabase
+        const { data: inserted, error } = await supabase
           .from('learning_journal_entries')
-          .insert({ user_id: profile.id, title, content, activity_type: activityType });
+          .insert({ user_id: profile.id, title, content, activity_type: activityType })
+          .select('id')
+          .single();
 
         if (error) {
           console.error('Error creating entry:', error);
           alert('Er is een fout opgetreden bij het opslaan van je dagboek');
         } else {
+          const focusId = inserted?.id as string | undefined;
           resetForm();
-          void loadEntries();
+          void loadEntries(focusId);
         }
       }
     } catch (err) {
