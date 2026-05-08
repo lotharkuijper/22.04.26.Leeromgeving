@@ -5088,6 +5088,33 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
   }
 });
 
+// Helper: alleen admin/superuser óf een docent die lid is van de cursus
+// waar het project onder valt. Voor docenten zónder course-lidmaatschap
+// (= een andere cursus) is het project niet bewerkbaar.
+async function requireProjectStaff(projectId, user, profile) {
+  if (!projectId || !user) return { ok: false, status: 401, error: 'Niet geauthenticeerd' };
+  const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+  if (isAdmin) {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('*').eq('id', projectId).maybeSingle();
+    if (!project) return { ok: false, status: 404, error: 'Project niet gevonden' };
+    return { ok: true, project };
+  }
+  if (!profile || profile.role !== 'docent') {
+    return { ok: false, status: 403, error: 'Alleen docent/admin' };
+  }
+  const { data: project } = await supabaseAdmin
+    .from('projects').select('*').eq('id', projectId).maybeSingle();
+  if (!project) return { ok: false, status: 404, error: 'Project niet gevonden' };
+  if (!project.course_id) {
+    return { ok: false, status: 403, error: 'Project zonder cursus is alleen door admin te beheren' };
+  }
+  if (!(await userHasCourseAccess(user, profile, project.course_id))) {
+    return { ok: false, status: 403, error: 'Je bent geen docent van de cursus van dit project' };
+  }
+  return { ok: true, project };
+}
+
 // PATCH /api/projects/:projectId — docent/admin werkt projectvelden bij
 // (titel, onderzoeksvraag, briefing, doelen, rubrics, min/max, status,
 // allow_self_signup). Onbekende velden worden genegeerd.
@@ -5099,8 +5126,8 @@ app.patch('/api/projects/:projectId', async (req, res) => {
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     // course_id bewust niet wijzigbaar: een lopend project verplaatsen tussen
     // cursussen laat groepslidmaatschappen + cursus-toegang inconsistent achter.
@@ -5137,12 +5164,9 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
-
-    const { data: project } = await supabaseAdmin
-      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
-    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const project = access.project;
 
     const { coursePersonaId, name, system_prompt, avatar_emoji,
       rag_enabled, rag_folder_ids } = req.body || {};
@@ -5203,8 +5227,8 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order'];
     const patch = {};
@@ -5230,8 +5254,8 @@ app.delete('/api/projects/:projectId/personas/:personaId', async (req, res) => {
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
     const { error: e } = await supabaseAdmin
       .from('project_personas').delete()
       .eq('id', personaId).eq('project_id', projectId);
@@ -5441,6 +5465,29 @@ app.post('/api/projects/student-restart', async (req, res) => {
     await supabaseAdmin.from('student_project_sessions')
       .update({ status: 'completed', completed_at: new Date().toISOString() })
       .eq('student_id', auth.user.id).eq('project_id', projectId).neq('status', 'completed');
+
+    // Verlaat alle actieve groepen voor dit project zodat een nieuwe sessie
+    // niet in de oude groep terechtkomt. Lege groepen worden gearchiveerd
+    // zodat ze niet meer als "actief" verschijnen voor de overige leden.
+    const { data: myGroups } = await supabaseAdmin
+      .from('project_group_members')
+      .select('group_id, project_groups!inner(id, project_id, status)')
+      .eq('user_id', auth.user.id);
+    const groupIdsThisProject = (myGroups || [])
+      .filter(g => g.project_groups && g.project_groups.project_id === projectId
+        && g.project_groups.status !== 'archived')
+      .map(g => g.group_id);
+    for (const gid of groupIdsThisProject) {
+      await supabaseAdmin.from('project_group_members')
+        .delete().eq('group_id', gid).eq('user_id', auth.user.id);
+      const { count } = await supabaseAdmin
+        .from('project_group_members')
+        .select('user_id', { count: 'exact', head: true }).eq('group_id', gid);
+      if ((count || 0) === 0) {
+        await supabaseAdmin.from('project_groups')
+          .update({ status: 'archived' }).eq('id', gid);
+      }
+    }
 
     return res.json({ ok: true });
   } catch (err) {
