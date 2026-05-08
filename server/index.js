@@ -2801,6 +2801,162 @@ app.post('/api/quiz/archive', async (req, res) => {
   }
 });
 
+// /api/projects/save-summary — vat een project (en de bijhorende sessie van
+// de student) samen via Groq en bewaart het resultaat als een
+// learning_journal_entries-rij met activity_type='project_reflection'. Werkt
+// los van de status van het project; je kunt een lopend of afgerond project
+// archiveren. De projectsessie zelf blijft bestaan — dit is puur een
+// reflectie-snapshot in het leerdagboek.
+app.post('/api/projects/save-summary', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
+
+  const { sessionId } = req.body || {};
+  if (!sessionId || typeof sessionId !== 'string') {
+    return res.status(400).json({ error: 'sessionId is vereist' });
+  }
+
+  try {
+    const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: { user }, error: userError } = await callerClient.auth.getUser();
+    if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
+
+    const { data: row, error: fetchErr } = await supabaseAdmin
+      .from('student_project_sessions')
+      .select('id, student_id, project_id, current_phase, hypothesis, analysis_notes, conclusions, completed, started_at, last_activity, projects(title, description, research_question, difficulty)')
+      .eq('id', sessionId)
+      .maybeSingle();
+
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!row) return res.status(404).json({ error: 'Projectsessie niet gevonden' });
+    if (row.student_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze projectsessie' });
+
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({
+        error: 'De samenvatting kon niet worden opgesteld.',
+        detail: 'Geen taalmodel-toegang (GROQ_API_KEY ontbreekt).',
+      });
+    }
+
+    const project = row.projects || {};
+    const projectTitle = project.title || '(naamloos project)';
+    const projectDescription = (project.description || '').trim();
+    const researchQuestion = (project.research_question || '').trim();
+    const difficulty = project.difficulty || 'onbekend';
+    const phase = row.current_phase || 'onbekend';
+    const hypothesis = (row.hypothesis || '').trim();
+    const analysisNotes = (row.analysis_notes || '').trim();
+    const conclusions = (row.conclusions || '').trim();
+    const status = row.completed ? 'afgerond' : 'in uitvoering';
+
+    // Voorkom hallucinatie op een lege sessie: als alle drie de werkvelden
+    // leeg zijn, is er niets zinvols om te reflecteren en zou Groq de prompt
+    // alsnog "creatief" invullen. Geef een duidelijke fout terug zodat de UI
+    // de student kan vragen eerst iets in te vullen.
+    if (!hypothesis && !analysisNotes && !conclusions) {
+      return res.status(400).json({
+        error: 'Er is nog niets om samen te vatten.',
+        detail: 'Vul eerst je hypothese, analyse-aantekeningen of conclusies in voor je een samenvatting in je leerdagboek zet.',
+      });
+    }
+
+    const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft aan een data-analyseproject gewerkt en wil daar in het leerdagboek op reflecteren. Schrijf een formatief reflectieverslag van 8 tot 14 regels in het Nederlands, gericht aan de student zelf.
+
+Aanspraakvorm (volg STRIKT):
+- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
+- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
+
+Je verslag bevat — in deze volgorde, met deze (vetgedrukte) kopjes op aparte regels:
+**Wat je hebt laten zien**
+- Concrete sterke punten op basis van je hypothese, analyse-aantekeningen en conclusies. Wees specifiek over methodische keuzes die opvallen.
+
+**Aandachtspunten**
+- Waar je redenering nog niet rond is, welke aannames of nuances je hebt laten liggen, en welke methodische valkuilen op de loer liggen voor het type onderzoek.
+
+**Wat je hiermee kunt**
+- Eén of twee concrete vervolgstappen — wat ga je nalezen, controleren of uitwerken om dit project (of een vergelijkbare analyse) verder te brengen.
+
+Project-context:
+- Titel: ${projectTitle}
+- Status: ${status} (huidige fase: ${phase})
+- Niveau: ${difficulty}${researchQuestion ? `\n- Onderzoeksvraag: ${researchQuestion}` : ''}${projectDescription ? `\n- Projectbeschrijving: ${projectDescription}` : ''}
+
+Jouw werk tot nu toe:
+- Hypothese: ${hypothesis || '(nog niet ingevuld)'}
+- Analyse-aantekeningen: ${analysisNotes || '(nog niet ingevuld)'}
+- Conclusies: ${conclusions || '(nog niet ingevuld)'}
+
+Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees concreet, eerlijk en motiverend; vermijd vaagheden en clichés.`;
+
+    let summaryContent;
+    try {
+      const groqResp = await fetch(GROQ_API_URL, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: summaryPrompt }],
+          temperature: 0.5,
+          max_tokens: 1000,
+        }),
+      });
+      if (!groqResp.ok) {
+        const txt = await groqResp.text();
+        console.error('[projects/save-summary] Groq fout:', groqResp.status, txt);
+        return res.status(502).json({
+          error: 'De samenvatting kon niet worden opgesteld.',
+          detail: `Het taalmodel reageerde met status ${groqResp.status}.`,
+        });
+      }
+      const groqData = await groqResp.json();
+      summaryContent = groqData.choices?.[0]?.message?.content;
+      if (!summaryContent) {
+        return res.status(502).json({
+          error: 'De samenvatting kon niet worden opgesteld.',
+          detail: 'Het taalmodel gaf een leeg antwoord.',
+        });
+      }
+    } catch (groqErr) {
+      console.error('[projects/save-summary] Groq request mislukt:', groqErr.message);
+      return res.status(502).json({
+        error: 'De samenvatting kon niet worden opgesteld.',
+        detail: groqErr.message,
+      });
+    }
+
+    const titleProject = projectTitle.length > 80 ? `${projectTitle.slice(0, 77)}...` : projectTitle;
+    const { data: entry, error: journalError } = await supabaseAdmin
+      .from('learning_journal_entries')
+      .insert({
+        user_id: user.id,
+        title: `Projectreflectie: ${titleProject}`,
+        content: summaryContent,
+        activity_type: 'project_reflection',
+      })
+      .select('id')
+      .single();
+
+    if (journalError) {
+      console.error('[projects/save-summary] Journal insert error:', journalError);
+      return res.status(500).json({
+        error: 'De samenvatting kon niet worden opgeslagen in je leerdagboek.',
+        detail: journalError.message,
+      });
+    }
+
+    console.log(`[projects/save-summary] Journal entry aangemaakt: ${entry.id} voor sessie ${sessionId}`);
+    return res.json({ success: true, journalEntryId: entry.id });
+  } catch (err) {
+    console.error('[projects/save-summary] Onverwachte fout:', err);
+    return res.status(500).json({ error: 'Interne fout', detail: err?.message });
+  }
+});
+
 app.get('/api/admin/prompts-migration-status', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const authHeader = req.headers['authorization'];

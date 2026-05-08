@@ -11,7 +11,9 @@ import {
   FileText,
   TrendingUp,
   Calendar,
-  Target
+  Target,
+  BookText,
+  X,
 } from 'lucide-react';
 import type { Database } from '../lib/database.types';
 
@@ -30,6 +32,9 @@ export function ProjectsPage() {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'available' | 'inProgress' | 'completed'>('available');
   const [sessions, setSessions] = useState<ProjectSession[]>([]);
+  const [archiveDialog, setArchiveDialog] = useState<{ sessionId: string; title: string } | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [archiveNotice, setArchiveNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     loadProjects();
@@ -114,6 +119,37 @@ export function ProjectsPage() {
       alert('Er is een fout opgetreden bij het opslaan van je voortgang');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleArchiveProject = async () => {
+    if (!archiveDialog || archiving) return;
+    setArchiving(true);
+    try {
+      const { data: { session: authSession } } = await supabase.auth.getSession();
+      const authHeader = authSession ? `Bearer ${authSession.access_token}` : '';
+      const res = await fetch('/api/projects/save-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+        body: JSON.stringify({ sessionId: archiveDialog.sessionId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || err.error || `Opslaan mislukt (${res.status})`);
+      }
+      setArchiveNotice({
+        kind: 'success',
+        message: `Een samenvatting van "${archiveDialog.title}" is in je leerdagboek gezet. Je vindt hem terug onder het vak "Projecten".`,
+      });
+      setArchiveDialog(null);
+    } catch (err: any) {
+      setArchiveNotice({
+        kind: 'error',
+        message: `Het opslaan in je leerdagboek is mislukt: ${err?.message || 'onbekende fout'}.`,
+      });
+      setArchiveDialog(null);
+    } finally {
+      setArchiving(false);
     }
   };
 
@@ -220,18 +256,51 @@ export function ProjectsPage() {
                 )}
               </div>
             </div>
-            {session && session.status === 'in_progress' && (
-              <button
-                onClick={() => handleCompleteProject(session.id)}
-                disabled={loading}
-                className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg flex items-center gap-2"
-              >
-                <CheckCircle className="w-4 h-4" />
-                Project Afronden
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {session && (
+                <button
+                  onClick={() => setArchiveDialog({ sessionId: session.id, title: selectedProject.title })}
+                  data-testid="btn-archive-project"
+                  className="px-4 py-2 bg-white text-green-700 border border-green-300 font-semibold rounded-lg hover:bg-green-50 transition-all flex items-center gap-2"
+                  title="Laat de leerassistent een samenvatting van dit project in je leerdagboek zetten"
+                >
+                  <BookText className="w-4 h-4" />
+                  Verplaats naar leerdagboek
+                </button>
+              )}
+              {session && session.status === 'in_progress' && (
+                <button
+                  onClick={() => handleCompleteProject(session.id)}
+                  disabled={loading}
+                  className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg flex items-center gap-2"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Project Afronden
+                </button>
+              )}
+            </div>
           </div>
         </div>
+
+        {archiveNotice && (
+          <div
+            data-testid="archive-notice"
+            className={`rounded-xl border px-4 py-3 flex items-start justify-between gap-3 ${
+              archiveNotice.kind === 'success'
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            <p className="text-sm">{archiveNotice.message}</p>
+            <button
+              onClick={() => setArchiveNotice(null)}
+              className="text-current opacity-60 hover:opacity-100"
+              data-testid="btn-dismiss-archive-notice"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl border border-gray-200 p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-3">Beschrijving</h2>
@@ -526,6 +595,53 @@ export function ProjectsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {archiveDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6" data-testid="dialog-archive-project">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-green-100 rounded-xl">
+                <BookText className="w-5 h-5 text-green-700" />
+              </div>
+              <h2 className="text-lg font-semibold text-gray-900">Verplaats naar leerdagboek</h2>
+              <button
+                onClick={() => !archiving && setArchiveDialog(null)}
+                className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
+                data-testid="btn-archive-project-cancel"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-gray-600 mb-2">
+              Je staat op het punt om project <strong>"{archiveDialog.title}"</strong> te archiveren in je leerdagboek.
+            </p>
+            <p className="text-sm text-gray-600 mb-6">
+              De leerassistent schrijft een formatieve samenvatting van je hypothese, analyse-aantekeningen en conclusies. Die notitie verschijnt onder het vak <strong>"Projecten"</strong> in je leerdagboek. Je projectsessie zelf blijft staan; je kunt er nog aan blijven werken.
+            </p>
+
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={handleArchiveProject}
+                disabled={archiving}
+                data-testid="btn-archive-project-confirm"
+                className="px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <BookText className="w-4 h-4" />
+                {archiving ? 'Bezig met opslaan...' : 'Ja, samenvatting opslaan'}
+              </button>
+              <button
+                onClick={() => setArchiveDialog(null)}
+                disabled={archiving}
+                data-testid="btn-archive-project-dismiss"
+                className="px-4 py-3 bg-gray-100 text-gray-700 font-semibold rounded-xl hover:bg-gray-200 transition-all disabled:opacity-50"
+              >
+                Annuleren
+              </button>
+            </div>
           </div>
         </div>
       )}
