@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
-  Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database,
+  Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database, EyeOff,
 } from 'lucide-react';
 
 interface Persona {
@@ -81,8 +81,9 @@ const QUICK_REACTIONS = ['👍', '❤️', '🤔', '✅'];
 
 export function ProjectRoomPage() {
   const { projectId, groupId } = useParams<{ projectId: string; groupId: string }>();
-  const { profile, session } = useAuth();
+  const { profile, session, isAdmin, isDocent } = useAuth();
   const navigate = useNavigate();
+  const isStaff = isAdmin || isDocent;
 
   const [project, setProject] = useState<Project | null>(null);
   const [group, setGroup] = useState<ProjectGroup | null>(null);
@@ -726,16 +727,26 @@ export function ProjectRoomPage() {
                   className="w-full flex items-center justify-between text-xs font-semibold text-gray-700 hover:text-gray-900"
                   data-testid="button-toggle-bestanden"
                 >
-                  <span className="flex items-center gap-1">
-                    <Download className="w-3 h-3" /> Bestanden van de docent ({projectMaterials.length})
-                  </span>
+                  {(() => {
+                    const visibleCount = projectMaterials.filter(d => d.is_visible_to_students).length;
+                    const hiddenCount = projectMaterials.length - visibleCount;
+                    return (
+                      <span className="flex items-center gap-1">
+                        <Download className="w-3 h-3" /> Bestanden van de docent ({visibleCount}{isStaff && hiddenCount > 0 ? ` + ${hiddenCount} verborgen` : ''})
+                      </span>
+                    );
+                  })()}
                   <span className="text-gray-400">{bestandenOpen ? '▲' : '▼'}</span>
                 </button>
                 {bestandenOpen && (
                   <div className="mt-2">
                     <ul className="space-y-1">
                       {projectMaterials.map(d => (
-                        <li key={d.id} className="flex items-center gap-1.5 text-xs" data-testid={`project-material-${d.id}`}>
+                        <li
+                          key={d.id}
+                          className={`flex items-center gap-1.5 text-xs ${!d.is_visible_to_students ? 'opacity-60' : ''}`}
+                          data-testid={`project-material-${d.id}`}
+                        >
                           {d.document_ref_id
                             ? <Database className="w-3 h-3 text-blue-400 shrink-0" />
                             : <FileText className="w-3 h-3 text-gray-400 shrink-0" />}
@@ -751,6 +762,15 @@ export function ProjectRoomPage() {
                           {d.byte_size ? (
                             <span className="text-[10px] text-gray-400 shrink-0">{Math.max(1, Math.round(d.byte_size / 1024))} KB</span>
                           ) : null}
+                          {isStaff && !d.is_visible_to_students && (
+                            <span
+                              className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-1 shrink-0"
+                              title="Verborgen voor studenten"
+                              data-testid={`badge-hidden-${d.id}`}
+                            >
+                              <EyeOff className="w-2.5 h-2.5" /> verborgen
+                            </span>
+                          )}
                         </li>
                       ))}
                     </ul>
