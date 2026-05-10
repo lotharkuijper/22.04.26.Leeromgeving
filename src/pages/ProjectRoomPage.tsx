@@ -598,8 +598,8 @@ export function ProjectRoomPage() {
                 }}
                 placeholder={activePersona ? `Vraag iets aan ${activePersona.name}… (Shift+Enter = nieuwe regel)` : 'Kies eerst een persona'}
                 disabled={!activePersona || personaLoading || isFinalized}
-                rows={1}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[40px] max-h-36"
+                rows={6}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[150px] max-h-[300px]"
                 data-testid="input-persona-message"
               />
               <button

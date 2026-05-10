@@ -418,9 +418,17 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
 
   const deleteRubric = async (personaId: string, doc: RubricDoc) => {
     if (!confirm(`Verwijder verborgen rubric "${doc.filename}"?`)) return;
-    const { error: e } = await supabase
-      .from('project_persona_documents').delete().eq('id', doc.id);
-    if (e) { onError(e.message); return; }
+    // Direct supabase.delete is geblokkeerd door ppd_modify=false; gebruik
+    // het server-endpoint dat de juiste autorisatie afhandelt.
+    const r = await fetch(
+      `/api/projects/${project.id}/personas/${personaId}/documents/${doc.id}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      onError(d.error || 'Verwijderen mislukt');
+      return;
+    }
     await loadRubricDocs(personaId);
   };
 

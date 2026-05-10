@@ -5533,6 +5533,11 @@ app.post('/api/projects/:projectId/personas/:personaId/documents',
     const { data: persona } = await supabaseAdmin
       .from('project_personas').select('id, persona_type').eq('id', personaId).eq('project_id', projectId).maybeSingle();
     if (!persona) return res.status(404).json({ error: 'Persona niet in dit project' });
+    // Studenten/groepsleden mogen NOOIT documenten op een evaluator-persona
+    // plaatsen — dat zou de beoordelingsinput kunnen vervuilen.
+    if (persona.persona_type === 'evaluator' && !isStaffForProject) {
+      return res.status(403).json({ error: 'Geen uploads toegestaan op een beoordelaar-persona' });
+    }
     // is_hidden_rubric: alleen staff mag dit zetten, en alleen op een
     // evaluator-persona. Project-scoped (group_id mag NULL zijn).
     let isHiddenRubric = false;
@@ -5884,9 +5889,13 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
           continue;
         }
       }
+      // Belangrijk: alleen verborgen rubrics meenemen — anders zouden door
+      // studenten geüploade documenten de beoordeling kunnen sturen
+      // (prompt-injection van formatieve assessment).
       const { data: rubricDocs } = await supabaseAdmin
         .from('project_persona_documents').select('filename, content_text')
-        .eq('project_id', group.project_id).eq('persona_id', evalPersona.id);
+        .eq('project_id', group.project_id).eq('persona_id', evalPersona.id)
+        .eq('is_hidden_rubric', true);
       const rubricBlock = (rubricDocs || []).map(d =>
         `[Rubric/criteria: ${d.filename}]\n${(d.content_text || '').slice(0, 8000)}`
       ).join('\n\n').slice(0, 30000);
