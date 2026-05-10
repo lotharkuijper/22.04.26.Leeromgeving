@@ -4598,15 +4598,23 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
     }
 
     // Personas: project-eigen heeft voorrang; anders bibliotheek van de cursus.
+    // Studenten zien evaluator-persona's NIET; staff wel (zodat ze in de
+    // beheer-flow zichtbaar blijven en de evaluate-knop in de UI verschijnt).
     let personas = [];
+    let evaluatorCount = 0;
     const { data: pp } = await supabaseAdmin
       .from('project_personas').select('*').eq('project_id', projectId).order('sort_order');
     if (pp && pp.length > 0) {
-      personas = pp.map(p => ({ ...p, _source: 'project' }));
+      evaluatorCount = pp.filter(p => p.persona_type === 'evaluator').length;
+      const filtered = isStaff ? pp : pp.filter(p => p.persona_type !== 'evaluator');
+      personas = filtered.map(p => ({ ...p, _source: 'project' }));
     } else if (project.course_id) {
       const { data: cp } = await supabaseAdmin
         .from('course_personas').select('*').eq('course_id', project.course_id).order('is_default', { ascending: false });
-      personas = (cp || []).map(p => ({ ...p, _source: 'course' }));
+      const list = cp || [];
+      evaluatorCount = list.filter(p => p.persona_type === 'evaluator').length;
+      const filtered = isStaff ? list : list.filter(p => p.persona_type !== 'evaluator');
+      personas = filtered.map(p => ({ ...p, _source: 'course' }));
     }
     // Default Consultant als er nog niets is.
     if (personas.length === 0) {
@@ -4628,7 +4636,18 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
       checkpoints = cps || [];
     }
 
-    return res.json({ project, group, members, personas, checkpoints });
+    // Project-brede docent-documenten (read-only voor studenten).
+    const { data: projectDocs } = await supabaseAdmin
+      .from('project_documents')
+      .select('id, filename, byte_size, uploaded_by, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    return res.json({
+      project, group, members, personas, checkpoints,
+      projectDocuments: projectDocs || [],
+      hasEvaluator: evaluatorCount > 0,
+    });
   } catch (err) {
     console.error('[projects/:id/room]', err);
     return res.status(500).json({ error: err.message });
@@ -4690,6 +4709,11 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       }
     }
     if (!persona) return res.status(404).json({ error: 'Persona niet gevonden of niet in dit project' });
+    // Evaluator-persona's mogen niet door studenten worden aangesproken in
+    // de gewone chat — die worden alleen via /evaluate aangeroepen.
+    if (persona.persona_type === 'evaluator') {
+      return res.status(403).json({ error: 'Deze persona is een beoordelaar en kan niet worden aangesproken via de chat.' });
+    }
 
     // Thread ophalen of aanmaken (alleen voor echte persona's met uuid).
     let threadId = null;
@@ -4781,9 +4805,26 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       }
     }
 
+    // Project-brede docent-uploads (zichtbaar voor alle groepen + alle persona's).
+    let projectDocContext = '';
+    {
+      const { data: pdocs } = await supabaseAdmin
+        .from('project_documents')
+        .select('filename, content_text')
+        .eq('project_id', project.id)
+        .order('created_at', { ascending: true })
+        .limit(10);
+      if (pdocs && pdocs.length > 0) {
+        projectDocContext = pdocs.map(d =>
+          `[Projectdocument: ${d.filename}]\n${(d.content_text || '').slice(0, 6000)}`
+        ).join('\n\n');
+      }
+    }
+
     const ragBlock = context ? `\n\nContext uit cursusmateriaal:\n${context}` : '';
     const docBlock = uploadedContext ? `\n\nGeüploade documenten van de groep:\n${uploadedContext}` : '';
-    const systemContent = `${persona.system_prompt}${ragBlock}${docBlock}`;
+    const projectDocBlock = projectDocContext ? `\n\nProjectmateriaal van de docent:\n${projectDocContext}` : '';
+    const systemContent = `${persona.system_prompt}${ragBlock}${projectDocBlock}${docBlock}`;
 
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
@@ -5041,13 +5082,106 @@ ${reflection}`;
       }
     }
 
+    // Per-persona-thread mini-samenvatting (4 regels), één journal-entry per
+    // groepslid per thread met nieuwe berichten sinds vorige checkpoint van
+    // dezelfde kind. Dedupe via source_ref = "group_thread_checkpoint:<cp.id>:<thread.id>".
+    let threadSummariesAdded = 0;
+    try {
+      const apiKey2 = process.env.GROQ_API_KEY;
+      const { data: prevCps } = await supabaseAdmin
+        .from('group_checkpoints')
+        .select('created_at')
+        .eq('group_id', groupId)
+        .lt('created_at', cp.created_at)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      const sinceTs = prevCps && prevCps[0] ? prevCps[0].created_at : '1970-01-01T00:00:00Z';
+
+      const { data: threads } = await supabaseAdmin
+        .from('group_persona_threads')
+        .select('id, persona_id')
+        .eq('group_id', groupId);
+
+      for (const t of (threads || [])) {
+        const { data: newMsgs } = await supabaseAdmin
+          .from('group_persona_messages')
+          .select('role, content')
+          .eq('thread_id', t.id)
+          .gt('created_at', sinceTs)
+          .order('created_at', { ascending: true });
+        if (!newMsgs || newMsgs.length === 0) continue;
+
+        const { data: persona } = await supabaseAdmin
+          .from('project_personas').select('name, avatar_emoji')
+          .eq('id', t.persona_id).maybeSingle();
+        const personaName = persona?.name || 'Gesprek';
+        const transcript = newMsgs.map(m =>
+          `${m.role === 'user' ? 'Student' : personaName}: ${(m.content || '').slice(0, 1500)}`
+        ).join('\n\n').slice(0, 12000);
+
+        let summaryText = '';
+        if (apiKey2) {
+          try {
+            const sumPrompt = `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
+            const sr = await fetch(GROQ_API_URL, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${apiKey2}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: 'llama-3.3-70b-versatile',
+                messages: [{ role: 'user', content: sumPrompt }],
+                temperature: 0.3, max_tokens: 350,
+              }),
+            });
+            if (sr.ok) {
+              const sd = await sr.json();
+              summaryText = (sd.choices?.[0]?.message?.content || '').trim();
+            }
+          } catch { /* val terug op eerste user-bericht */ }
+        }
+        if (!summaryText) {
+          const firstUser = newMsgs.find(m => m.role === 'user');
+          summaryText = (firstUser?.content || '(geen samenvatting beschikbaar)').slice(0, 400);
+        }
+
+        const sourceRef = `group_thread_checkpoint:${cp.id}:${t.id}`;
+        const titleLabel = `${persona?.avatar_emoji || '💬'} ${personaName}`;
+        const tRows = (members || []).map(m => ({
+          user_id: m.user_id,
+          title: titleLabel,
+          content: summaryText,
+          activity_type: 'project_reflection',
+          source_ref: sourceRef,
+        }));
+        if (tRows.length > 0) {
+          const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
+          if (tjErr) {
+            if (tjErr.code === '42703' || /column.*source_ref/i.test(tjErr.message || '')) {
+              // Oude DB zonder source_ref-kolom: opnieuw zonder die kolom.
+              await supabaseAdmin.from('learning_journal_entries').insert(
+                tRows.map(({ source_ref: _ignored, ...rest }) => rest)
+              );
+              threadSummariesAdded += 1;
+            } else if (tjErr.code === '23505') {
+              // Reeds aanwezig — geen extra entry maar ook geen fout.
+            } else {
+              console.error('[checkpoint thread summary insert]', tjErr.message);
+            }
+          } else {
+            threadSummariesAdded += 1;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[checkpoint thread summaries]', e.message);
+    }
+
     if (kind === 'final') {
       await supabaseAdmin.from('project_groups')
         .update({ status: 'finalized', finalized_at: new Date().toISOString() })
         .eq('id', groupId);
     }
 
-    return res.json({ checkpoint: cp });
+    return res.json({ checkpoint: cp, threadSummariesAdded });
   } catch (err) {
     console.error('[projects/groups/checkpoint]', err);
     return res.status(500).json({ error: err.message });
@@ -5210,9 +5344,11 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         system_prompt: cp.system_prompt, rag_enabled: cp.rag_enabled,
         rag_folder_ids: cp.rag_folder_ids, visible_from_phase: cp.visible_from_phase,
         sort_order: nextOrder,
+        persona_type: cp.persona_type || 'conversational',
       };
     } else {
       if (!name || !String(name).trim()) return res.status(400).json({ error: 'Naam is vereist' });
+      const personaType = req.body?.persona_type === 'evaluator' ? 'evaluator' : 'conversational';
       row = {
         project_id: projectId, source_persona_id: null,
         name: String(name).trim(),
@@ -5221,6 +5357,7 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         rag_enabled: rag_enabled !== false,
         rag_folder_ids: Array.isArray(rag_folder_ids) ? rag_folder_ids : [],
         sort_order: nextOrder,
+        persona_type: personaType,
       };
     }
     const { data: inserted, error: iErr } = await supabaseAdmin
@@ -5244,9 +5381,12 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
 
-    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order'];
+    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order', 'persona_type'];
     const patch = {};
     for (const k of allowed) if (k in (req.body || {})) patch[k] = req.body[k];
+    if (patch.persona_type && !['conversational', 'evaluator'].includes(patch.persona_type)) {
+      return res.status(400).json({ error: "persona_type moet 'conversational' of 'evaluator' zijn" });
+    }
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Geen wijzigingen' });
     const { data, error: e } = await supabaseAdmin
       .from('project_personas').update(patch)
@@ -5300,11 +5440,13 @@ app.get('/api/projects/:projectId/personas/:personaId/documents', async (req, re
     if (!staffAccess.ok && !(await isGroupMember(groupId, auth.user.id))) {
       return res.status(403).json({ error: 'Geen toegang tot deze groep of dit project' });
     }
-    const { data, error: e } = await supabaseAdmin
+    const isStaffViewer = staffAccess.ok;
+    let q = supabaseAdmin
       .from('project_persona_documents')
-      .select('id, filename, byte_size, uploaded_by, created_at')
-      .eq('project_id', projectId).eq('persona_id', personaId).eq('group_id', groupId)
-      .order('created_at', { ascending: false });
+      .select('id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric')
+      .eq('project_id', projectId).eq('persona_id', personaId).eq('group_id', groupId);
+    if (!isStaffViewer) q = q.eq('is_hidden_rubric', false);
+    const { data, error: e } = await q.order('created_at', { ascending: false });
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ documents: data || [] });
   } catch (err) {
@@ -5377,13 +5519,33 @@ app.post('/api/projects/:projectId/personas/:personaId/documents',
     const { data: persona } = await supabaseAdmin
       .from('project_personas').select('id').eq('id', personaId).eq('project_id', projectId).maybeSingle();
     if (!persona) return res.status(404).json({ error: 'Persona niet in dit project' });
+    // is_hidden_rubric: alleen staff mag dit zetten, en alleen op een
+    // evaluator-persona. Voor studenten wordt het altijd false.
+    const requestedHidden = req.body?.isHiddenRubric === '1' || req.body?.isHiddenRubric === 'true';
+    let isHiddenRubric = false;
+    if (requestedHidden) {
+      if (!isAdmin) {
+        const { data: profileRow } = await supabaseAdmin
+          .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+        const isStaffUploader = profileRow && (profileRow.role === 'admin' || profileRow.role === 'docent' || profileRow.email === SUPERUSER_EMAIL);
+        if (!isStaffUploader) return res.status(403).json({ error: 'Alleen docent/admin mag een verborgen rubric uploaden' });
+      }
+      const { data: pType } = await supabaseAdmin
+        .from('project_personas').select('persona_type')
+        .eq('id', personaId).eq('project_id', projectId).maybeSingle();
+      if (!pType || pType.persona_type !== 'evaluator') {
+        return res.status(400).json({ error: 'Verborgen rubric kan alleen aan een beoordelaar-persona worden gekoppeld' });
+      }
+      isHiddenRubric = true;
+    }
     const { data, error: e } = await supabaseAdmin
       .from('project_persona_documents').insert({
         project_id: projectId, persona_id: personaId, group_id: groupId,
         filename: String(filename).slice(0, 200),
         content_text: text, byte_size: req.file.size || Buffer.byteLength(text, 'utf8'),
         uploaded_by: auth.user.id,
-      }).select('id, filename, byte_size, uploaded_by, created_at').single();
+        is_hidden_rubric: isHiddenRubric,
+      }).select('id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric').single();
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ document: data });
   } catch (err) {
@@ -5539,6 +5701,312 @@ app.post('/api/projects/student-restart', async (req, res) => {
     }
 
     return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
+// Project-brede documenten (datasets/opdracht) — staff uploadt, alle leden
+// van elke groep in dit project zien ze read-only en alle persona's krijgen
+// de tekst automatisch als context.
+// =============================================================================
+
+app.get('/api/projects/:projectId/documents', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId } = req.params;
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('*').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    if (!(await userHasProjectAccess(auth.user, profile, project))) {
+      return res.status(403).json({ error: 'Geen toegang tot dit project' });
+    }
+    const { data, error: e } = await supabaseAdmin
+      .from('project_documents')
+      .select('id, filename, byte_size, uploaded_by, created_at')
+      .eq('project_id', projectId).order('created_at', { ascending: false });
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ documents: data || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId } = req.params;
+  if (!req.file) return res.status(400).json({ error: 'Geen bestand ontvangen (veld "file")' });
+  let text;
+  try { text = await extractTextFromUpload(req.file); }
+  catch (e) { return res.status(400).json({ error: e.message || 'Kon tekst niet uit bestand halen' }); }
+  if (!text || text.length === 0) return res.status(400).json({ error: 'Geen leesbare tekst gevonden in dit bestand' });
+  if (text.length > MAX_DOC_CHARS) {
+    text = text.slice(0, MAX_DOC_CHARS) + `\n\n…[afgekapt op ${MAX_DOC_CHARS.toLocaleString('nl-NL')} tekens]`;
+  }
+  const filename = req.file.originalname || 'upload';
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const { data, error: e } = await supabaseAdmin
+      .from('project_documents').insert({
+        project_id: projectId,
+        filename: String(filename).slice(0, 200),
+        content_text: text,
+        byte_size: req.file.size || Buffer.byteLength(text, 'utf8'),
+        uploaded_by: auth.user.id,
+      }).select('id, filename, byte_size, uploaded_by, created_at').single();
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ document: data });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/projects/:projectId/documents/:docId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, docId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const { error: e } = await supabaseAdmin
+      .from('project_documents').delete()
+      .eq('id', docId).eq('project_id', projectId);
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
+// Beoordeling opvragen — voor elke evaluator-persona van het project: rubric
+// + alle persona-gesprekken van de groep + projectdocumenten naar Groq, en
+// schrijf één journal-entry per groepslid per evaluator. Alleen leden of staff.
+// =============================================================================
+
+app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { groupId } = req.params;
+  const requestId = req.body?.requestId || null;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    if (!isStaff && !(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    const { data: group } = await supabaseAdmin
+      .from('project_groups').select('id, project_id, name').eq('id', groupId).maybeSingle();
+    if (!group) return res.status(404).json({ error: 'Groep niet gevonden' });
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, title, research_question, goals, briefing_markdown')
+      .eq('id', group.project_id).maybeSingle();
+
+    const { data: evaluators } = await supabaseAdmin
+      .from('project_personas').select('*')
+      .eq('project_id', group.project_id).eq('persona_type', 'evaluator');
+    if (!evaluators || evaluators.length === 0) {
+      return res.status(400).json({ error: 'Dit project heeft geen beoordelaar-persona' });
+    }
+
+    // Alle persona-gesprekken van de groep verzamelen.
+    const { data: threads } = await supabaseAdmin
+      .from('group_persona_threads').select('id, persona_id').eq('group_id', groupId);
+    let conversationsBlock = '';
+    for (const t of (threads || [])) {
+      const { data: persona } = await supabaseAdmin
+        .from('project_personas').select('name, persona_type')
+        .eq('id', t.persona_id).maybeSingle();
+      if (!persona || persona.persona_type === 'evaluator') continue;
+      const { data: msgs } = await supabaseAdmin
+        .from('group_persona_messages').select('role, content')
+        .eq('thread_id', t.id).order('created_at', { ascending: true });
+      if (!msgs || msgs.length === 0) continue;
+      const transcript = msgs.map(m =>
+        `${m.role === 'user' ? 'Student' : persona.name}: ${(m.content || '').slice(0, 1500)}`
+      ).join('\n');
+      conversationsBlock += `\n\n## Gesprek met ${persona.name}\n${transcript}`;
+    }
+    conversationsBlock = conversationsBlock.slice(0, 30000);
+
+    const { data: pDocs } = await supabaseAdmin
+      .from('project_documents').select('filename, content_text')
+      .eq('project_id', group.project_id);
+    const projectDocsBlock = (pDocs || []).map(d =>
+      `[Projectdocument: ${d.filename}]\n${(d.content_text || '').slice(0, 4000)}`
+    ).join('\n\n').slice(0, 20000);
+
+    const { data: members } = await supabaseAdmin
+      .from('project_group_members').select('user_id').eq('group_id', groupId);
+
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
+
+    const results = [];
+    for (const evalPersona of evaluators) {
+      // Idempotency: als deze (groep, persona, requestId)-combinatie al een
+      // journal-entry heeft, sla de Groq-call over — bespaart tokens en tijd
+      // bij netwerk-retries van dezelfde knopdruk.
+      if (requestId) {
+        const sourceRefCandidate = `group_evaluate:${groupId}:${evalPersona.id}:${requestId}`;
+        const { data: existingEntry } = await supabaseAdmin
+          .from('learning_journal_entries')
+          .select('id').eq('source_ref', sourceRefCandidate).limit(1);
+        if (existingEntry && existingEntry.length > 0) {
+          results.push({ persona: evalPersona.name, ok: true, alreadyExisted: true });
+          continue;
+        }
+      }
+      const { data: rubricDocs } = await supabaseAdmin
+        .from('project_persona_documents').select('filename, content_text')
+        .eq('project_id', group.project_id).eq('persona_id', evalPersona.id);
+      const rubricBlock = (rubricDocs || []).map(d =>
+        `[Rubric/criteria: ${d.filename}]\n${(d.content_text || '').slice(0, 8000)}`
+      ).join('\n\n').slice(0, 30000);
+
+      const prompt = `${evalPersona.system_prompt || 'Je bent een formatieve beoordelaar voor een groep VU-studenten epi/biostat.'}
+
+Je krijgt hieronder de leerdoelen/rubric (alléén voor jou — de studenten zien deze niet), het projectmateriaal, en alle gesprekken die de groep met de andere persona's heeft gevoerd. Geef een formatieve beoordeling per leerdoel/criterium. Spreek de studenten aan met "jullie".
+
+Project: ${project?.title || '(naamloos)'}
+Onderzoeksvraag: ${project?.research_question || '(geen)'}
+Leerdoelen: ${project?.goals || '(geen)'}
+
+Verborgen rubric/criteria:
+${rubricBlock || '(geen rubric-bestand gekoppeld; gebruik dan de leerdoelen hierboven)'}
+
+Projectmateriaal:
+${projectDocsBlock || '(geen)'}
+
+Gesprekken van de groep:
+${conversationsBlock || '(geen gesprekken gevonden)'}
+
+Schrijf je beoordeling als markdown met per criterium:
+- **<naam criterium>** (sterk / voldoende / aandacht nodig): 2–3 zinnen feedback met concreet voorbeeld uit de gesprekken.
+
+Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exacte rubric-tekst letterlijk en spoiler de criteria niet.`;
+
+      const gr = await fetch(GROQ_API_URL, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.4, max_tokens: 1800,
+        }),
+      });
+      if (!gr.ok) {
+        const txt = await gr.text();
+        results.push({ persona: evalPersona.name, ok: false, error: `Taalmodel-fout (${gr.status}): ${txt.slice(0, 200)}` });
+        continue;
+      }
+      const gd = await gr.json();
+      const feedback = (gd.choices?.[0]?.message?.content || '').trim();
+      if (!feedback) {
+        results.push({ persona: evalPersona.name, ok: false, error: 'Leeg antwoord' });
+        continue;
+      }
+
+      const sourceRef = `group_evaluate:${groupId}:${evalPersona.id}${requestId ? ':' + requestId : ''}`;
+      const titleLabel = `${evalPersona.avatar_emoji || '🎓'} Beoordeling — ${evalPersona.name}`;
+      const rows = (members || []).map(m => ({
+        user_id: m.user_id,
+        title: titleLabel,
+        content: feedback,
+        activity_type: 'project_reflection',
+        source_ref: sourceRef,
+      }));
+      if (rows.length > 0) {
+        const { error: jErr } = await supabaseAdmin.from('learning_journal_entries').insert(rows);
+        if (jErr) {
+          // Kolom source_ref ontbreekt nog (oudere DB) → schrijf zonder die kolom.
+          // We controleren expliciet op de Postgres-foutcode 42703 (undefined column).
+          if (jErr.code === '42703' || /column.*source_ref/i.test(jErr.message || '')) {
+            const { error: jErr2 } = await supabaseAdmin.from('learning_journal_entries').insert(
+              rows.map(({ source_ref: _ignored, ...rest }) => rest)
+            );
+            if (jErr2) {
+              results.push({ persona: evalPersona.name, ok: false, error: jErr2.message });
+              continue;
+            }
+          } else if (jErr.code === '23505') {
+            // Unique violation op source_ref → reeds aanwezig, geen fout.
+            results.push({ persona: evalPersona.name, ok: true, alreadyExisted: true });
+            continue;
+          } else {
+            results.push({ persona: evalPersona.name, ok: false, error: jErr.message });
+            continue;
+          }
+        }
+      }
+      results.push({ persona: evalPersona.name, ok: true, length: feedback.length });
+    }
+
+    return res.json({ ok: true, results });
+  } catch (err) {
+    console.error('[projects/groups/evaluate]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
+// Kopieer een project-persona terug naar de cursus-bibliotheek (course_personas).
+// Alleen staff. Idempotent: als er al een course_persona met dezelfde naam in
+// dezelfde cursus bestaat, geven we die terug zonder duplicate.
+// =============================================================================
+
+app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const project = access.project;
+    if (!project.course_id) return res.status(400).json({ error: 'Project hangt niet aan een cursus' });
+    const { data: pp } = await supabaseAdmin
+      .from('project_personas').select('*')
+      .eq('id', personaId).eq('project_id', projectId).maybeSingle();
+    if (!pp) return res.status(404).json({ error: 'Persona niet gevonden' });
+
+    const { data: existing } = await supabaseAdmin
+      .from('course_personas').select('id, name')
+      .eq('course_id', project.course_id).eq('name', pp.name).maybeSingle();
+    if (existing) return res.json({ persona: existing, alreadyExists: true });
+
+    const { data: inserted, error: iErr } = await supabaseAdmin
+      .from('course_personas').insert({
+        course_id: project.course_id,
+        name: pp.name,
+        avatar_emoji: pp.avatar_emoji,
+        system_prompt: pp.system_prompt,
+        rag_enabled: pp.rag_enabled,
+        rag_folder_ids: pp.rag_folder_ids,
+        visible_from_phase: pp.visible_from_phase,
+        is_default: false,
+        persona_type: pp.persona_type || 'conversational',
+        created_by: auth.user.id,
+      }).select('*').single();
+    if (iErr) return res.status(500).json({ error: iErr.message });
+    return res.json({ persona: inserted });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

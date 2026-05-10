@@ -33,6 +33,16 @@ Per module (`chat`, `explain`, `quiz`, `project`) en per cursus instelbaar via `
 - ItemBank-config in `chatbot_prompts` rij `__quiz_itembank_config__` (JSON: owner/repo/branch/last_synced_at).
 - `/api/admin/test-rag-similarity` accepteert `{ courseId, query, expand, definition?, keyPoints? }`. Met `expand: true` wordt `expandQuery()` toegepast en bevat het antwoord ook `embedQuery` zodat de admin-UI de verrijkte zoekstring kan tonen. Beschikbaar voor docenten (binnen hun cursussen) en admins.
 
+## Projecten — beheer & beoordelaars (Task #80)
+- `project_personas.persona_type` ∈ {`conversational`, `evaluator`}; ook op `course_personas`. Studenten zien evaluators NIET in `/room`; staff wel.
+- `project_documents` (project-breed) — staff uploadt via `POST /api/projects/:id/documents`, lid leest via `GET`. Tekst wordt automatisch in elke persona-chat geïnjecteerd als blok "Projectmateriaal van de docent".
+- Verborgen rubrics → `project_persona_documents.is_hidden_rubric=true`. Alleen staff mag uploaden, alleen op evaluator-persona's. Lijst-endpoint filtert hidden rubrics weg voor non-staff.
+- `POST /api/projects/groups/:groupId/evaluate` — voert per evaluator de Groq-evaluatie uit (rubric + alle persona-gesprekken + projectdocs), schrijft één journal-entry per groepslid (`source_ref="group_evaluate:<groupId>:<personaId>:<requestId>"`).
+- `POST /api/projects/:projectId/personas/:personaId/copy-to-library` — kopieert project-persona terug naar `course_personas` (idempotent op naam).
+- Checkpoint-endpoint genereert ook 4-regelige Groq-samenvattingen per persona-thread → journal-entry per lid (`source_ref="group_thread_checkpoint:<cp.id>:<thread.id>"`); response bevat `threadSummariesAdded`.
+- Persona-creatie zit in **Projecten → Beheer**; `PersonaLibraryTab` is read-only en dient als hergebruik-bibliotheek.
+- ProjectRoomPage: persona als `<select>`-dropdown, persona-input is auto-resize textarea (Enter=verzenden, Shift+Enter=nieuwe regel, max ≈ 6 regels).
+
 ## Conventies
 - TypeScript strict, geen package.json edits.
 - Data-testids op interactieve elementen.

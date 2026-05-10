@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
-  Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText,
+  Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert,
 } from 'lucide-react';
 
 interface Persona {
@@ -67,6 +67,12 @@ interface PersonaDoc {
   uploaded_by: string | null;
   created_at: string;
 }
+interface ProjectMaterialDoc {
+  id: string;
+  filename: string;
+  byte_size: number | null;
+  created_at: string;
+}
 
 const QUICK_REACTIONS = ['👍', '❤️', '🤔', '✅'];
 
@@ -96,7 +102,13 @@ export function ProjectRoomPage() {
   const [loadingRoom, setLoadingRoom] = useState(true);
   const [personaDocs, setPersonaDocs] = useState<PersonaDoc[]>([]);
   const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [projectMaterials, setProjectMaterials] = useState<ProjectMaterialDoc[]>([]);
+  const [hasEvaluator, setHasEvaluator] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
+  const [evaluateRequestId, setEvaluateRequestId] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const personaInputRef = useRef<HTMLTextAreaElement>(null);
   const personaScrollRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +131,8 @@ export function ProjectRoomPage() {
       setMembers(data.members || []);
       setPersonas(data.personas || []);
       setCheckpoints(data.checkpoints || []);
+      setProjectMaterials(data.projectDocuments || []);
+      setHasEvaluator(!!data.hasEvaluator);
       if (!activePersonaId && data.personas?.length > 0) {
         setActivePersonaId(data.personas[0].id);
       }
@@ -356,6 +370,15 @@ export function ProjectRoomPage() {
       setShowCheckpointModal(null);
       setReflection('');
       setCheckpointRequestId(null);
+      const added = Number(data.threadSummariesAdded || 0);
+      if (added > 0) {
+        const word = added === 1 ? 'gesprekssamenvatting' : 'gesprekssamenvattingen';
+        setInfo(`Checkpoint opgeslagen — ${added} ${word} toegevoegd aan jullie leerdagboeken.`);
+        setTimeout(() => setInfo(null), 6000);
+      } else {
+        setInfo('Checkpoint opgeslagen.');
+        setTimeout(() => setInfo(null), 4000);
+      }
       if (data.checkpoint?.kind === 'final') loadRoom();
     } catch (e: any) {
       setError(e.message);
@@ -368,6 +391,47 @@ export function ProjectRoomPage() {
     if (!group) return;
     navigator.clipboard.writeText(group.invite_code);
   };
+
+  const requestEvaluation = async () => {
+    if (!groupId || !token) return;
+    if (!confirm('Vraag je een formatieve beoordeling aan? De beoordelaar leest jullie gesprekken en zet feedback in elk leerdagboek.')) return;
+    setEvaluating(true);
+    setError(null);
+    try {
+      const requestId = evaluateRequestId || (
+        (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      if (!evaluateRequestId) setEvaluateRequestId(requestId);
+      const r = await fetch(`/api/projects/groups/${groupId}/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ requestId }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Beoordeling mislukt');
+      const okCount = (data.results || []).filter((x: any) => x.ok).length;
+      setInfo(okCount > 0
+        ? `Beoordeling klaar — ${okCount} feedback-rapport(en) staan in jullie leerdagboeken.`
+        : 'Beoordeling voltooid maar er kwam geen feedback terug.');
+      setTimeout(() => setInfo(null), 7000);
+      setEvaluateRequestId(null);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setEvaluating(false);
+    }
+  };
+
+  // Auto-resize textarea: groei tot ~6 regels (≈ 144px), daarna scrollen.
+  useEffect(() => {
+    const ta = personaInputRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const max = 144;
+    ta.style.height = Math.min(ta.scrollHeight, max) + 'px';
+  }, [personaInput]);
 
   const activePersona = personas.find(p => p.id === activePersonaId);
   const isFinalized = group?.status === 'finalized';
@@ -423,6 +487,18 @@ export function ProjectRoomPage() {
               </button>
             </>
           )}
+          {hasEvaluator && (
+            <button
+              onClick={requestEvaluation}
+              disabled={evaluating}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 rounded-lg text-xs font-medium"
+              data-testid="button-request-evaluation"
+              title="Vraag de beoordelaar om formatieve feedback op jullie gesprekken"
+            >
+              {evaluating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldAlert className="w-4 h-4" />}
+              {evaluating ? 'Beoordeelt…' : 'Beoordeling opvragen'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -431,20 +507,24 @@ export function ProjectRoomPage() {
         {/* LEFT: persona-chat */}
         <div className="lg:col-span-7 flex flex-col bg-white rounded-xl border border-gray-200 min-h-0">
           <div className="border-b border-gray-200 p-3 space-y-2">
-            <div className="flex items-center gap-2 overflow-x-auto pb-1">
-              {personas.map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => setActivePersonaId(p.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm whitespace-nowrap ${
-                    activePersonaId === p.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                  data-testid={`button-persona-${p.id}`}
-                >
-                  <span>{p.avatar_emoji || '🤖'}</span>
-                  <span>{p.name}</span>
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <label htmlFor="persona-select" className="text-xs font-medium text-gray-600 flex items-center gap-1">
+                <Bot className="w-4 h-4" /> Persona
+              </label>
+              <select
+                id="persona-select"
+                value={activePersonaId || ''}
+                onChange={e => setActivePersonaId(e.target.value || null)}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                data-testid="select-persona"
+              >
+                {personas.length === 0 && <option value="">(geen persona's beschikbaar)</option>}
+                {personas.map(p => (
+                  <option key={p.id} value={p.id} data-testid={`option-persona-${p.id}`}>
+                    {(p.avatar_emoji || '🤖')} {p.name}
+                  </option>
+                ))}
+              </select>
             </div>
             {activePersona && activePersonaId !== '__default__' && (
               <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
@@ -505,14 +585,21 @@ export function ProjectRoomPage() {
             )}
           </div>
           <div className="border-t border-gray-200 p-3">
-            <div className="flex gap-2">
-              <input
+            <div className="flex gap-2 items-end">
+              <textarea
+                ref={personaInputRef}
                 value={personaInput}
                 onChange={e => setPersonaInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendPersona())}
-                placeholder={activePersona ? `Vraag iets aan ${activePersona.name}…` : 'Kies eerst een persona'}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendPersona();
+                  }
+                }}
+                placeholder={activePersona ? `Vraag iets aan ${activePersona.name}… (Shift+Enter = nieuwe regel)` : 'Kies eerst een persona'}
                 disabled={!activePersona || personaLoading || isFinalized}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50"
+                rows={1}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[40px] max-h-36"
                 data-testid="input-persona-message"
               />
               <button
@@ -603,6 +690,22 @@ export function ProjectRoomPage() {
             ) : (
               <p className="text-xs text-gray-400 italic">Geen briefing ingesteld.</p>
             )}
+            {projectMaterials.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-gray-100">
+                <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
+                  <FileText className="w-3 h-3" /> Projectmateriaal van de docent ({projectMaterials.length})
+                </div>
+                <ul className="text-xs text-gray-600 space-y-0.5">
+                  {projectMaterials.map(d => (
+                    <li key={d.id} className="flex items-center gap-1.5" data-testid={`project-material-${d.id}`}>
+                      <FileText className="w-3 h-3 text-gray-400" />
+                      <span className="truncate" title={d.filename}>{d.filename}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[10px] text-gray-400 mt-1">Alle persona's hebben deze documenten automatisch bij de hand.</p>
+              </div>
+            )}
             {Array.isArray(project.rubric_criteria) && project.rubric_criteria.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
                 <div className="text-xs font-semibold text-gray-700 mb-1">Rubriek</div>
@@ -638,6 +741,12 @@ export function ProjectRoomPage() {
         <div className="fixed bottom-4 right-4 bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm" data-testid="text-error">
           {error}
           <button onClick={() => setError(null)} className="ml-2 font-bold">×</button>
+        </div>
+      )}
+      {info && (
+        <div className="fixed bottom-4 right-4 bg-green-50 border border-green-200 text-green-800 px-4 py-2 rounded-lg text-sm" data-testid="text-info">
+          {info}
+          <button onClick={() => setInfo(null)} className="ml-2 font-bold">×</button>
         </div>
       )}
 

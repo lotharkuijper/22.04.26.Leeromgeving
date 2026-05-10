@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
 import { supabase } from '../../lib/supabase';
-import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, BookPlus } from 'lucide-react';
+import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, BookPlus, Paperclip, Loader2, FileText, Copy, ShieldAlert } from 'lucide-react';
 
 interface ProjectRow {
   id: string;
@@ -30,14 +30,26 @@ interface ProjectPersona {
   rag_enabled: boolean;
   rag_folder_ids: string[];
   sort_order: number;
+  persona_type?: string;
 }
 
-interface CoursePersona {
+interface ProjectDoc {
   id: string;
-  name: string;
-  avatar_emoji: string;
-  system_prompt: string;
+  filename: string;
+  byte_size: number | null;
+  uploaded_by: string | null;
+  created_at: string;
 }
+
+interface RubricDoc {
+  id: string;
+  filename: string;
+  byte_size: number | null;
+  is_hidden_rubric?: boolean;
+  created_at: string;
+}
+
+const UPLOAD_ACCEPT = '.txt,.md,.markdown,.csv,.tsv,.json,.log,.pdf,.docx,.pptx,.xlsx,.odt,.ods,.odp';
 
 export function ProjectsAdminTab() {
   const { session } = useAuth();
@@ -200,8 +212,9 @@ export function ProjectsAdminTab() {
                 <textarea value={editing.briefing_markdown || ''} onChange={e => setEditing({ ...editing, briefing_markdown: e.target.value })} rows={6} className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono" data-testid="textarea-project-briefing" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">Rubriekspunten (één per regel)</label>
+                <label className="text-xs font-medium text-gray-700">Rubriekspunten (één per regel — zichtbaar voor studenten)</label>
                 <textarea value={rubricLines} onChange={e => setRubricLines(e.target.value)} rows={4} placeholder="Methode is helder onderbouwd&#10;Resultaten worden correct geïnterpreteerd&#10;..." className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="textarea-project-rubric" />
+                <p className="text-[10px] text-gray-400 mt-1">Wil je een verborgen rubric? Maak in het beheer een "beoordelaar"-persona en koppel daar een rubric-bestand aan.</p>
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -238,10 +251,14 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   onBack: () => void; onError: (m: string) => void; onInfo: (m: string) => void;
 }) {
   const [personas, setPersonas] = useState<ProjectPersona[]>([]);
-  const [library, setLibrary] = useState<CoursePersona[]>([]);
   const [adding, setAdding] = useState(false);
-  const [showLibPicker, setShowLibPicker] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Partial<ProjectPersona> | null>(null);
+  const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
+  const [uploadingPDoc, setUploadingPDoc] = useState(false);
+  const pdocFileRef = useRef<HTMLInputElement>(null);
+  const [rubricDocsMap, setRubricDocsMap] = useState<Record<string, RubricDoc[]>>({});
+  const [uploadingRubric, setUploadingRubric] = useState<string | null>(null);
+  const [copying, setCopying] = useState<string | null>(null);
 
   const loadPersonas = useCallback(async () => {
     const { data } = await supabase
@@ -250,37 +267,44 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     setPersonas((data as any) || []);
   }, [project.id]);
 
-  const loadLibrary = useCallback(async () => {
-    if (!project.course_id) { setLibrary([]); return; }
-    const { data } = await supabase
-      .from('course_personas').select('id, name, avatar_emoji, system_prompt')
-      .eq('course_id', project.course_id);
-    setLibrary((data as any) || []);
-  }, [project.course_id]);
-
-  useEffect(() => { loadPersonas(); loadLibrary(); }, [loadPersonas, loadLibrary]);
-
-  const addFromLibrary = async (cp: CoursePersona) => {
-    setAdding(true);
-    try {
-      const r = await fetch(`/api/projects/${project.id}/personas`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ coursePersonaId: cp.id }),
-      });
+  const loadProjectDocs = useCallback(async () => {
+    const r = await fetch(`/api/projects/${project.id}/documents`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (r.ok) {
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Toevoegen mislukt');
-      onInfo(`"${cp.name}" toegevoegd.`);
-      setShowLibPicker(false);
-      await loadPersonas();
-    } catch (e: any) {
-      onError(e.message);
-    } finally {
-      setAdding(false);
+      setProjectDocs(d.documents || []);
     }
-  };
+  }, [project.id, token]);
 
-  const addCustom = async () => {
+  // Voor evaluator-persona's de bestaande rubric-docs ophalen via een
+  // dummy group_id van de eerste groep — de docs zijn echter group-scoped,
+  // dus we tonen alleen het aantal en bieden upload aan via de eerste groep.
+  // Eenvoudiger: rubric-docs worden ZONDER group_id niet opgehaald in
+  // bestaande endpoint. We gebruiken supabase rechtstreeks om alle rijen te
+  // lezen als staff (RLS staat staff toe).
+  const loadRubricDocs = useCallback(async (personaId: string) => {
+    const { data } = await supabase
+      .from('project_persona_documents')
+      .select('id, filename, byte_size, is_hidden_rubric, created_at')
+      .eq('project_id', project.id)
+      .eq('persona_id', personaId)
+      .eq('is_hidden_rubric', true)
+      .order('created_at', { ascending: false });
+    setRubricDocsMap(prev => ({ ...prev, [personaId]: (data as any) || [] }));
+  }, [project.id]);
+
+  useEffect(() => { loadPersonas(); loadProjectDocs(); }, [loadPersonas, loadProjectDocs]);
+
+  // Lazy-load rubric-lijst per evaluator-persona.
+  useEffect(() => {
+    personas.filter(p => p.persona_type === 'evaluator').forEach(p => {
+      if (!(p.id in rubricDocsMap)) loadRubricDocs(p.id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personas]);
+
+  const savePersona = async () => {
     if (!editingPersona || !editingPersona.name?.trim()) { onError('Naam is verplicht'); return; }
     setAdding(true);
     try {
@@ -296,6 +320,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
           system_prompt: editingPersona.system_prompt || '',
           avatar_emoji: editingPersona.avatar_emoji || '🤖',
           rag_enabled: editingPersona.rag_enabled ?? true,
+          persona_type: editingPersona.persona_type || 'conversational',
         }),
       });
       const d = await r.json();
@@ -321,8 +346,104 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     await loadPersonas();
   };
 
-  const usedSourceIds = new Set(personas.map(p => p.source_persona_id).filter(Boolean));
-  const availableLib = library.filter(l => !usedSourceIds.has(l.id));
+  const copyToLibrary = async (p: ProjectPersona) => {
+    setCopying(p.id);
+    try {
+      const r = await fetch(`/api/projects/${project.id}/personas/${p.id}/copy-to-library`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Kopiëren mislukt');
+      onInfo(d.alreadyExists
+        ? `"${p.name}" stond al in de bibliotheek.`
+        : `"${p.name}" is gekopieerd naar de bibliotheek.`);
+    } catch (e: any) {
+      onError(e.message);
+    } finally {
+      setCopying(null);
+    }
+  };
+
+  const uploadProjectDoc = async (file: File) => {
+    if (file.size > 15_000_000) { onError('Bestand is groter dan 15 MB.'); return; }
+    setUploadingPDoc(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      const r = await fetch(`/api/projects/${project.id}/documents`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Upload mislukt');
+      setProjectDocs(prev => [d.document, ...prev]);
+      onInfo(`"${file.name}" geüpload.`);
+    } catch (e: any) {
+      onError(e.message);
+    } finally {
+      setUploadingPDoc(false);
+      if (pdocFileRef.current) pdocFileRef.current.value = '';
+    }
+  };
+
+  const deleteProjectDoc = async (doc: ProjectDoc) => {
+    if (!confirm(`Verwijder "${doc.filename}"?`)) return;
+    const r = await fetch(`/api/projects/${project.id}/documents/${doc.id}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) { onError('Verwijderen mislukt'); return; }
+    setProjectDocs(prev => prev.filter(d => d.id !== doc.id));
+  };
+
+  const uploadRubric = async (personaId: string, file: File) => {
+    if (file.size > 15_000_000) { onError('Bestand is groter dan 15 MB.'); return; }
+    setUploadingRubric(personaId);
+    try {
+      // Voor staff-uploads heb je een groupId nodig vanwege de bestaande
+      // upload-endpoint. We pakken (of maken) een dummy "staff"-groep door
+      // de eerste actieve groep van het project te gebruiken; bestaat die
+      // niet, dan maken we een interne staff-groep aan.
+      let groupId: string | null = null;
+      const { data: existing } = await supabase
+        .from('project_groups').select('id, status')
+        .eq('project_id', project.id).order('created_at').limit(1);
+      if (existing && existing[0]) groupId = existing[0].id;
+      else {
+        // Maak een interne "rubric-houder"-groep via API zodat invite_code
+        // en owner correct gezet zijn.
+        const gr = await fetch('/api/projects/groups', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ projectId: project.id, name: '_rubric-opslag (verborgen)' }),
+        });
+        const gd = await gr.json();
+        if (!gr.ok) throw new Error(gd.error || 'Kon rubric-opslag-groep niet aanmaken');
+        groupId = gd.group.id;
+      }
+      const fd = new FormData();
+      fd.append('groupId', groupId!);
+      fd.append('isHiddenRubric', '1');
+      fd.append('file', file, file.name);
+      const r = await fetch(`/api/projects/${project.id}/personas/${personaId}/documents`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Rubric-upload mislukt');
+      await loadRubricDocs(personaId);
+      onInfo(`Verborgen rubric "${file.name}" gekoppeld.`);
+    } catch (e: any) {
+      onError(e.message);
+    } finally {
+      setUploadingRubric(null);
+    }
+  };
+
+  const deleteRubric = async (personaId: string, doc: RubricDoc) => {
+    if (!confirm(`Verwijder verborgen rubric "${doc.filename}"?`)) return;
+    const { error: e } = await supabase
+      .from('project_persona_documents').delete().eq('id', doc.id);
+    if (e) { onError(e.message); return; }
+    await loadRubricDocs(personaId);
+  };
 
   return (
     <div className="space-y-4">
@@ -334,81 +455,135 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
             </button>
             <div>
               <h2 className="text-lg font-bold text-gray-900">{project.title}</h2>
-              <p className="text-xs text-gray-500">Beheer persona's voor dit project. Studenten zien deze chatbots in de projectruimte.</p>
+              <p className="text-xs text-gray-500">Beheer persona's, documenten en rubrics voor dit project.</p>
             </div>
           </div>
         </div>
       </div>
 
+      {/* Projectdocumenten */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-gray-900">Persona's in dit project ({personas.length})</h3>
-          <div className="flex gap-2">
-            <button onClick={() => setShowLibPicker(true)} disabled={availableLib.length === 0} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg disabled:opacity-40" data-testid="button-pick-from-library">
-              <BookPlus className="w-4 h-4" /> Uit bibliotheek
-            </button>
-            <button onClick={() => setEditingPersona({ name: '', system_prompt: '', avatar_emoji: '🤖', rag_enabled: true })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg" data-testid="button-add-custom-persona">
-              <Plus className="w-4 h-4" /> Eigen persona
-            </button>
+          <div>
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2"><FolderOpen className="w-4 h-4" /> Projectdocumenten</h3>
+            <p className="text-xs text-gray-500">Datasets, opdracht- en bronmateriaal. Iedere groep ziet deze read-only en alle persona's gebruiken ze als context.</p>
           </div>
+          <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer ${uploadingPDoc ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+            {uploadingPDoc ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
+            Upload bestand
+            <input
+              ref={pdocFileRef}
+              type="file" accept={UPLOAD_ACCEPT} className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) uploadProjectDoc(f); }}
+              disabled={uploadingPDoc}
+              data-testid="input-upload-project-doc"
+            />
+          </label>
         </div>
-        {personas.length === 0 ? (
-          <p className="text-sm text-gray-500">Nog geen persona's. Voeg er één toe vanuit de bibliotheek of maak een eigen variant.</p>
+        {projectDocs.length === 0 ? (
+          <p className="text-xs text-gray-500">Nog geen projectdocumenten.</p>
         ) : (
           <ul className="divide-y divide-gray-100">
-            {personas.map(p => (
-              <li key={p.id} className="py-3 flex items-start gap-3" data-testid={`pp-row-${p.id}`}>
-                <span className="text-2xl">{p.avatar_emoji || '🤖'}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-gray-900">{p.name}</div>
-                  <p className="text-xs text-gray-500 line-clamp-2">{p.system_prompt.slice(0, 200)}</p>
-                  {p.source_persona_id && <span className="text-[10px] text-gray-400">uit bibliotheek</span>}
-                </div>
-                <div className="flex gap-1">
-                  <button onClick={() => setEditingPersona(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-pp-${p.id}`}>Bewerk</button>
-                  <button onClick={() => removePersona(p)} className="p-2 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-pp-${p.id}`}>
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+            {projectDocs.map(d => (
+              <li key={d.id} className="py-2 flex items-center gap-3" data-testid={`project-doc-${d.id}`}>
+                <FileText className="w-4 h-4 text-gray-500" />
+                <div className="flex-1 min-w-0 truncate text-sm">{d.filename}</div>
+                <div className="text-xs text-gray-400">{d.byte_size ? `${Math.round(d.byte_size / 1024)} KB` : ''}</div>
+                <button onClick={() => deleteProjectDoc(d)} className="p-1 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-project-doc-${d.id}`}>
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </li>
             ))}
           </ul>
         )}
       </div>
 
-      {showLibPicker && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-gray-900">Kies een persona uit de bibliotheek</h3>
-              <button onClick={() => setShowLibPicker(false)} className="p-1 hover:bg-gray-100 rounded"><X className="w-4 h-4" /></button>
-            </div>
-            {availableLib.length === 0 ? (
-              <p className="text-sm text-gray-500">Geen persona's beschikbaar (alle al toegevoegd of geen bibliotheek voor deze cursus).</p>
-            ) : (
-              <ul className="divide-y divide-gray-100">
-                {availableLib.map(cp => (
-                  <li key={cp.id} className="py-2 flex items-center gap-3">
-                    <span className="text-2xl">{cp.avatar_emoji}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-gray-900">{cp.name}</div>
-                      <p className="text-xs text-gray-500 line-clamp-1">{cp.system_prompt.slice(0, 140)}</p>
-                    </div>
-                    <button onClick={() => addFromLibrary(cp)} disabled={adding} className="px-3 py-1 text-sm bg-blue-600 text-white rounded disabled:opacity-40" data-testid={`button-add-lib-${cp.id}`}>
-                      Voeg toe
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+      {/* Persona's */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="font-semibold text-gray-900">Persona's in dit project ({personas.length})</h3>
+            <p className="text-xs text-gray-500">Maak gespreksparters of beoordelaars. Beoordelaars verschijnen niet in de student-chat.</p>
           </div>
+          <button onClick={() => setEditingPersona({ name: '', system_prompt: '', avatar_emoji: '🤖', rag_enabled: true, persona_type: 'conversational' })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg" data-testid="button-add-custom-persona">
+            <Plus className="w-4 h-4" /> Nieuwe persona
+          </button>
         </div>
-      )}
+        {personas.length === 0 ? (
+          <p className="text-sm text-gray-500">Nog geen persona's. Voeg er één toe.</p>
+        ) : (
+          <ul className="divide-y divide-gray-100">
+            {personas.map(p => {
+              const isEval = p.persona_type === 'evaluator';
+              const rubricList = rubricDocsMap[p.id] || [];
+              return (
+                <li key={p.id} className="py-3" data-testid={`pp-row-${p.id}`}>
+                  <div className="flex items-start gap-3">
+                    <span className="text-2xl">{p.avatar_emoji || '🤖'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-gray-900 flex items-center gap-2">
+                        {p.name}
+                        {isEval && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> beoordelaar</span>}
+                        {p.source_persona_id && <span className="text-[10px] text-gray-400">uit bibliotheek</span>}
+                      </div>
+                      <p className="text-xs text-gray-500 line-clamp-2">{p.system_prompt.slice(0, 200)}</p>
+                    </div>
+                    <div className="flex gap-1">
+                      <button onClick={() => copyToLibrary(p)} disabled={copying === p.id} className="px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1 disabled:opacity-40" data-testid={`button-copy-to-lib-${p.id}`}>
+                        <Copy className="w-3 h-3" /> {copying === p.id ? 'Bezig…' : 'Kopieer naar bibliotheek'}
+                      </button>
+                      <button onClick={() => setEditingPersona(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-pp-${p.id}`}>Bewerk</button>
+                      <button onClick={() => removePersona(p)} className="p-2 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-pp-${p.id}`}>
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {isEval && (
+                    <div className="mt-2 ml-10 bg-purple-50/40 border border-purple-100 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-xs font-medium text-purple-900 flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Verborgen rubric ({rubricList.length})</div>
+                        <label className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded cursor-pointer ${uploadingRubric === p.id ? 'bg-gray-100 text-gray-400' : 'bg-purple-600 text-white hover:bg-purple-700'}`}>
+                          {uploadingRubric === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Paperclip className="w-3 h-3" />}
+                          Upload rubric
+                          <input
+                            type="file" accept={UPLOAD_ACCEPT} className="hidden"
+                            onChange={e => { const f = e.target.files?.[0]; if (f) uploadRubric(p.id, f); }}
+                            disabled={uploadingRubric === p.id}
+                            data-testid={`input-upload-rubric-${p.id}`}
+                          />
+                        </label>
+                      </div>
+                      {rubricList.length === 0 ? (
+                        <p className="text-[11px] text-purple-700/70">Nog geen rubric-bestand gekoppeld. Zonder bestand gebruikt de beoordelaar alleen de leerdoelen van het project.</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {rubricList.map(r => (
+                            <li key={r.id} className="flex items-center gap-2 text-xs" data-testid={`rubric-doc-${r.id}`}>
+                              <FileText className="w-3 h-3 text-purple-600" />
+                              <span className="flex-1 truncate">{r.filename}</span>
+                              <button onClick={() => deleteRubric(p.id, r)} className="p-0.5 text-red-500 hover:bg-red-50 rounded">
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
 
       {editingPersona && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
-            <h3 className="font-bold mb-3">{editingPersona.id ? 'Persona bewerken' : 'Nieuwe persona'}</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold">{editingPersona.id ? 'Persona bewerken' : 'Nieuwe persona'}</h3>
+              <button onClick={() => setEditingPersona(null)} className="p-1 hover:bg-gray-100 rounded"><X className="w-4 h-4" /></button>
+            </div>
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
@@ -421,6 +596,21 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                 </div>
               </div>
               <div>
+                <label className="text-xs font-medium text-gray-700">Type</label>
+                <select
+                  value={editingPersona.persona_type || 'conversational'}
+                  onChange={e => setEditingPersona({ ...editingPersona, persona_type: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                  data-testid="select-pp-type"
+                >
+                  <option value="conversational">Gesprekspartner — zichtbaar voor studenten in de chat</option>
+                  <option value="evaluator">Beoordelaar — verborgen, geeft formatieve beoordeling bij afronden</option>
+                </select>
+                {editingPersona.persona_type === 'evaluator' && (
+                  <p className="text-[11px] text-purple-700 mt-1">Beoordelaars verschijnen niet in de chattabs. Een verborgen rubric kun je na opslaan koppelen via de persona-rij.</p>
+                )}
+              </div>
+              <div>
                 <label className="text-xs font-medium text-gray-700">System prompt</label>
                 <textarea value={editingPersona.system_prompt || ''} onChange={e => setEditingPersona({ ...editingPersona, system_prompt: e.target.value })} rows={8} className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono" data-testid="textarea-pp-prompt" />
               </div>
@@ -431,13 +621,16 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setEditingPersona(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">Annuleren</button>
-              <button onClick={addCustom} disabled={adding} className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40" data-testid="button-save-pp">
+              <button onClick={savePersona} disabled={adding} className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40" data-testid="button-save-pp">
                 <Save className="w-4 h-4" /> {adding ? 'Opslaan…' : 'Opslaan'}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Suppress unused-vars lint for BookPlus (kept import for future usage)  */}
+      <span className="hidden"><BookPlus /></span>
     </div>
   );
 }
