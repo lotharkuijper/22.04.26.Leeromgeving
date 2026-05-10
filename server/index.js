@@ -4916,6 +4916,99 @@ app.get('/api/projects/persona-thread', async (req, res) => {
   }
 });
 
+// POST /api/projects/groups/:groupId/checkpoint-preview — genereer AI-samenvattingen
+// per persona-thread ter preview vóór opslaan. Geen DB-schrijven.
+// Response: { threads: [{ threadId, personaId, personaName, avatarEmoji, studentSummary, personaSummary }] }
+app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { groupId } = req.params;
+
+  try {
+    if (!(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
+
+    // Gebruik berichten ná de laatste checkpoint.
+    const { data: prevCps } = await supabaseAdmin
+      .from('group_checkpoints')
+      .select('created_at')
+      .eq('group_id', groupId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const sinceTs = prevCps && prevCps[0] ? prevCps[0].created_at : '1970-01-01T00:00:00Z';
+
+    const { data: threads } = await supabaseAdmin
+      .from('group_persona_threads').select('id, persona_id').eq('group_id', groupId);
+
+    const result = [];
+    for (const t of (threads || [])) {
+      const { data: newMsgs } = await supabaseAdmin
+        .from('group_persona_messages')
+        .select('role, content')
+        .eq('thread_id', t.id)
+        .gt('created_at', sinceTs)
+        .order('created_at', { ascending: true });
+      if (!newMsgs || newMsgs.length === 0) continue;
+
+      const { data: persona } = await supabaseAdmin
+        .from('project_personas').select('name, avatar_emoji').eq('id', t.persona_id).maybeSingle();
+      const personaName = persona?.name || 'Gesprek';
+      const avatarEmoji = persona?.avatar_emoji || '💬';
+
+      const userText = newMsgs.filter(m => m.role === 'user').map(m => (m.content || '').slice(0, 2000)).join('\n\n').slice(0, 8000);
+      const asstText = newMsgs.filter(m => m.role === 'assistant').map(m => (m.content || '').slice(0, 2000)).join('\n\n').slice(0, 12000);
+
+      let studentSummary = '';
+      let personaSummary = '';
+      try {
+        if (userText.trim()) {
+          const r1 = await fetch(GROQ_API_URL, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'llama-3.3-70b-versatile',
+              messages: [{ role: 'user', content: `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
+              temperature: 0.3, max_tokens: 300,
+            }),
+          });
+          if (r1.ok) studentSummary = ((await r1.json()).choices?.[0]?.message?.content || '').trim();
+        }
+        if (asstText.trim()) {
+          const r2 = await fetch(GROQ_API_URL, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'llama-3.3-70b-versatile',
+              messages: [{ role: 'user', content: `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
+              temperature: 0.3, max_tokens: 600,
+            }),
+          });
+          if (r2.ok) personaSummary = ((await r2.json()).choices?.[0]?.message?.content || '').trim();
+        }
+      } catch (e) {
+        console.error('[checkpoint-preview] Groq fout:', e.message);
+      }
+      if (!studentSummary) {
+        const first = newMsgs.find(m => m.role === 'user');
+        studentSummary = (first?.content || '').slice(0, 400);
+      }
+      if (!personaSummary) {
+        const first = newMsgs.find(m => m.role === 'assistant');
+        personaSummary = (first?.content || '').slice(0, 600);
+      }
+      result.push({ threadId: t.id, personaId: t.persona_id, personaName, avatarEmoji, studentSummary, personaSummary });
+    }
+    return res.json({ threads: result });
+  } catch (err) {
+    console.error('[checkpoint-preview]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/projects/groups/:groupId/checkpoint — sla een checkpoint op.
 // kind = 'checkpoint' (tussentijds) of 'final' (afronden).
 // Bij 'checkpoint': AI vat reflectie samen → één journal-entry per lid.
@@ -4925,12 +5018,16 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId } = req.params;
-  const { kind = 'checkpoint', reflection, requestId } = req.body || {};
+  const { kind = 'checkpoint', reflection, requestId, personaSummaries } = req.body || {};
   if (!['checkpoint', 'final'].includes(kind)) {
     return res.status(400).json({ error: "kind moet 'checkpoint' of 'final' zijn" });
   }
-  if (!reflection || typeof reflection !== 'string' || reflection.trim().length < 20) {
-    return res.status(400).json({ error: 'Reflectie van minimaal 20 tekens vereist' });
+  // Bij kind='checkpoint' met AI-preview-samenvattingen is een handmatige reflectie niet vereist.
+  const hasPersonaSummaries = kind === 'checkpoint' && Array.isArray(personaSummaries) && personaSummaries.length > 0;
+  if (!hasPersonaSummaries) {
+    if (!reflection || typeof reflection !== 'string' || reflection.trim().length < 20) {
+      return res.status(400).json({ error: 'Reflectie van minimaal 20 tekens vereist' });
+    }
   }
 
   try {
@@ -5015,7 +5112,8 @@ Geen tekst buiten de JSON.`;
       } catch {
         aiSummary = raw;
       }
-    } else {
+    } else if (!hasPersonaSummaries) {
+      // Geen AI-preview-samenvattingen: vat de handmatige reflectietekst samen.
       const prompt = `Je bent een "critical friend" voor een groep VU-studenten epi/biostat. Hieronder schrijft een groep een tussentijdse reflectie op hun project. Schrijf in 6-10 regels, in het Nederlands, gericht aan de groep ("jullie"), een formatief verslag: wat valt op aan jullie aanpak, waar zit nog twijfel of een gat, en welke concrete vervolgstap ligt voor de hand. Geen aanhef, geen afsluitende groet.
 
 Project: ${project?.title || '(naamloos)'}
@@ -5037,11 +5135,19 @@ ${reflection}`;
       const data = await groqResp.json();
       aiSummary = data.choices?.[0]?.message?.content || '';
     }
+    // hasPersonaSummaries: aiSummary blijft leeg — journalinhoud zit in personaSummaries.
+
+    // Bouw reflectietekst op: bij AI-preview is de reflectie de samenvattingen zelf.
+    const storedReflection = hasPersonaSummaries
+      ? (personaSummaries || []).map(s =>
+          `${s.avatarEmoji || '💬'} ${s.personaName || 'Gesprek'}\nStudent: ${s.studentSummary || ''}\nPersona: ${s.personaSummary || ''}`
+        ).join('\n\n')
+      : (reflection || '');
 
     const insertRow = {
       group_id: groupId,
       kind,
-      reflection,
+      reflection: storedReflection,
       ai_summary: aiSummary,
       rubric_feedback: rubricFeedback,
       created_by: auth.user.id,
@@ -5105,92 +5211,123 @@ ${reflection}`;
       }
     }
 
-    // Per-persona-thread mini-samenvatting (4 regels), één journal-entry per
-    // groepslid per thread met nieuwe berichten sinds vorige checkpoint van
-    // dezelfde kind. Dedupe via source_ref = "group_thread_checkpoint:<cp.id>:<thread.id>".
+    // Per-persona-thread journal-entries:
+    // Pad A: personaSummaries meegestuurd (AI-preview-flow) → gebruik die direct.
+    // Pad B: geen personaSummaries (handmatige reflectie-flow) → genereer 4-regels-samenvatting.
     let threadSummariesAdded = 0;
     try {
-      const apiKey2 = process.env.GROQ_API_KEY;
-      const { data: prevCps } = await supabaseAdmin
-        .from('group_checkpoints')
-        .select('created_at')
-        .eq('group_id', groupId)
-        .lt('created_at', cp.created_at)
-        .order('created_at', { ascending: false })
-        .limit(1);
-      const sinceTs = prevCps && prevCps[0] ? prevCps[0].created_at : '1970-01-01T00:00:00Z';
+      if (hasPersonaSummaries) {
+        // Pad A: sla de door de student bewerkte samenvattingen op als journal-entries.
+        for (const s of personaSummaries) {
+          if (!s.threadId) continue;
+          const content = [
+            s.studentSummary ? `**Inbreng student:**\n${s.studentSummary}` : '',
+            s.personaSummary ? `**Reactie van ${s.personaName || 'persona'}:**\n${s.personaSummary}` : '',
+          ].filter(Boolean).join('\n\n');
+          if (!content.trim()) continue;
 
-      const { data: threads } = await supabaseAdmin
-        .from('group_persona_threads')
-        .select('id, persona_id')
-        .eq('group_id', groupId);
-
-      for (const t of (threads || [])) {
-        const { data: newMsgs } = await supabaseAdmin
-          .from('group_persona_messages')
-          .select('role, content')
-          .eq('thread_id', t.id)
-          .gt('created_at', sinceTs)
-          .order('created_at', { ascending: true });
-        if (!newMsgs || newMsgs.length === 0) continue;
-
-        const { data: persona } = await supabaseAdmin
-          .from('project_personas').select('name, avatar_emoji')
-          .eq('id', t.persona_id).maybeSingle();
-        const personaName = persona?.name || 'Gesprek';
-        const transcript = newMsgs.map(m =>
-          `${m.role === 'user' ? 'Student' : personaName}: ${(m.content || '').slice(0, 1500)}`
-        ).join('\n\n').slice(0, 12000);
-
-        let summaryText = '';
-        if (apiKey2) {
-          try {
-            const sumPrompt = `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
-            const sr = await fetch(GROQ_API_URL, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${apiKey2}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                model: 'llama-3.3-70b-versatile',
-                messages: [{ role: 'user', content: sumPrompt }],
-                temperature: 0.3, max_tokens: 350,
-              }),
-            });
-            if (sr.ok) {
-              const sd = await sr.json();
-              summaryText = (sd.choices?.[0]?.message?.content || '').trim();
-            }
-          } catch { /* val terug op eerste user-bericht */ }
-        }
-        if (!summaryText) {
-          const firstUser = newMsgs.find(m => m.role === 'user');
-          summaryText = (firstUser?.content || '(geen samenvatting beschikbaar)').slice(0, 400);
-        }
-
-        const sourceRef = `group_thread_checkpoint:${cp.id}:${t.id}`;
-        const titleLabel = `${persona?.avatar_emoji || '💬'} ${personaName}`;
-        const tRows = (members || []).map(m => ({
-          user_id: m.user_id,
-          title: titleLabel,
-          content: summaryText,
-          activity_type: 'project_reflection',
-          source_ref: sourceRef,
-        }));
-        if (tRows.length > 0) {
-          const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
-          if (tjErr) {
-            if (tjErr.code === '42703' || /column.*source_ref/i.test(tjErr.message || '')) {
-              // Oude DB zonder source_ref-kolom: opnieuw zonder die kolom.
-              await supabaseAdmin.from('learning_journal_entries').insert(
-                tRows.map(({ source_ref: _ignored, ...rest }) => rest)
-              );
-              threadSummariesAdded += 1;
-            } else if (tjErr.code === '23505') {
-              // Reeds aanwezig — geen extra entry maar ook geen fout.
+          const sourceRef = `group_thread_checkpoint:${cp.id}:${s.threadId}`;
+          const titleLabel = `${s.avatarEmoji || '💬'} ${s.personaName || 'Gesprek'}`;
+          const tRows = (members || []).map(m => ({
+            user_id: m.user_id,
+            title: titleLabel,
+            content,
+            activity_type: 'project_reflection',
+            source_ref: sourceRef,
+          }));
+          if (tRows.length > 0) {
+            const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
+            if (tjErr) {
+              if (tjErr.code === '42703' || /column.*source_ref/i.test(tjErr.message || '')) {
+                await supabaseAdmin.from('learning_journal_entries').insert(
+                  tRows.map(({ source_ref: _ignored, ...rest }) => rest)
+                );
+                threadSummariesAdded += 1;
+              } else if (tjErr.code !== '23505') {
+                console.error('[checkpoint thread summary insert A]', tjErr.message);
+              }
             } else {
-              console.error('[checkpoint thread summary insert]', tjErr.message);
+              threadSummariesAdded += 1;
             }
-          } else {
-            threadSummariesAdded += 1;
+          }
+        }
+      } else {
+        // Pad B: genereer 4-regels-samenvatting per thread (bestaande logica).
+        const apiKey2 = process.env.GROQ_API_KEY;
+        const { data: prevCps } = await supabaseAdmin
+          .from('group_checkpoints')
+          .select('created_at')
+          .eq('group_id', groupId)
+          .lt('created_at', cp.created_at)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        const sinceTs = prevCps && prevCps[0] ? prevCps[0].created_at : '1970-01-01T00:00:00Z';
+
+        const { data: threads } = await supabaseAdmin
+          .from('group_persona_threads').select('id, persona_id').eq('group_id', groupId);
+
+        for (const t of (threads || [])) {
+          const { data: newMsgs } = await supabaseAdmin
+            .from('group_persona_messages')
+            .select('role, content')
+            .eq('thread_id', t.id)
+            .gt('created_at', sinceTs)
+            .order('created_at', { ascending: true });
+          if (!newMsgs || newMsgs.length === 0) continue;
+
+          const { data: persona } = await supabaseAdmin
+            .from('project_personas').select('name, avatar_emoji').eq('id', t.persona_id).maybeSingle();
+          const personaName = persona?.name || 'Gesprek';
+          const transcript = newMsgs.map(m =>
+            `${m.role === 'user' ? 'Student' : personaName}: ${(m.content || '').slice(0, 1500)}`
+          ).join('\n\n').slice(0, 12000);
+
+          let summaryText = '';
+          if (apiKey2) {
+            try {
+              const sumPrompt = `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
+              const sr = await fetch(GROQ_API_URL, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${apiKey2}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model: 'llama-3.3-70b-versatile',
+                  messages: [{ role: 'user', content: sumPrompt }],
+                  temperature: 0.3, max_tokens: 350,
+                }),
+              });
+              if (sr.ok) summaryText = ((await sr.json()).choices?.[0]?.message?.content || '').trim();
+            } catch { /* val terug */ }
+          }
+          if (!summaryText) {
+            const firstUser = newMsgs.find(m => m.role === 'user');
+            summaryText = (firstUser?.content || '(geen samenvatting beschikbaar)').slice(0, 400);
+          }
+
+          const sourceRef = `group_thread_checkpoint:${cp.id}:${t.id}`;
+          const titleLabel = `${persona?.avatar_emoji || '💬'} ${personaName}`;
+          const tRows = (members || []).map(m => ({
+            user_id: m.user_id,
+            title: titleLabel,
+            content: summaryText,
+            activity_type: 'project_reflection',
+            source_ref: sourceRef,
+          }));
+          if (tRows.length > 0) {
+            const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
+            if (tjErr) {
+              if (tjErr.code === '42703' || /column.*source_ref/i.test(tjErr.message || '')) {
+                await supabaseAdmin.from('learning_journal_entries').insert(
+                  tRows.map(({ source_ref: _ignored, ...rest }) => rest)
+                );
+                threadSummariesAdded += 1;
+              } else if (tjErr.code === '23505') {
+                // Reeds aanwezig — geen fout.
+              } else {
+                console.error('[checkpoint thread summary insert B]', tjErr.message);
+              }
+            } else {
+              threadSummariesAdded += 1;
+            }
           }
         }
       }

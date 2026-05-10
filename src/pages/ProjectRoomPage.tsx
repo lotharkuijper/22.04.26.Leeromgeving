@@ -67,6 +67,15 @@ interface PersonaDoc {
   uploaded_by: string | null;
   created_at: string;
 }
+interface PreviewThread {
+  threadId: string;
+  personaId: string;
+  personaName: string;
+  avatarEmoji: string;
+  studentSummary: string;
+  personaSummary: string;
+}
+
 interface ProjectMaterialDoc {
   id: string;
   filename: string;
@@ -102,6 +111,9 @@ export function ProjectRoomPage() {
   // Stabiele requestId per checkpoint-poging: pas resetten na succesvolle
   // submit, zodat netwerk-retries van dezelfde knopdruk dedupeer-baar blijven.
   const [checkpointRequestId, setCheckpointRequestId] = useState<string | null>(null);
+  const [checkpointPreview, setCheckpointPreview] = useState<PreviewThread[] | null>(null);
+  const [checkpointPreviewLoading, setCheckpointPreviewLoading] = useState(false);
+  const [checkpointPreviewError, setCheckpointPreviewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingRoom, setLoadingRoom] = useState(true);
   const [personaDocs, setPersonaDocs] = useState<PersonaDoc[]>([]);
@@ -370,34 +382,69 @@ export function ProjectRoomPage() {
     await supabase.from('group_chat_messages').update({ reactions }).eq('id', msg.id);
   };
 
+  const openCheckpoint = async (kind: 'checkpoint' | 'final') => {
+    setShowCheckpointModal(kind);
+    setCheckpointPreviewError(null);
+    if (kind === 'checkpoint') {
+      setCheckpointPreview(null);
+      setCheckpointPreviewLoading(true);
+      try {
+        const r = await fetch(`/api/projects/groups/${groupId}/checkpoint-preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Preview ophalen mislukt');
+        setCheckpointPreview(data.threads || []);
+      } catch (e: any) {
+        setCheckpointPreviewError(e.message);
+      } finally {
+        setCheckpointPreviewLoading(false);
+      }
+    }
+  };
+
+  const updatePreviewSummary = (threadId: string, field: 'studentSummary' | 'personaSummary', value: string) => {
+    setCheckpointPreview(prev => prev ? prev.map(t => t.threadId === threadId ? { ...t, [field]: value } : t) : prev);
+  };
+
   const submitCheckpoint = async () => {
     if (!showCheckpointModal || !groupId || !token) return;
-    if (reflection.trim().length < 20) {
+    // kind='final' vereist handmatige reflectie; kind='checkpoint' gebruikt de preview.
+    if (showCheckpointModal === 'final' && reflection.trim().length < 20) {
       setError('Schrijf een reflectie van minimaal 20 tekens.');
       return;
     }
     setSubmittingCheckpoint(true);
     setError(null);
     try {
-      // Idempotency: hergebruik dezelfde requestId tot een succesvolle submit.
-      // Een netwerkfout-retry stuurt zo dezelfde id mee en dedupes server-side
-      // i.p.v. een tweede checkpoint + journal-entries aan te maken.
       const requestId = checkpointRequestId || (
         (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
           ? crypto.randomUUID()
           : `${Date.now()}-${Math.random().toString(36).slice(2)}`
       );
       if (!checkpointRequestId) setCheckpointRequestId(requestId);
+
+      const body: Record<string, unknown> = { kind: showCheckpointModal, requestId };
+      if (showCheckpointModal === 'final') {
+        body.reflection = reflection.trim();
+      } else if (checkpointPreview && checkpointPreview.length > 0) {
+        body.personaSummaries = checkpointPreview;
+      } else {
+        body.reflection = reflection.trim() || '(geen reflectie)';
+      }
+
       const r = await fetch(`/api/projects/groups/${groupId}/checkpoint`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ kind: showCheckpointModal, reflection: reflection.trim(), requestId }),
+        body: JSON.stringify(body),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Checkpoint mislukt');
       setCheckpoints(prev => [data.checkpoint, ...prev]);
       setShowCheckpointModal(null);
       setReflection('');
+      setCheckpointPreview(null);
       setCheckpointRequestId(null);
       const added = Number(data.threadSummariesAdded || 0);
       if (added > 0) {
@@ -501,14 +548,14 @@ export function ProjectRoomPage() {
           {!isFinalized && (
             <>
               <button
-                onClick={() => setShowCheckpointModal('checkpoint')}
+                onClick={() => openCheckpoint('checkpoint')}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-xs font-medium"
                 data-testid="button-open-checkpoint"
               >
                 <CheckCircle2 className="w-4 h-4" /> Checkpoint
               </button>
               <button
-                onClick={() => setShowCheckpointModal('final')}
+                onClick={() => openCheckpoint('final')}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white hover:bg-green-700 rounded-lg text-xs font-medium"
                 data-testid="button-open-finalize"
               >
@@ -827,38 +874,104 @@ export function ProjectRoomPage() {
       {showCheckpointModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold text-gray-900 mb-2">
+            <h2 className="text-xl font-bold text-gray-900 mb-1">
               {showCheckpointModal === 'final' ? 'Project afronden' : 'Tussentijdse checkpoint'}
             </h2>
-            <p className="text-sm text-gray-600 mb-4">
-              {showCheckpointModal === 'final'
-                ? 'Schrijf een gezamenlijke eindreflectie. De begeleider geeft per rubriekspunt feedback en zet die in ieders leerdagboek.'
-                : 'Schrijf een korte gezamenlijke reflectie op waar jullie staan. De begeleider vat dit samen in jullie leerdagboeken.'}
-            </p>
-            <textarea
-              value={reflection}
-              onChange={e => setReflection(e.target.value)}
-              rows={10}
-              placeholder="Wat hebben jullie gedaan? Wat snappen jullie nog niet? Wat is de volgende stap?"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-              data-testid="textarea-reflection"
-            />
-            <div className="text-xs text-gray-400 mt-1">{reflection.trim().length} tekens · minimaal 20</div>
-            <div className="flex gap-2 mt-4 justify-end">
+
+            {/* ── kind='final': reflectie-textarea (ongewijzigd) ── */}
+            {showCheckpointModal === 'final' && (
+              <>
+                <p className="text-sm text-gray-600 mb-4">
+                  Schrijf een gezamenlijke eindreflectie. De begeleider geeft per rubriekspunt feedback en zet die in ieders leerdagboek.
+                </p>
+                <textarea
+                  value={reflection}
+                  onChange={e => setReflection(e.target.value)}
+                  rows={10}
+                  placeholder="Wat hebben jullie gedaan? Wat snappen jullie nog niet? Wat is de volgende stap?"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  data-testid="textarea-reflection"
+                />
+                <div className="text-xs text-gray-400 mt-1">{reflection.trim().length} tekens · minimaal 20</div>
+              </>
+            )}
+
+            {/* ── kind='checkpoint': AI-preview per gesprek ── */}
+            {showCheckpointModal === 'checkpoint' && (
+              <>
+                <p className="text-sm text-gray-600 mb-4">
+                  Hieronder staan automatische samenvattingen van jullie gesprekken. Pas ze aan als je dat wilt en sla ze op in jullie leerdagboeken.
+                </p>
+
+                {checkpointPreviewLoading && (
+                  <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-500" data-testid="checkpoint-preview-loading">
+                    <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
+                    <span className="text-sm">Samenvattingen worden gegenereerd…</span>
+                  </div>
+                )}
+
+                {checkpointPreviewError && !checkpointPreviewLoading && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm mb-4" data-testid="checkpoint-preview-error">
+                    {checkpointPreviewError}
+                  </div>
+                )}
+
+                {!checkpointPreviewLoading && !checkpointPreviewError && checkpointPreview !== null && checkpointPreview.length === 0 && (
+                  <p className="text-sm text-gray-500 italic py-4" data-testid="checkpoint-preview-empty">
+                    Er zijn nog geen nieuwe gesprekken sinds het vorige checkpoint.
+                  </p>
+                )}
+
+                {!checkpointPreviewLoading && checkpointPreview && checkpointPreview.length > 0 && (
+                  <div className="space-y-5" data-testid="checkpoint-preview-threads">
+                    {checkpointPreview.map(t => (
+                      <div key={t.threadId} className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+                        <div className="flex items-center gap-2 mb-3">
+                          <span className="text-xl">{t.avatarEmoji}</span>
+                          <span className="font-semibold text-gray-800 text-sm">{t.personaName}</span>
+                        </div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Inbreng student</label>
+                        <textarea
+                          value={t.studentSummary}
+                          onChange={e => updatePreviewSummary(t.threadId, 'studentSummary', e.target.value)}
+                          rows={3}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white mb-3 resize-none"
+                          data-testid={`textarea-student-summary-${t.threadId}`}
+                        />
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Reactie van {t.personaName}</label>
+                        <textarea
+                          value={t.personaSummary}
+                          onChange={e => updatePreviewSummary(t.threadId, 'personaSummary', e.target.value)}
+                          rows={5}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white resize-none"
+                          data-testid={`textarea-persona-summary-${t.threadId}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="flex gap-2 mt-5 justify-end">
               <button
-                onClick={() => { setShowCheckpointModal(null); setReflection(''); }}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+                onClick={() => { setShowCheckpointModal(null); setReflection(''); setCheckpointPreview(null); setCheckpointPreviewError(null); }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg text-sm"
                 data-testid="button-cancel-checkpoint"
               >
                 Annuleren
               </button>
               <button
                 onClick={submitCheckpoint}
-                disabled={submittingCheckpoint || reflection.trim().length < 20}
-                className={`px-4 py-2 text-white rounded-lg disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                disabled={
+                  submittingCheckpoint ||
+                  checkpointPreviewLoading ||
+                  (showCheckpointModal === 'final' && reflection.trim().length < 20)
+                }
+                className={`px-4 py-2 text-white rounded-lg text-sm disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                 data-testid="button-submit-checkpoint"
               >
-                {submittingCheckpoint ? 'Even geduld…' : (showCheckpointModal === 'final' ? 'Afronden + opslaan' : 'Opslaan')}
+                {submittingCheckpoint ? 'Even geduld…' : (showCheckpointModal === 'final' ? 'Afronden + opslaan' : 'Opslaan in leerdagboek')}
               </button>
             </div>
           </div>
