@@ -428,10 +428,12 @@ export function ProjectRoomPage() {
       const body: Record<string, unknown> = { kind: showCheckpointModal, requestId };
       if (showCheckpointModal === 'final') {
         body.reflection = reflection.trim();
-      } else if (checkpointPreview && checkpointPreview.length > 0) {
-        body.personaSummaries = checkpointPreview;
       } else {
-        body.reflection = reflection.trim() || '(geen reflectie)';
+        // kind='checkpoint': altijd personaSummaries sturen; knop is verborgen als preview leeg is.
+        if (!checkpointPreview || checkpointPreview.length === 0) {
+          throw new Error('Geen gesprekken om op te slaan.');
+        }
+        body.personaSummaries = checkpointPreview;
       }
 
       const r = await fetch(`/api/projects/groups/${groupId}/checkpoint`, {
@@ -906,7 +908,7 @@ export function ProjectRoomPage() {
                 {checkpointPreviewLoading && (
                   <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-500" data-testid="checkpoint-preview-loading">
                     <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
-                    <span className="text-sm">Samenvattingen worden gegenereerd…</span>
+                    <span className="text-sm">Samenvattingen worden gemaakt…</span>
                   </div>
                 )}
 
@@ -918,7 +920,7 @@ export function ProjectRoomPage() {
 
                 {!checkpointPreviewLoading && !checkpointPreviewError && checkpointPreview !== null && checkpointPreview.length === 0 && (
                   <p className="text-sm text-gray-500 italic py-4" data-testid="checkpoint-preview-empty">
-                    Er zijn nog geen nieuwe gesprekken sinds het vorige checkpoint.
+                    Geen gesprekken gevonden om samen te vatten.
                   </p>
                 )}
 
@@ -930,7 +932,7 @@ export function ProjectRoomPage() {
                           <span className="text-xl">{t.avatarEmoji}</span>
                           <span className="font-semibold text-gray-800 text-sm">{t.personaName}</span>
                         </div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Inbreng student</label>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Jouw vragen/input</label>
                         <textarea
                           value={t.studentSummary}
                           onChange={e => updatePreviewSummary(t.threadId, 'studentSummary', e.target.value)}
@@ -961,18 +963,21 @@ export function ProjectRoomPage() {
               >
                 Annuleren
               </button>
-              <button
-                onClick={submitCheckpoint}
-                disabled={
-                  submittingCheckpoint ||
-                  checkpointPreviewLoading ||
-                  (showCheckpointModal === 'final' && reflection.trim().length < 20)
-                }
-                className={`px-4 py-2 text-white rounded-lg text-sm disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
-                data-testid="button-submit-checkpoint"
-              >
-                {submittingCheckpoint ? 'Even geduld…' : (showCheckpointModal === 'final' ? 'Afronden + opslaan' : 'Opslaan in leerdagboek')}
-              </button>
+              {/* Sla-knop: verberg bij lege preview (geen gesprekken om op te slaan) */}
+              {!(showCheckpointModal === 'checkpoint' && checkpointPreview !== null && checkpointPreview.length === 0) && (
+                <button
+                  onClick={submitCheckpoint}
+                  disabled={
+                    submittingCheckpoint ||
+                    checkpointPreviewLoading ||
+                    (showCheckpointModal === 'final' && reflection.trim().length < 20)
+                  }
+                  className={`px-4 py-2 text-white rounded-lg text-sm disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                  data-testid="button-submit-checkpoint"
+                >
+                  {submittingCheckpoint ? 'Even geduld…' : (showCheckpointModal === 'final' ? 'Afronden + opslaan' : 'Opslaan in leerdagboek')}
+                </button>
+              )}
             </div>
           </div>
         </div>
