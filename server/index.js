@@ -4605,6 +4605,9 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
     const { data: pp } = await supabaseAdmin
       .from('project_personas').select('*').eq('project_id', projectId).order('sort_order');
     if (pp && pp.length > 0) {
+      // Alleen project-eigen evaluators tellen mee voor hasEvaluator zodat de
+      // UI-knop precies overeenkomt met wat /evaluate kan beoordelen
+      // (course-fallback-personas zijn nooit evaluator-bronnen).
       evaluatorCount = pp.filter(p => p.persona_type === 'evaluator').length;
       const filtered = isStaff ? pp : pp.filter(p => p.persona_type !== 'evaluator');
       personas = filtered.map(p => ({ ...p, _source: 'project' }));
@@ -4612,7 +4615,8 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
       const { data: cp } = await supabaseAdmin
         .from('course_personas').select('*').eq('course_id', project.course_id).order('is_default', { ascending: false });
       const list = cp || [];
-      evaluatorCount = list.filter(p => p.persona_type === 'evaluator').length;
+      // evaluatorCount blijft 0: course-fallback-personas worden niet door
+      // /evaluate gebruikt — geen UI-knop tonen.
       const filtered = isStaff ? list : list.filter(p => p.persona_type !== 'evaluator');
       personas = filtered.map(p => ({ ...p, _source: 'course' }));
     }
@@ -5483,8 +5487,13 @@ app.post('/api/projects/:projectId/personas/:personaId/documents',
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { projectId, personaId } = req.params;
-  const groupId = req.body?.groupId;
-  if (!groupId) return res.status(400).json({ error: 'groupId vereist' });
+  const rawGroupId = req.body?.groupId;
+  const requestedHiddenEarly = req.body?.isHiddenRubric === '1' || req.body?.isHiddenRubric === 'true';
+  // Voor verborgen rubrics is groupId optioneel (project/persona-scoped opslag,
+  // niet aan een specifieke groep gebonden). Voor reguliere uploads blijft
+  // groupId verplicht.
+  if (!rawGroupId && !requestedHiddenEarly) return res.status(400).json({ error: 'groupId vereist' });
+  const groupId = rawGroupId || null;
   if (!req.file) return res.status(400).json({ error: 'Geen bestand ontvangen (veld "file")' });
   let text;
   try {
@@ -5506,34 +5515,33 @@ app.post('/api/projects/:projectId/personas/:personaId/documents',
     // uploaden (bijv. om voor een groep een document recht te zetten);
     // docent zonder groepslidmaatschap mag niet schrijven.
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
-    if (!isAdmin && !(await isGroupMember(groupId, auth.user.id))) {
-      return res.status(403).json({ error: 'Alleen groepsleden mogen documenten uploaden' });
-    }
-    // Groep moet bij dit project horen.
-    const { data: group } = await supabaseAdmin
-      .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
-    if (!group || group.project_id !== projectId) {
-      return res.status(400).json({ error: 'Groep hoort niet bij dit project' });
+    const isStaffForProject = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    // Groepslidmaatschap is alleen vereist voor reguliere uploads.
+    if (groupId) {
+      if (!isAdmin && !(await isGroupMember(groupId, auth.user.id))) {
+        return res.status(403).json({ error: 'Alleen groepsleden mogen documenten uploaden' });
+      }
+      const { data: group } = await supabaseAdmin
+        .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
+      if (!group || group.project_id !== projectId) {
+        return res.status(400).json({ error: 'Groep hoort niet bij dit project' });
+      }
+    } else if (!requestedHiddenEarly) {
+      return res.status(400).json({ error: 'groupId vereist' });
     }
     // Persona moet bij dit project horen.
     const { data: persona } = await supabaseAdmin
-      .from('project_personas').select('id').eq('id', personaId).eq('project_id', projectId).maybeSingle();
+      .from('project_personas').select('id, persona_type').eq('id', personaId).eq('project_id', projectId).maybeSingle();
     if (!persona) return res.status(404).json({ error: 'Persona niet in dit project' });
     // is_hidden_rubric: alleen staff mag dit zetten, en alleen op een
-    // evaluator-persona. Voor studenten wordt het altijd false.
-    const requestedHidden = req.body?.isHiddenRubric === '1' || req.body?.isHiddenRubric === 'true';
+    // evaluator-persona. Project-scoped (group_id mag NULL zijn).
     let isHiddenRubric = false;
-    if (requestedHidden) {
-      if (!isAdmin) {
-        const { data: profileRow } = await supabaseAdmin
-          .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-        const isStaffUploader = profileRow && (profileRow.role === 'admin' || profileRow.role === 'docent' || profileRow.email === SUPERUSER_EMAIL);
-        if (!isStaffUploader) return res.status(403).json({ error: 'Alleen docent/admin mag een verborgen rubric uploaden' });
-      }
-      const { data: pType } = await supabaseAdmin
-        .from('project_personas').select('persona_type')
-        .eq('id', personaId).eq('project_id', projectId).maybeSingle();
-      if (!pType || pType.persona_type !== 'evaluator') {
+    if (requestedHiddenEarly) {
+      if (!isStaffForProject) return res.status(403).json({ error: 'Alleen docent/admin mag een verborgen rubric uploaden' });
+      // Docent moet bij dit project horen (geen kruis-cursus-uploads).
+      const access = await requireProjectStaff(projectId, auth.user, profile);
+      if (!access.ok) return res.status(access.status).json({ error: access.error || 'Geen toegang tot dit project' });
+      if (persona.persona_type !== 'evaluator') {
         return res.status(400).json({ error: 'Verborgen rubric kan alleen aan een beoordelaar-persona worden gekoppeld' });
       }
       isHiddenRubric = true;
@@ -5804,15 +5812,19 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
   const { groupId } = req.params;
   const requestId = req.body?.requestId || null;
   try {
-    const { data: profile } = await supabaseAdmin
-      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff && !(await isGroupMember(groupId, auth.user.id))) {
-      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
-    }
     const { data: group } = await supabaseAdmin
       .from('project_groups').select('id, project_id, name').eq('id', groupId).maybeSingle();
     if (!group) return res.status(404).json({ error: 'Groep niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isMember = await isGroupMember(groupId, auth.user.id);
+    if (!isMember) {
+      // Niet-leden moeten staff zijn ÉN aan dit specifieke project gekoppeld.
+      // Dit voorkomt dat een docent uit een andere cursus een willekeurige
+      // groep kan beoordelen.
+      const access = await requireProjectStaff(group.project_id, auth.user, profile);
+      if (!access.ok) return res.status(access.status).json({ error: access.error || 'Geen toegang tot deze groep' });
+    }
     const { data: project } = await supabaseAdmin
       .from('projects').select('id, title, research_question, goals, briefing_markdown')
       .eq('id', group.project_id).maybeSingle();

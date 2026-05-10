@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
 import { supabase } from '../../lib/supabase';
-import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, BookPlus, Paperclip, Loader2, FileText, Copy, ShieldAlert } from 'lucide-react';
+import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, ShieldAlert } from 'lucide-react';
 
 interface ProjectRow {
   id: string;
@@ -398,29 +398,8 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     if (file.size > 15_000_000) { onError('Bestand is groter dan 15 MB.'); return; }
     setUploadingRubric(personaId);
     try {
-      // Voor staff-uploads heb je een groupId nodig vanwege de bestaande
-      // upload-endpoint. We pakken (of maken) een dummy "staff"-groep door
-      // de eerste actieve groep van het project te gebruiken; bestaat die
-      // niet, dan maken we een interne staff-groep aan.
-      let groupId: string | null = null;
-      const { data: existing } = await supabase
-        .from('project_groups').select('id, status')
-        .eq('project_id', project.id).order('created_at').limit(1);
-      if (existing && existing[0]) groupId = existing[0].id;
-      else {
-        // Maak een interne "rubric-houder"-groep via API zodat invite_code
-        // en owner correct gezet zijn.
-        const gr = await fetch('/api/projects/groups', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ projectId: project.id, name: '_rubric-opslag (verborgen)' }),
-        });
-        const gd = await gr.json();
-        if (!gr.ok) throw new Error(gd.error || 'Kon rubric-opslag-groep niet aanmaken');
-        groupId = gd.group.id;
-      }
+      // Verborgen rubrics zijn project/persona-scoped — geen groep nodig.
       const fd = new FormData();
-      fd.append('groupId', groupId!);
       fd.append('isHiddenRubric', '1');
       fd.append('file', file, file.name);
       const r = await fetch(`/api/projects/${project.id}/personas/${personaId}/documents`, {
@@ -629,8 +608,6 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         </div>
       )}
 
-      {/* Suppress unused-vars lint for BookPlus (kept import for future usage)  */}
-      <span className="hidden"><BookPlus /></span>
     </div>
   );
 }
