@@ -6067,6 +6067,115 @@ app.delete('/api/projects/:projectId/documents/:docId', async (req, res) => {
 });
 
 // =============================================================================
+// POST /api/admin/migrate-project-docs-subfolders
+// Eenmalige migratie: verplaatst bestaande project_documents-bestanden die
+// nog in de platte Projectdata-map staan naar de juiste projectsubmap
+// (Projectdata → [projecttitel]).
+// Alleen admins mogen dit aanroepen. Idempotent: al gemigreerde rijen worden
+// overgeslagen.
+// =============================================================================
+
+app.post('/api/admin/migrate-project-docs-subfolders', async (req, res) => {
+  if (!supabaseAdmin || !pgPool) return res.status(503).json({ error: 'DB-verbinding niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+  const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+  if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen deze migratie uitvoeren' });
+
+  try {
+    // Haal alle project_documents op die een document_ref_id hebben in batches
+    // van 500 zodat grote datasets (>1000 rijen) volledig worden verwerkt
+    // ondanks de standaard PostgREST row-cap.
+    const BATCH = 500;
+    let allPDocs = [];
+    let from = 0;
+    while (true) {
+      const { data: batch, error: pdErr } = await supabaseAdmin
+        .from('project_documents')
+        .select('id, project_id, document_ref_id')
+        .not('document_ref_id', 'is', null)
+        .range(from, from + BATCH - 1);
+      if (pdErr) return res.status(500).json({ error: pdErr.message });
+      if (!batch || batch.length === 0) break;
+      allPDocs = allPDocs.concat(batch);
+      if (batch.length < BATCH) break;
+      from += BATCH;
+    }
+
+    let migrated = 0;
+    let skipped = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (const pd of allPDocs) {
+      try {
+        // Haal de huidige folder_id op uit de documents-tabel.
+        const docResult = await pgPool.query(
+          'SELECT id, folder_id FROM documents WHERE id = $1',
+          [pd.document_ref_id]
+        );
+        const docRow = docResult.rows[0];
+        if (!docRow) { skipped++; continue; }
+
+        // Controleer of het document al in de juiste projectsubmap zit.
+        // Strikt: description moet de marker voor dít project bevatten.
+        if (docRow.folder_id) {
+          const folderResult = await pgPool.query(
+            'SELECT description FROM document_folders WHERE id = $1',
+            [docRow.folder_id]
+          );
+          const folderDesc = folderResult.rows[0]?.description || '';
+          if (folderDesc.includes(`projectId:${pd.project_id}`)) {
+            skipped++;
+            continue;
+          }
+        }
+
+        // Haal project op voor title.
+        const { data: project } = await supabaseAdmin
+          .from('projects').select('id, title').eq('id', pd.project_id).maybeSingle();
+        if (!project) { skipped++; continue; }
+
+        // Maak of zoek de projectsubmap.
+        const subfolderId = await findOrCreateProjectSubfolder(
+          project.id, project.title, auth.user.id
+        );
+        if (!subfolderId) {
+          failed++;
+          errors.push(`project ${project.id}: submap aanmaken mislukt`);
+          continue;
+        }
+
+        // Update de folder_id van het document.
+        await pgPool.query(
+          'UPDATE documents SET folder_id = $1 WHERE id = $2',
+          [subfolderId, docRow.id]
+        );
+        migrated++;
+        console.log(`[migrate-subfolders] document ${docRow.id} → submap ${subfolderId} (project "${project.title}")`);
+      } catch (innerErr) {
+        failed++;
+        errors.push(`project_document ${pd.id}: ${innerErr.message}`);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      total: allPDocs.length,
+      migrated,
+      skipped,
+      failed,
+      errors: errors.slice(0, 10),
+    });
+  } catch (err) {
+    console.error('[migrate-subfolders] fout:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
 // Beoordeling opvragen — voor elke evaluator-persona van het project: rubric
 // + alle persona-gesprekken van de groep + projectdocumenten naar Groq, en
 // schrijf één journal-entry per groepslid per evaluator. Alleen leden of staff.

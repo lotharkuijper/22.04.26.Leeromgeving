@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
 import { supabase } from '../../lib/supabase';
-import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, ShieldAlert, Database, Download, Eye, EyeOff } from 'lucide-react';
+import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, ShieldAlert, Database, Download, Eye, EyeOff, Wrench } from 'lucide-react';
 
 interface ProjectRow {
   id: string;
@@ -57,6 +57,14 @@ const UPLOAD_ACCEPT = '.txt,.md,.markdown,.csv,.tsv,.json,.log,.pdf,.docx,.pptx,
 // studenten alleen downloaden — niet als chat-context worden gebruikt.
 const PROJECT_DOC_ACCEPT = UPLOAD_ACCEPT + ',.omv,.omt,.sav,.jasp,.rdata,.rds,.sps,.dta';
 
+interface MigrateResult {
+  total: number;
+  migrated: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+}
+
 export function ProjectsAdminTab() {
   const { session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
@@ -67,6 +75,8 @@ export function ProjectsAdminTab() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [detailProject, setDetailProject] = useState<ProjectRow | null>(null);
+  const [migrating, setMigrating] = useState(false);
+  const [migrateResult, setMigrateResult] = useState<MigrateResult | null>(null);
 
   const load = useCallback(async () => {
     let q = supabase.from('projects').select('*').order('created_at', { ascending: false });
@@ -76,6 +86,26 @@ export function ProjectsAdminTab() {
   }, [activeCourseId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const runMigration = async () => {
+    if (!session?.access_token) return;
+    setMigrating(true);
+    setMigrateResult(null);
+    setError(null);
+    try {
+      const r = await fetch('/api/admin/migrate-project-docs-subfolders', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Migratie mislukt');
+      setMigrateResult(d);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const startEdit = (p: Partial<ProjectRow> | null) => {
     if (p) {
@@ -189,6 +219,35 @@ export function ProjectsAdminTab() {
               </li>
             ))}
           </ul>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <h3 className="text-base font-semibold text-gray-800 flex items-center gap-2 mb-1">
+          <Wrench className="w-4 h-4" /> Onderhoud
+        </h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Verplaats bestaande projectbestanden van de platte Projectdata-map naar de juiste projectsubmap
+          (Projectdata → [projecttitel]). Veilig om meerdere keren uit te voeren — al gemigreerde bestanden worden overgeslagen.
+        </p>
+        <button
+          onClick={runMigration}
+          disabled={migrating}
+          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-40"
+          data-testid="button-migrate-subfolders"
+        >
+          {migrating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+          {migrating ? 'Bezig met migreren…' : 'Mapstructuur herstellen'}
+        </button>
+        {migrateResult && (
+          <div className={`mt-3 px-3 py-2 rounded text-sm border ${migrateResult.failed > 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`} data-testid="text-migrate-result">
+            Klaar — {migrateResult.total} gecontroleerd, {migrateResult.migrated} verplaatst, {migrateResult.skipped} al correct, {migrateResult.failed} mislukt.
+            {migrateResult.errors.length > 0 && (
+              <ul className="mt-1 list-disc list-inside text-xs text-red-700">
+                {migrateResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
+            )}
+          </div>
         )}
       </div>
 
