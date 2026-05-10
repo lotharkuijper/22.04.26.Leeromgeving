@@ -5926,24 +5926,49 @@ const BINARY_DOWNLOAD_EXT_RE = /\.(omv|omt|sav|jasp|rdata|rds|sps|do|dta)$/i;
 async function findOrCreateCourseProjectdataFolder(courseId, uploadedById) {
   if (!pgPool) return null;
   try {
-    // Zoek een bestaande Projectdata-map die aan deze cursus is gekoppeld.
-    const { data: assignments } = await supabaseAdmin
-      .from('course_folder_assignments')
-      .select('folder_id, document_folders(id, name)')
-      .eq('course_id', courseId);
-    const existing = (assignments || []).find(a => a.document_folders?.name === 'Projectdata');
-    if (existing?.folder_id) return existing.folder_id;
+    // Zoek een bestaande "Projectdata"-map die al gekoppeld is aan DEZE cursus
+    // via course_folder_assignments (!inner join = alleen mappen mét koppeling).
+    const { data: existingRows } = await supabaseAdmin
+      .from('document_folders')
+      .select('id, course_folder_assignments!inner(course_id)')
+      .eq('name', 'Projectdata')
+      .eq('course_folder_assignments.course_id', courseId)
+      .limit(1);
+    const existingId = existingRows?.[0]?.id;
+    if (existingId) return existingId;
 
-    // Gebruik de eerste map die al aan deze cursus is gekoppeld als parent,
-    // zodat de Projectdata-map onder de juiste cursusmap valt.
+    // Geen map voor deze cursus — zoek de parent-cursusmap van DEZE cursus
+    // (folder_type 'course' of 'general', gekoppeld via course_folder_assignments).
     const { data: courseAssigned } = await supabaseAdmin
       .from('course_folder_assignments')
-      .select('folder_id, document_folders(id, folder_type)')
+      .select('folder_id, document_folders!inner(id, folder_type)')
       .eq('course_id', courseId);
     const courseParent = (courseAssigned || []).find(
       a => a.document_folders?.folder_type === 'course' || a.document_folders?.folder_type === 'general'
     );
     const parentId = courseParent?.folder_id || null;
+
+    // Subtree-fallback: als er al een "Projectdata"-map bestaat als direct kind
+    // van de gevonden parent-map (maar zonder assignment-rij), gebruik die dan
+    // en voeg alsnog de assignment toe — zo voorkomen we dubbele mappen.
+    if (parentId) {
+      const { data: subtreeRows } = await supabaseAdmin
+        .from('document_folders')
+        .select('id')
+        .eq('name', 'Projectdata')
+        .eq('parent_folder_id', parentId)
+        .limit(1);
+      const subtreeId = subtreeRows?.[0]?.id;
+      if (subtreeId) {
+        await supabaseAdmin.from('course_folder_assignments').upsert(
+          { course_id: courseId, folder_id: subtreeId },
+          { onConflict: 'course_id,folder_id', ignoreDuplicates: true }
+        );
+        console.log(`[projectdata-folder] Hergebruikt via subtree: ${subtreeId} voor cursus ${courseId}`);
+        return subtreeId;
+      }
+    }
+
 
     const result = await pgPool.query(
       `INSERT INTO document_folders (name, description, parent_folder_id, created_by, folder_type, is_root)
