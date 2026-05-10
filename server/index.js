@@ -5956,11 +5956,16 @@ app.get('/api/projects/:projectId/documents/:docId/download', async (req, res) =
     if (!(await userHasProjectAccess(auth.user, profile, project))) {
       return res.status(403).json({ error: 'Geen toegang tot dit project' });
     }
+    const isStaffDl = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
     const { data: doc } = await supabaseAdmin
       .from('project_documents')
-      .select('filename, content_text, mime_type, document_ref_id')
+      .select('filename, content_text, mime_type, document_ref_id, is_visible_to_students')
       .eq('id', docId).eq('project_id', projectId).maybeSingle();
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    // Studenten mogen verborgen bestanden niet downloaden.
+    if (!isStaffDl && !doc.is_visible_to_students) {
+      return res.status(403).json({ error: 'Dit bestand is niet beschikbaar voor studenten' });
+    }
     let buffer;
     let mimeType = doc.mime_type || 'application/octet-stream';
     if (doc.document_ref_id) {
