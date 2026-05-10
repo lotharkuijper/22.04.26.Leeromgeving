@@ -5758,10 +5758,13 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
     if (!(await userHasProjectAccess(auth.user, profile, project))) {
       return res.status(403).json({ error: 'Geen toegang tot dit project' });
     }
-    const { data, error: e } = await supabaseAdmin
+    const isStaffDocs = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    let docsQuery = supabaseAdmin
       .from('project_documents')
       .select('id, filename, byte_size, mime_type, document_ref_id, is_visible_to_students, uploaded_by, created_at')
       .eq('project_id', projectId).order('created_at', { ascending: false });
+    if (!isStaffDocs) docsQuery = docsQuery.eq('is_visible_to_students', true);
+    const { data, error: e } = await docsQuery;
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ documents: data || [] });
   } catch (err) {
@@ -5831,9 +5834,11 @@ async function findOrCreateProjectSubfolder(projectId, projectTitle, uploadedByI
     const projectdataId = await findOrCreateCourseProjectdataFolder(project.course_id, uploadedById);
     if (!projectdataId) return null;
 
-    const safeName = String(projectTitle || projectId).slice(0, 200).trim() || 'Project';
+    // Gebruik een unieke naam inclusief projectId om titelbotsingingen te voorkomen.
+    const titlePart = String(projectTitle || '').slice(0, 150).trim();
+    const safeName = titlePart ? `${titlePart} (${projectId.slice(0, 8)})` : projectId.slice(0, 36);
 
-    // Zoek bestaande submap voor dit project (op naam onder de Projectdata-map).
+    // Zoek bestaande submap voor dit project op unieke naam onder Projectdata.
     const { data: existingSub } = await supabaseAdmin
       .from('document_folders')
       .select('id').eq('name', safeName).eq('parent_folder_id', projectdataId).maybeSingle();
@@ -5843,7 +5848,7 @@ async function findOrCreateProjectSubfolder(projectId, projectTitle, uploadedByI
     const result = await pgPool.query(
       `INSERT INTO document_folders (name, description, parent_folder_id, created_by, folder_type, is_root)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-      [safeName, `Projectbestanden — ${safeName}`, projectdataId, uploadedById, 'data', false]
+      [safeName, `Projectbestanden — ${titlePart || projectId}`, projectdataId, uploadedById, 'data', false]
     );
     const subfolderId = result.rows[0]?.id;
     if (!subfolderId) return null;
