@@ -9,6 +9,20 @@ const parseOfficeAsync = (buffer) => new Promise((resolve, reject) => {
 });
 import { createClient } from '@supabase/supabase-js';
 import { expandQuery } from './queryExpansion.js';
+import pkg from 'pg';
+const { Pool } = pkg;
+
+// Directe Postgres-verbinding voor operaties die PostgREST niet kan
+// uitvoeren, zoals bytea-inserts van binaire bestanden.
+let pgPool = null;
+if (process.env.SUPABASE_DB_URL) {
+  pgPool = new Pool({
+    connectionString: process.env.SUPABASE_DB_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 3,
+  });
+  pgPool.on('error', (err) => console.error('[pgPool] client error', err.message));
+}
 
 // 15 MB ruwe upload-cap; tekstextractie kan kleiner uitkomen en wordt
 // daarna nog eens beperkt door MAX_DOC_CHARS.
@@ -5742,7 +5756,7 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
     }
     const { data, error: e } = await supabaseAdmin
       .from('project_documents')
-      .select('id, filename, byte_size, mime_type, uploaded_by, created_at')
+      .select('id, filename, byte_size, mime_type, document_ref_id, uploaded_by, created_at')
       .eq('project_id', projectId).order('created_at', { ascending: false });
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ documents: data || [] });
@@ -5755,6 +5769,68 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
 // maar NIET als chat-context worden geïnjecteerd (geen tekst-extractie).
 // Jamovi (.omv) is hierin de eerste use-case.
 const BINARY_DOWNLOAD_EXT_RE = /\.(omv|omt|sav|jasp|rdata|rds|sps|do|dta)$/i;
+
+// Zoek of maak een "Projectdata"-submap aan binnen de cursusmap
+// van het gegeven project. Geeft het folder-id terug (of null bij fout).
+async function findOrCreateProjectdataFolder(projectId, uploadedById) {
+  if (!pgPool) return null;
+  try {
+    // Zoek de cursus van het project.
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('course_id').eq('id', projectId).maybeSingle();
+    if (!project?.course_id) return null;
+
+    // Zoek een bestaande "Projectdata"-map die kind is van een map
+    // in de cursusmap-boom (folder_type 'course' of 'data' of 'general').
+    // Eenvoudigste heuristiek: zoek op naam "Projectdata" in alle mappen.
+    const { data: existing } = await supabaseAdmin
+      .from('document_folders').select('id').eq('name', 'Projectdata').maybeSingle();
+    if (existing?.id) {
+      // Zorg dat de map aan de cursus gekoppeld is.
+      await supabaseAdmin.from('course_folder_assignments').upsert(
+        { course_id: project.course_id, folder_id: existing.id },
+        { onConflict: 'course_id,folder_id', ignoreDuplicates: true }
+      );
+      return existing.id;
+    }
+
+    // Geen map gevonden — zoek de parent-cursusmap om er onder te hangen.
+    // Neem de eerste map van folder_type 'course' als parent (bijv. Basiscursus),
+    // of de root 'Bestandenomgeving' als fallback.
+    const { data: courseFolders } = await supabaseAdmin
+      .from('document_folders').select('id').eq('folder_type', 'course').limit(1);
+    const parentId = courseFolders?.[0]?.id || null;
+
+    // Maak de "Projectdata"-map aan via pg (service-role, bypast RLS).
+    const result = await pgPool.query(
+      `INSERT INTO document_folders (name, description, parent_folder_id, created_by, folder_type, is_root)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      ['Projectdata', 'Projectdata — binaire bestanden voor projecten', parentId, uploadedById, 'data', false]
+    );
+    const newFolderId = result.rows[0]?.id;
+    if (!newFolderId) return null;
+
+    // Voeg rechten toe zodat alle rollen de map kunnen zien.
+    await pgPool.query(
+      `INSERT INTO folder_permissions (folder_id, role, can_view, can_edit)
+       VALUES ($1,'admin',true,true),($1,'docent',true,true),($1,'student',true,false)
+       ON CONFLICT DO NOTHING`,
+      [newFolderId]
+    );
+
+    // Koppel de map aan de cursus zodat hij in de cursusbestandsboom verschijnt.
+    await supabaseAdmin.from('course_folder_assignments').upsert(
+      { course_id: project.course_id, folder_id: newFolderId },
+      { onConflict: 'course_id,folder_id', ignoreDuplicates: true }
+    );
+
+    console.log(`[projectdata-folder] Aangemaakt: ${newFolderId} voor cursus ${project.course_id}`);
+    return newFolderId;
+  } catch (e) {
+    console.error('[projectdata-folder] fout:', e.message);
+    return null;
+  }
+}
 
 app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
@@ -5778,24 +5854,57 @@ app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
-    const insertRow = {
-      project_id: projectId,
-      filename: String(filename).slice(0, 200),
-      content_text: text,
-      byte_size: req.file.size || (text ? Buffer.byteLength(text, 'utf8') : 0),
-      mime_type: req.file.mimetype || (isBinaryDownload ? 'application/octet-stream' : null),
-      uploaded_by: auth.user.id,
-    };
+
+    let documentRefId = null;
+
     if (isBinaryDownload) {
-      // bytea wordt door PostgREST als hex-string verwacht (\\x...).
-      insertRow.file_bytes = '\\x' + req.file.buffer.toString('hex');
+      // Binaire bestanden worden in de `documents`-tabel opgeslagen zodat ze
+      // zichtbaar zijn in de cursusboom. We gebruiken de directe pg-verbinding
+      // zodat de bytea-kolom correct wordt gevuld (PostgREST snapt geen raw
+      // Buffer via JSON).
+      if (!pgPool) return res.status(503).json({ error: 'Directe DB-verbinding niet beschikbaar' });
+
+      const folderId = await findOrCreateProjectdataFolder(projectId, auth.user.id);
+      const mimeType = req.file.mimetype || 'application/octet-stream';
+      const safeFilename = String(filename).slice(0, 200);
+
+      const docResult = await pgPool.query(
+        `INSERT INTO documents
+           (title, filename, file_path, file_type, file_size, folder_id,
+            uploaded_by, processing_status, total_chunks, file_bytes, mime_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', 0, $8, $9)
+         RETURNING id`,
+        [
+          safeFilename,
+          safeFilename,
+          '',                          // lege placeholder (file_path heeft default '')
+          mimeType,
+          req.file.size || 0,
+          folderId,                    // null is ok als map niet aangemaakt kon worden
+          auth.user.id,
+          req.file.buffer,             // pg stuurt Buffer direct als bytea
+          mimeType,
+        ]
+      );
+      documentRefId = docResult.rows[0]?.id;
+      if (!documentRefId) return res.status(500).json({ error: 'Kon bestandsrecord niet aanmaken' });
     }
+
+    // Sla op in project_documents voor de project-eigen boekhoudingslijst.
     const { data, error: e } = await supabaseAdmin
-      .from('project_documents').insert(insertRow)
-      .select('id, filename, byte_size, mime_type, uploaded_by, created_at').single();
+      .from('project_documents').insert({
+        project_id: projectId,
+        filename: String(filename).slice(0, 200),
+        content_text: text,   // null voor binaire bestanden
+        byte_size: req.file.size || (text ? Buffer.byteLength(text, 'utf8') : 0),
+        mime_type: req.file.mimetype || (isBinaryDownload ? 'application/octet-stream' : null),
+        uploaded_by: auth.user.id,
+        document_ref_id: documentRefId,
+      }).select('id, filename, byte_size, mime_type, document_ref_id, uploaded_by, created_at').single();
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ document: data });
   } catch (err) {
+    console.error('[project-doc upload]', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -5818,27 +5927,30 @@ app.get('/api/projects/:projectId/documents/:docId/download', async (req, res) =
     }
     const { data: doc } = await supabaseAdmin
       .from('project_documents')
-      .select('filename, content_text, file_bytes, mime_type')
+      .select('filename, content_text, mime_type, document_ref_id')
       .eq('id', docId).eq('project_id', projectId).maybeSingle();
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
     let buffer;
-    if (doc.file_bytes) {
-      // Supabase retourneert bytea als hex-string met "\\x"-prefix; vang ook
-      // de zeldzame Buffer-vorm op.
-      if (Buffer.isBuffer(doc.file_bytes)) buffer = doc.file_bytes;
-      else if (typeof doc.file_bytes === 'string') {
-        const hex = doc.file_bytes.startsWith('\\x') ? doc.file_bytes.slice(2) : doc.file_bytes;
-        buffer = Buffer.from(hex, 'hex');
-      } else {
-        buffer = Buffer.from(doc.file_bytes);
-      }
+    let mimeType = doc.mime_type || 'application/octet-stream';
+    if (doc.document_ref_id) {
+      // Binair bestand: bytes leven in de documents-tabel. Gebruik pg zodat
+      // we de Buffer direct krijgen (PostgREST retourneert bytea als hex).
+      if (!pgPool) return res.status(503).json({ error: 'Directe DB-verbinding niet beschikbaar' });
+      const result = await pgPool.query(
+        'SELECT file_bytes, mime_type FROM documents WHERE id = $1',
+        [doc.document_ref_id]
+      );
+      if (!result.rows[0]?.file_bytes) return res.status(404).json({ error: 'Bestandsinhoud niet gevonden' });
+      buffer = result.rows[0].file_bytes;
+      if (result.rows[0].mime_type) mimeType = result.rows[0].mime_type;
     } else if (doc.content_text != null) {
       buffer = Buffer.from(doc.content_text, 'utf8');
+      mimeType = doc.mime_type || 'text/plain; charset=utf-8';
     } else {
       return res.status(404).json({ error: 'Bestand bevat geen inhoud' });
     }
     const safeName = String(doc.filename || 'download').replace(/[\r\n"]/g, '_');
-    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Length', buffer.length);
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
     return res.end(buffer);
@@ -5857,10 +5969,18 @@ app.delete('/api/projects/:projectId/documents/:docId', async (req, res) => {
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
+    // Haal eerst document_ref_id op zodat we de documents-rij ook kunnen verwijderen.
+    const { data: docRow } = await supabaseAdmin
+      .from('project_documents').select('document_ref_id')
+      .eq('id', docId).eq('project_id', projectId).maybeSingle();
     const { error: e } = await supabaseAdmin
       .from('project_documents').delete()
       .eq('id', docId).eq('project_id', projectId);
     if (e) return res.status(500).json({ error: e.message });
+    // Verwijder ook de bijbehorende rij in documents (binaire bestanden).
+    if (docRow?.document_ref_id) {
+      await supabaseAdmin.from('documents').delete().eq('id', docRow.document_ref_id);
+    }
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });

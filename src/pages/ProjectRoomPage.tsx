@@ -72,6 +72,7 @@ interface ProjectMaterialDoc {
   filename: string;
   byte_size: number | null;
   mime_type?: string | null;
+  document_ref_id?: string | null;
   created_at: string;
 }
 

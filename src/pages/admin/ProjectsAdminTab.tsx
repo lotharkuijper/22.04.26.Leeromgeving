@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
 import { supabase } from '../../lib/supabase';
-import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, ShieldAlert } from 'lucide-react';
+import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, ShieldAlert, Database, Download } from 'lucide-react';
 
 interface ProjectRow {
   id: string;
@@ -37,6 +37,8 @@ interface ProjectDoc {
   id: string;
   filename: string;
   byte_size: number | null;
+  mime_type?: string | null;
+  document_ref_id?: string | null;
   uploaded_by: string | null;
   created_at: string;
 }
@@ -258,6 +260,8 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   const [editingPersona, setEditingPersona] = useState<Partial<ProjectPersona> | null>(null);
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
   const [uploadingPDoc, setUploadingPDoc] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [localInfo, setLocalInfo] = useState<string | null>(null);
   const pdocFileRef = useRef<HTMLInputElement>(null);
   const [rubricDocsMap, setRubricDocsMap] = useState<Record<string, RubricDoc[]>>({});
   const [uploadingRubric, setUploadingRubric] = useState<string | null>(null);
@@ -368,8 +372,10 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const uploadProjectDoc = async (file: File) => {
-    if (file.size > 15_000_000) { onError('Bestand is groter dan 15 MB.'); return; }
+    if (file.size > 15_000_000) { setLocalError('Bestand is groter dan 15 MB.'); return; }
     setUploadingPDoc(true);
+    setLocalError(null);
+    setLocalInfo(null);
     try {
       const fd = new FormData();
       fd.append('file', file, file.name);
@@ -379,9 +385,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Upload mislukt');
       setProjectDocs(prev => [d.document, ...prev]);
-      onInfo(`"${file.name}" geüpload.`);
+      setLocalInfo(`"${file.name}" geüpload.`);
     } catch (e: any) {
-      onError(e.message);
+      setLocalError(e.message);
     } finally {
       setUploadingPDoc(false);
       if (pdocFileRef.current) pdocFileRef.current.value = '';
@@ -451,6 +457,21 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         </div>
       </div>
 
+      {localError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-2.5 text-sm flex items-start gap-2" data-testid="alert-local-error-projects">
+          <span className="mt-0.5 shrink-0">⚠</span>
+          <span>{localError}</span>
+          <button onClick={() => setLocalError(null)} className="ml-auto text-red-400 hover:text-red-600 shrink-0">✕</button>
+        </div>
+      )}
+      {localInfo && (
+        <div className="bg-green-50 border border-green-200 text-green-700 rounded-xl px-4 py-2.5 text-sm flex items-center gap-2" data-testid="alert-local-info-projects">
+          <span>✓</span>
+          <span>{localInfo}</span>
+          <button onClick={() => setLocalInfo(null)} className="ml-auto text-green-400 hover:text-green-600">✕</button>
+        </div>
+      )}
+
       {/* Projectdocumenten */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-3">
@@ -476,9 +497,32 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
           <ul className="divide-y divide-gray-100">
             {projectDocs.map(d => (
               <li key={d.id} className="py-2 flex items-center gap-3" data-testid={`project-doc-${d.id}`}>
-                <FileText className="w-4 h-4 text-gray-500" />
+                {d.document_ref_id ? <Database className="w-4 h-4 text-blue-500" /> : <FileText className="w-4 h-4 text-gray-500" />}
                 <div className="flex-1 min-w-0 truncate text-sm">{d.filename}</div>
+                {d.document_ref_id && (
+                  <span className="text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">Projectdata</span>
+                )}
                 <div className="text-xs text-gray-400">{d.byte_size ? `${Math.round(d.byte_size / 1024)} KB` : ''}</div>
+                <button
+                  onClick={async () => {
+                    try {
+                      const r = await fetch(`/api/projects/${project.id}/documents/${d.id}/download`, {
+                        headers: { Authorization: `Bearer ${token}` },
+                      });
+                      if (!r.ok) { const j = await r.json().catch(() => ({})); setLocalError(j.error || 'Download mislukt'); return; }
+                      const blob = await r.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a'); a.href = url; a.download = d.filename;
+                      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    } catch (e: any) { setLocalError(e.message); }
+                  }}
+                  className="p-1 text-blue-500 hover:bg-blue-50 rounded"
+                  title="Download"
+                  data-testid={`button-download-project-doc-${d.id}`}
+                >
+                  <Download className="w-4 h-4" />
+                </button>
                 <button onClick={() => deleteProjectDoc(d)} className="p-1 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-project-doc-${d.id}`}>
                   <Trash2 className="w-4 h-4" />
                 </button>
