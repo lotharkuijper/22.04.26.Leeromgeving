@@ -963,8 +963,8 @@ export function ProjectRoomPage() {
               >
                 Annuleren
               </button>
-              {/* Sla-knop: verberg bij lege preview (geen gesprekken om op te slaan) */}
-              {!(showCheckpointModal === 'checkpoint' && checkpointPreview !== null && checkpointPreview.length === 0) && (
+              {/* Sla-knop: verberg bij lege preview of preview-fout */}
+              {!(showCheckpointModal === 'checkpoint' && (checkpointPreviewError !== null || (checkpointPreview !== null && checkpointPreview.length === 0))) && (
                 <button
                   onClick={submitCheckpoint}
                   disabled={

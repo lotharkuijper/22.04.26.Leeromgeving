@@ -5218,8 +5218,14 @@ ${reflection}`;
     try {
       if (hasPersonaSummaries) {
         // Pad A: sla de door de student bewerkte samenvattingen op als journal-entries.
+        // Haal de geldige thread-ids op voor deze groep zodat een kwaadaardige payload
+        // geen willekeurige threadId kan injecteren.
+        const { data: validThreadRows } = await supabaseAdmin
+          .from('group_persona_threads').select('id').eq('group_id', groupId);
+        const validThreadIds = new Set((validThreadRows || []).map(r => r.id));
+
         for (const s of personaSummaries) {
-          if (!s.threadId) continue;
+          if (!s.threadId || !validThreadIds.has(s.threadId)) continue;
           const content = [
             s.studentSummary ? `**Inbreng student:**\n${s.studentSummary}` : '',
             s.personaSummary ? `**Reactie van ${s.personaName || 'persona'}:**\n${s.personaSummary}` : '',
