@@ -71,6 +71,7 @@ interface ProjectMaterialDoc {
   id: string;
   filename: string;
   byte_size: number | null;
+  mime_type?: string | null;
   created_at: string;
 }
 
@@ -283,6 +284,30 @@ export function ProjectRoomPage() {
   useEffect(() => {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [chatMessages]);
+
+  const downloadMaterial = async (d: ProjectMaterialDoc) => {
+    if (!projectId || !token) return;
+    try {
+      const r = await fetch(`/api/projects/${projectId}/documents/${d.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || 'Download mislukt');
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = d.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) {
+      setError(e.message || 'Download mislukt');
+    }
+  };
 
   const sendPersona = async () => {
     if (!personaInput.trim() || !activePersonaId || !groupId || !token) return;
@@ -699,11 +724,22 @@ export function ProjectRoomPage() {
                   {projectMaterials.map(d => (
                     <li key={d.id} className="flex items-center gap-1.5" data-testid={`project-material-${d.id}`}>
                       <FileText className="w-3 h-3 text-gray-400" />
-                      <span className="truncate" title={d.filename}>{d.filename}</span>
+                      <button
+                        type="button"
+                        onClick={() => downloadMaterial(d)}
+                        className="truncate text-left text-blue-700 hover:underline"
+                        title={`Download ${d.filename}`}
+                        data-testid={`button-download-material-${d.id}`}
+                      >
+                        {d.filename}
+                      </button>
+                      {d.byte_size ? (
+                        <span className="text-[10px] text-gray-400">{Math.max(1, Math.round(d.byte_size / 1024))} KB</span>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
-                <p className="text-[10px] text-gray-400 mt-1">Alle persona's hebben deze documenten automatisch bij de hand.</p>
+                <p className="text-[10px] text-gray-400 mt-1">Klik een bestand om te downloaden. Tekstbestanden worden ook automatisch als context aan de persona's gegeven.</p>
               </div>
             )}
             {Array.isArray(project.rubric_criteria) && project.rubric_criteria.length > 0 && (

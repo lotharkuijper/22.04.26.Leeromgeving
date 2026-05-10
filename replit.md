@@ -35,7 +35,7 @@ Per module (`chat`, `explain`, `quiz`, `project`) en per cursus instelbaar via `
 
 ## Projecten — beheer & beoordelaars (Task #80)
 - `project_personas.persona_type` ∈ {`conversational`, `evaluator`}; ook op `course_personas`. Studenten zien evaluators NIET in `/room`; staff wel.
-- `project_documents` (project-breed) — staff uploadt via `POST /api/projects/:id/documents`, lid leest via `GET`. Tekst wordt automatisch in elke persona-chat geïnjecteerd als blok "Projectmateriaal van de docent".
+- `project_documents` (project-breed) — staff uploadt via `POST /api/projects/:id/documents`, lid leest via `GET`. Tekst wordt automatisch in elke persona-chat geïnjecteerd als blok "Projectmateriaal van de docent". Binaire datasets (Jamovi `.omv`, `.sav`, `.jasp`, `.rdata`, …) worden in `file_bytes`/`mime_type` opgeslagen — geen tekstextractie, niet als chat-context. Studenten downloaden via `GET /api/projects/:id/documents/:docId/download` (auth via `userHasProjectAccess`).
 - Verborgen rubrics → `project_persona_documents.is_hidden_rubric=true`. Alleen staff mag uploaden, alleen op evaluator-persona's. Lijst-endpoint filtert hidden rubrics weg voor non-staff.
 - `POST /api/projects/groups/:groupId/evaluate` — voert per evaluator de Groq-evaluatie uit (rubric + alle persona-gesprekken + projectdocs), schrijft één journal-entry per groepslid (`source_ref="group_evaluate:<groupId>:<personaId>:<requestId>"`).
 - `POST /api/projects/:projectId/personas/:personaId/copy-to-library` — kopieert project-persona terug naar `course_personas` (idempotent op naam).

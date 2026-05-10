@@ -4816,6 +4816,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
         .from('project_documents')
         .select('filename, content_text')
         .eq('project_id', project.id)
+        .not('content_text', 'is', null)
         .order('created_at', { ascending: true })
         .limit(10);
       if (pdocs && pdocs.length > 0) {
@@ -5741,7 +5742,7 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
     }
     const { data, error: e } = await supabaseAdmin
       .from('project_documents')
-      .select('id, filename, byte_size, uploaded_by, created_at')
+      .select('id, filename, byte_size, mime_type, uploaded_by, created_at')
       .eq('project_id', projectId).order('created_at', { ascending: false });
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ documents: data || [] });
@@ -5750,35 +5751,97 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
   }
 });
 
+// Binaire bestandstypes die wel gedownload mogen worden door studenten,
+// maar NIET als chat-context worden geïnjecteerd (geen tekst-extractie).
+// Jamovi (.omv) is hierin de eerste use-case.
+const BINARY_DOWNLOAD_EXT_RE = /\.(omv|omt|sav|jasp|rdata|rds|sps|do|dta)$/i;
+
 app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { projectId } = req.params;
   if (!req.file) return res.status(400).json({ error: 'Geen bestand ontvangen (veld "file")' });
-  let text;
-  try { text = await extractTextFromUpload(req.file); }
-  catch (e) { return res.status(400).json({ error: e.message || 'Kon tekst niet uit bestand halen' }); }
-  if (!text || text.length === 0) return res.status(400).json({ error: 'Geen leesbare tekst gevonden in dit bestand' });
-  if (text.length > MAX_DOC_CHARS) {
-    text = text.slice(0, MAX_DOC_CHARS) + `\n\n…[afgekapt op ${MAX_DOC_CHARS.toLocaleString('nl-NL')} tekens]`;
-  }
   const filename = req.file.originalname || 'upload';
+  const isBinaryDownload = BINARY_DOWNLOAD_EXT_RE.test(filename);
+  let text = null;
+  if (!isBinaryDownload) {
+    try { text = await extractTextFromUpload(req.file); }
+    catch (e) { return res.status(400).json({ error: e.message || 'Kon tekst niet uit bestand halen' }); }
+    if (!text || text.length === 0) return res.status(400).json({ error: 'Geen leesbare tekst gevonden in dit bestand' });
+    if (text.length > MAX_DOC_CHARS) {
+      text = text.slice(0, MAX_DOC_CHARS) + `\n\n…[afgekapt op ${MAX_DOC_CHARS.toLocaleString('nl-NL')} tekens]`;
+    }
+  }
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const insertRow = {
+      project_id: projectId,
+      filename: String(filename).slice(0, 200),
+      content_text: text,
+      byte_size: req.file.size || (text ? Buffer.byteLength(text, 'utf8') : 0),
+      mime_type: req.file.mimetype || (isBinaryDownload ? 'application/octet-stream' : null),
+      uploaded_by: auth.user.id,
+    };
+    if (isBinaryDownload) {
+      // bytea wordt door PostgREST als hex-string verwacht (\\x...).
+      insertRow.file_bytes = '\\x' + req.file.buffer.toString('hex');
+    }
     const { data, error: e } = await supabaseAdmin
-      .from('project_documents').insert({
-        project_id: projectId,
-        filename: String(filename).slice(0, 200),
-        content_text: text,
-        byte_size: req.file.size || Buffer.byteLength(text, 'utf8'),
-        uploaded_by: auth.user.id,
-      }).select('id, filename, byte_size, uploaded_by, created_at').single();
+      .from('project_documents').insert(insertRow)
+      .select('id, filename, byte_size, mime_type, uploaded_by, created_at').single();
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ document: data });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/projects/:projectId/documents/:docId/download — streamt het
+// originele bestand. Toegankelijk voor groepsleden van het project en staff.
+app.get('/api/projects/:projectId/documents/:docId/download', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, docId } = req.params;
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    if (!(await userHasProjectAccess(auth.user, profile, project))) {
+      return res.status(403).json({ error: 'Geen toegang tot dit project' });
+    }
+    const { data: doc } = await supabaseAdmin
+      .from('project_documents')
+      .select('filename, content_text, file_bytes, mime_type')
+      .eq('id', docId).eq('project_id', projectId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    let buffer;
+    if (doc.file_bytes) {
+      // Supabase retourneert bytea als hex-string met "\\x"-prefix; vang ook
+      // de zeldzame Buffer-vorm op.
+      if (Buffer.isBuffer(doc.file_bytes)) buffer = doc.file_bytes;
+      else if (typeof doc.file_bytes === 'string') {
+        const hex = doc.file_bytes.startsWith('\\x') ? doc.file_bytes.slice(2) : doc.file_bytes;
+        buffer = Buffer.from(hex, 'hex');
+      } else {
+        buffer = Buffer.from(doc.file_bytes);
+      }
+    } else if (doc.content_text != null) {
+      buffer = Buffer.from(doc.content_text, 'utf8');
+    } else {
+      return res.status(404).json({ error: 'Bestand bevat geen inhoud' });
+    }
+    const safeName = String(doc.filename || 'download').replace(/[\r\n"]/g, '_');
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    return res.end(buffer);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

@@ -50,6 +50,9 @@ interface RubricDoc {
 }
 
 const UPLOAD_ACCEPT = '.txt,.md,.markdown,.csv,.tsv,.json,.log,.pdf,.docx,.pptx,.xlsx,.odt,.ods,.odp';
+// Projectdocumenten mogen óók binaire datasets zijn (Jamovi .omv etc.) die
+// studenten alleen downloaden — niet als chat-context worden gebruikt.
+const PROJECT_DOC_ACCEPT = UPLOAD_ACCEPT + ',.omv,.omt,.sav,.jasp,.rdata,.rds,.sps,.dta';
 
 export function ProjectsAdminTab() {
   const { session } = useAuth();
@@ -453,14 +456,14 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="font-semibold text-gray-900 flex items-center gap-2"><FolderOpen className="w-4 h-4" /> Projectdocumenten</h3>
-            <p className="text-xs text-gray-500">Datasets, opdracht- en bronmateriaal. Iedere groep ziet deze read-only en alle persona's gebruiken ze als context.</p>
+            <p className="text-xs text-gray-500">Datasets, opdracht- en bronmateriaal. Tekstbestanden gebruiken alle persona's als context; binaire datasets (zoals Jamovi .omv) kunnen studenten alleen downloaden.</p>
           </div>
           <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer ${uploadingPDoc ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
             {uploadingPDoc ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
             Upload bestand
             <input
               ref={pdocFileRef}
-              type="file" accept={UPLOAD_ACCEPT} className="hidden"
+              type="file" accept={PROJECT_DOC_ACCEPT} className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) uploadProjectDoc(f); }}
               disabled={uploadingPDoc}
               data-testid="input-upload-project-doc"
