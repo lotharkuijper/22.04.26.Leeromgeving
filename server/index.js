@@ -4655,11 +4655,14 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
     }
 
     // Project-brede docent-documenten (read-only voor studenten).
-    const { data: projectDocs } = await supabaseAdmin
+    // Studenten zien alleen bestanden die is_visible_to_students = true hebben.
+    let pdQuery = supabaseAdmin
       .from('project_documents')
-      .select('id, filename, byte_size, uploaded_by, created_at')
+      .select('id, filename, byte_size, mime_type, document_ref_id, is_visible_to_students, uploaded_by, created_at')
       .eq('project_id', projectId)
       .order('created_at', { ascending: false });
+    if (!isStaff) pdQuery = pdQuery.eq('is_visible_to_students', true);
+    const { data: projectDocs } = await pdQuery;
 
     return res.json({
       project, group, members, personas, checkpoints,
@@ -4830,6 +4833,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
         .from('project_documents')
         .select('filename, content_text')
         .eq('project_id', project.id)
+        .eq('is_visible_to_students', true)
         .not('content_text', 'is', null)
         .order('created_at', { ascending: true })
         .limit(10);
@@ -5756,7 +5760,7 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
     }
     const { data, error: e } = await supabaseAdmin
       .from('project_documents')
-      .select('id, filename, byte_size, mime_type, document_ref_id, uploaded_by, created_at')
+      .select('id, filename, byte_size, mime_type, document_ref_id, is_visible_to_students, uploaded_by, created_at')
       .eq('project_id', projectId).order('created_at', { ascending: false });
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ documents: data || [] });
@@ -5770,64 +5774,90 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
 // Jamovi (.omv) is hierin de eerste use-case.
 const BINARY_DOWNLOAD_EXT_RE = /\.(omv|omt|sav|jasp|rdata|rds|sps|do|dta)$/i;
 
-// Zoek of maak een "Projectdata"-submap aan binnen de cursusmap
-// van het gegeven project. Geeft het folder-id terug (of null bij fout).
-async function findOrCreateProjectdataFolder(projectId, uploadedById) {
+// Zoek of maak de cursus-Projectdata-map aan en geef het id terug.
+// Structuur: [cursusmap] → Projectdata → [projectnaam] → bestanden
+// courseId en uploadedById zijn verplicht; parentCourseId mag null zijn.
+async function findOrCreateCourseProjectdataFolder(courseId, uploadedById) {
   if (!pgPool) return null;
   try {
-    // Zoek de cursus van het project.
-    const { data: project } = await supabaseAdmin
-      .from('projects').select('course_id').eq('id', projectId).maybeSingle();
-    if (!project?.course_id) return null;
+    // Zoek een bestaande Projectdata-map die aan deze cursus is gekoppeld.
+    const { data: assignments } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .select('folder_id, document_folders(id, name)')
+      .eq('course_id', courseId);
+    const existing = (assignments || []).find(a => a.document_folders?.name === 'Projectdata');
+    if (existing?.folder_id) return existing.folder_id;
 
-    // Zoek een bestaande "Projectdata"-map die kind is van een map
-    // in de cursusmap-boom (folder_type 'course' of 'data' of 'general').
-    // Eenvoudigste heuristiek: zoek op naam "Projectdata" in alle mappen.
-    const { data: existing } = await supabaseAdmin
-      .from('document_folders').select('id').eq('name', 'Projectdata').maybeSingle();
-    if (existing?.id) {
-      // Zorg dat de map aan de cursus gekoppeld is.
-      await supabaseAdmin.from('course_folder_assignments').upsert(
-        { course_id: project.course_id, folder_id: existing.id },
-        { onConflict: 'course_id,folder_id', ignoreDuplicates: true }
-      );
-      return existing.id;
-    }
-
-    // Geen map gevonden — zoek de parent-cursusmap om er onder te hangen.
-    // Neem de eerste map van folder_type 'course' als parent (bijv. Basiscursus),
-    // of de root 'Bestandenomgeving' als fallback.
+    // Gebruik de eerste 'course'-map als parent (bijv. Basiscursus).
     const { data: courseFolders } = await supabaseAdmin
       .from('document_folders').select('id').eq('folder_type', 'course').limit(1);
     const parentId = courseFolders?.[0]?.id || null;
 
-    // Maak de "Projectdata"-map aan via pg (service-role, bypast RLS).
     const result = await pgPool.query(
       `INSERT INTO document_folders (name, description, parent_folder_id, created_by, folder_type, is_root)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-      ['Projectdata', 'Projectdata — binaire bestanden voor projecten', parentId, uploadedById, 'data', false]
+      ['Projectdata', 'Projectdata — bestanden per project', parentId, uploadedById, 'data', false]
     );
-    const newFolderId = result.rows[0]?.id;
-    if (!newFolderId) return null;
+    const folderId = result.rows[0]?.id;
+    if (!folderId) return null;
 
-    // Voeg rechten toe zodat alle rollen de map kunnen zien.
     await pgPool.query(
       `INSERT INTO folder_permissions (folder_id, role, can_view, can_edit)
        VALUES ($1,'admin',true,true),($1,'docent',true,true),($1,'student',true,false)
        ON CONFLICT DO NOTHING`,
-      [newFolderId]
+      [folderId]
     );
-
-    // Koppel de map aan de cursus zodat hij in de cursusbestandsboom verschijnt.
     await supabaseAdmin.from('course_folder_assignments').upsert(
-      { course_id: project.course_id, folder_id: newFolderId },
+      { course_id: courseId, folder_id: folderId },
       { onConflict: 'course_id,folder_id', ignoreDuplicates: true }
     );
-
-    console.log(`[projectdata-folder] Aangemaakt: ${newFolderId} voor cursus ${project.course_id}`);
-    return newFolderId;
+    console.log(`[projectdata-folder] Projectdata aangemaakt: ${folderId} voor cursus ${courseId}`);
+    return folderId;
   } catch (e) {
-    console.error('[projectdata-folder] fout:', e.message);
+    console.error('[projectdata-folder] fout bij Projectdata-map:', e.message);
+    return null;
+  }
+}
+
+// Zoek of maak een per-project submap aan binnen de Projectdata-map.
+// Geeft het subfolder-id terug (of null bij fout).
+async function findOrCreateProjectSubfolder(projectId, projectTitle, uploadedById) {
+  if (!pgPool) return null;
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('course_id').eq('id', projectId).maybeSingle();
+    if (!project?.course_id) return null;
+
+    const projectdataId = await findOrCreateCourseProjectdataFolder(project.course_id, uploadedById);
+    if (!projectdataId) return null;
+
+    const safeName = String(projectTitle || projectId).slice(0, 200).trim() || 'Project';
+
+    // Zoek bestaande submap voor dit project (op naam onder de Projectdata-map).
+    const { data: existingSub } = await supabaseAdmin
+      .from('document_folders')
+      .select('id').eq('name', safeName).eq('parent_folder_id', projectdataId).maybeSingle();
+    if (existingSub?.id) return existingSub.id;
+
+    // Aanmaken via pg zodat RLS geen invloed heeft.
+    const result = await pgPool.query(
+      `INSERT INTO document_folders (name, description, parent_folder_id, created_by, folder_type, is_root)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [safeName, `Projectbestanden — ${safeName}`, projectdataId, uploadedById, 'data', false]
+    );
+    const subfolderId = result.rows[0]?.id;
+    if (!subfolderId) return null;
+
+    await pgPool.query(
+      `INSERT INTO folder_permissions (folder_id, role, can_view, can_edit)
+       VALUES ($1,'admin',true,true),($1,'docent',true,true),($1,'student',true,false)
+       ON CONFLICT DO NOTHING`,
+      [subfolderId]
+    );
+    console.log(`[projectdata-folder] Projectsubmap aangemaakt: ${subfolderId} ("${safeName}")`);
+    return subfolderId;
+  } catch (e) {
+    console.error('[projectdata-folder] fout bij projectsubmap:', e.message);
     return null;
   }
 }
@@ -5864,7 +5894,7 @@ app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (
       // Buffer via JSON).
       if (!pgPool) return res.status(503).json({ error: 'Directe DB-verbinding niet beschikbaar' });
 
-      const folderId = await findOrCreateProjectdataFolder(projectId, auth.user.id);
+      const folderId = await findOrCreateProjectSubfolder(projectId, access.project?.title, auth.user.id);
       const mimeType = req.file.mimetype || 'application/octet-stream';
       const safeFilename = String(filename).slice(0, 200);
 
@@ -5895,12 +5925,13 @@ app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (
       .from('project_documents').insert({
         project_id: projectId,
         filename: String(filename).slice(0, 200),
-        content_text: text,   // null voor binaire bestanden
+        content_text: text,
         byte_size: req.file.size || (text ? Buffer.byteLength(text, 'utf8') : 0),
         mime_type: req.file.mimetype || (isBinaryDownload ? 'application/octet-stream' : null),
         uploaded_by: auth.user.id,
         document_ref_id: documentRefId,
-      }).select('id, filename, byte_size, mime_type, document_ref_id, uploaded_by, created_at').single();
+        is_visible_to_students: true,
+      }).select('id, filename, byte_size, mime_type, document_ref_id, is_visible_to_students, uploaded_by, created_at').single();
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ document: data });
   } catch (err) {
@@ -5954,6 +5985,33 @@ app.get('/api/projects/:projectId/documents/:docId/download', async (req, res) =
     res.setHeader('Content-Length', buffer.length);
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
     return res.end(buffer);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/projects/:projectId/documents/:docId — zichtbaarheid voor studenten wijzigen
+app.patch('/api/projects/:projectId/documents/:docId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, docId } = req.params;
+  const { is_visible_to_students } = req.body;
+  if (typeof is_visible_to_students !== 'boolean') {
+    return res.status(400).json({ error: 'is_visible_to_students moet een boolean zijn' });
+  }
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const { data, error: e } = await supabaseAdmin
+      .from('project_documents')
+      .update({ is_visible_to_students })
+      .eq('id', docId).eq('project_id', projectId)
+      .select('id, is_visible_to_students').single();
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ document: data });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
-  Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert,
+  Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database,
 } from 'lucide-react';
 
 interface Persona {
@@ -73,6 +73,7 @@ interface ProjectMaterialDoc {
   byte_size: number | null;
   mime_type?: string | null;
   document_ref_id?: string | null;
+  is_visible_to_students: boolean;
   created_at: string;
 }
 
@@ -718,13 +719,15 @@ export function ProjectRoomPage() {
             )}
             {projectMaterials.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
-                <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
-                  <FileText className="w-3 h-3" /> Projectmateriaal van de docent ({projectMaterials.length})
+                <div className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1">
+                  <Download className="w-3 h-3" /> Bestanden van de docent ({projectMaterials.length})
                 </div>
-                <ul className="text-xs text-gray-600 space-y-0.5">
+                <ul className="space-y-1">
                   {projectMaterials.map(d => (
-                    <li key={d.id} className="flex items-center gap-1.5" data-testid={`project-material-${d.id}`}>
-                      <FileText className="w-3 h-3 text-gray-400" />
+                    <li key={d.id} className="flex items-center gap-1.5 text-xs" data-testid={`project-material-${d.id}`}>
+                      {d.document_ref_id
+                        ? <Database className="w-3 h-3 text-blue-400 shrink-0" />
+                        : <FileText className="w-3 h-3 text-gray-400 shrink-0" />}
                       <button
                         type="button"
                         onClick={() => downloadMaterial(d)}
@@ -735,12 +738,12 @@ export function ProjectRoomPage() {
                         {d.filename}
                       </button>
                       {d.byte_size ? (
-                        <span className="text-[10px] text-gray-400">{Math.max(1, Math.round(d.byte_size / 1024))} KB</span>
+                        <span className="text-[10px] text-gray-400 shrink-0">{Math.max(1, Math.round(d.byte_size / 1024))} KB</span>
                       ) : null}
                     </li>
                   ))}
                 </ul>
-                <p className="text-[10px] text-gray-400 mt-1">Klik een bestand om te downloaden. Tekstbestanden worden ook automatisch als context aan de persona's gegeven.</p>
+                <p className="text-[10px] text-gray-400 mt-1.5">Klik een bestand om te downloaden.</p>
               </div>
             )}
             {Array.isArray(project.rubric_criteria) && project.rubric_criteria.length > 0 && (

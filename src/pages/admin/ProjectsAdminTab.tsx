@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
 import { supabase } from '../../lib/supabase';
-import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, ShieldAlert, Database, Download } from 'lucide-react';
+import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, ShieldAlert, Database, Download, Eye, EyeOff } from 'lucide-react';
 
 interface ProjectRow {
   id: string;
@@ -39,6 +39,7 @@ interface ProjectDoc {
   byte_size: number | null;
   mime_type?: string | null;
   document_ref_id?: string | null;
+  is_visible_to_students: boolean;
   uploaded_by: string | null;
   created_at: string;
 }
@@ -403,6 +404,20 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     setProjectDocs(prev => prev.filter(d => d.id !== doc.id));
   };
 
+  const toggleDocVisibility = async (doc: ProjectDoc) => {
+    const next = !doc.is_visible_to_students;
+    setProjectDocs(prev => prev.map(d => d.id === doc.id ? { ...d, is_visible_to_students: next } : d));
+    const r = await fetch(`/api/projects/${project.id}/documents/${doc.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_visible_to_students: next }),
+    });
+    if (!r.ok) {
+      setProjectDocs(prev => prev.map(d => d.id === doc.id ? { ...d, is_visible_to_students: !next } : d));
+      onError('Zichtbaarheid wijzigen mislukt');
+    }
+  };
+
   const uploadRubric = async (personaId: string, file: File) => {
     if (file.size > 15_000_000) { onError('Bestand is groter dan 15 MB.'); return; }
     setUploadingRubric(personaId);
@@ -496,13 +511,21 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         ) : (
           <ul className="divide-y divide-gray-100">
             {projectDocs.map(d => (
-              <li key={d.id} className="py-2 flex items-center gap-3" data-testid={`project-doc-${d.id}`}>
+              <li key={d.id} className={`py-2 flex items-center gap-3 ${!d.is_visible_to_students ? 'opacity-50' : ''}`} data-testid={`project-doc-${d.id}`}>
                 {d.document_ref_id ? <Database className="w-4 h-4 text-blue-500" /> : <FileText className="w-4 h-4 text-gray-500" />}
                 <div className="flex-1 min-w-0 truncate text-sm">{d.filename}</div>
                 {d.document_ref_id && (
                   <span className="text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">Projectdata</span>
                 )}
                 <div className="text-xs text-gray-400">{d.byte_size ? `${Math.round(d.byte_size / 1024)} KB` : ''}</div>
+                <button
+                  onClick={() => toggleDocVisibility(d)}
+                  className={`p-1 rounded ${d.is_visible_to_students ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                  title={d.is_visible_to_students ? 'Zichtbaar voor studenten — klik om te verbergen' : 'Verborgen voor studenten — klik om zichtbaar te maken'}
+                  data-testid={`button-toggle-visibility-${d.id}`}
+                >
+                  {d.is_visible_to_students ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                </button>
                 <button
                   onClick={async () => {
                     try {
