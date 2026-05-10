@@ -5791,10 +5791,16 @@ async function findOrCreateCourseProjectdataFolder(courseId, uploadedById) {
     const existing = (assignments || []).find(a => a.document_folders?.name === 'Projectdata');
     if (existing?.folder_id) return existing.folder_id;
 
-    // Gebruik de eerste 'course'-map als parent (bijv. Basiscursus).
-    const { data: courseFolders } = await supabaseAdmin
-      .from('document_folders').select('id').eq('folder_type', 'course').limit(1);
-    const parentId = courseFolders?.[0]?.id || null;
+    // Gebruik de eerste map die al aan deze cursus is gekoppeld als parent,
+    // zodat de Projectdata-map onder de juiste cursusmap valt.
+    const { data: courseAssigned } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .select('folder_id, document_folders(id, folder_type)')
+      .eq('course_id', courseId);
+    const courseParent = (courseAssigned || []).find(
+      a => a.document_folders?.folder_type === 'course' || a.document_folders?.folder_type === 'general'
+    );
+    const parentId = courseParent?.folder_id || null;
 
     const result = await pgPool.query(
       `INSERT INTO document_folders (name, description, parent_folder_id, created_by, folder_type, is_root)
@@ -5836,15 +5842,17 @@ async function findOrCreateProjectSubfolder(projectId, projectTitle, uploadedByI
 
     const safeName = String(projectTitle || '').slice(0, 200).trim() || projectId.slice(0, 36);
 
-    // Zoek bestaande submap voor dit project: eerst op naam, dan op projectId in description.
+    // Zoek bestaande submap strikt op projectId in de description.
+    // Fallback op naam alleen als de description-markering nog niet bestaat
+    // (bijv. mappen aangemaakt vóór dit schema).
     const { data: existingSubs } = await supabaseAdmin
       .from('document_folders')
       .select('id, name, description')
       .eq('parent_folder_id', projectdataId);
-    const byProjectId = (existingSubs || []).find(f => f.description && f.description.includes(projectId));
+    const byProjectId = (existingSubs || []).find(
+      f => f.description && f.description.includes(`projectId:${projectId}`)
+    );
     if (byProjectId?.id) return byProjectId.id;
-    const byName = (existingSubs || []).find(f => f.name === safeName);
-    if (byName?.id) return byName.id;
 
     // Aanmaken via pg zodat RLS geen invloed heeft.
     // Sla projectId op in description zodat we later deterministisch kunnen opzoeken.
