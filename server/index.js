@@ -5834,21 +5834,24 @@ async function findOrCreateProjectSubfolder(projectId, projectTitle, uploadedByI
     const projectdataId = await findOrCreateCourseProjectdataFolder(project.course_id, uploadedById);
     if (!projectdataId) return null;
 
-    // Gebruik een unieke naam inclusief projectId om titelbotsingingen te voorkomen.
-    const titlePart = String(projectTitle || '').slice(0, 150).trim();
-    const safeName = titlePart ? `${titlePart} (${projectId.slice(0, 8)})` : projectId.slice(0, 36);
+    const safeName = String(projectTitle || '').slice(0, 200).trim() || projectId.slice(0, 36);
 
-    // Zoek bestaande submap voor dit project op unieke naam onder Projectdata.
-    const { data: existingSub } = await supabaseAdmin
+    // Zoek bestaande submap voor dit project: eerst op naam, dan op projectId in description.
+    const { data: existingSubs } = await supabaseAdmin
       .from('document_folders')
-      .select('id').eq('name', safeName).eq('parent_folder_id', projectdataId).maybeSingle();
-    if (existingSub?.id) return existingSub.id;
+      .select('id, name, description')
+      .eq('parent_folder_id', projectdataId);
+    const byProjectId = (existingSubs || []).find(f => f.description && f.description.includes(projectId));
+    if (byProjectId?.id) return byProjectId.id;
+    const byName = (existingSubs || []).find(f => f.name === safeName);
+    if (byName?.id) return byName.id;
 
     // Aanmaken via pg zodat RLS geen invloed heeft.
+    // Sla projectId op in description zodat we later deterministisch kunnen opzoeken.
     const result = await pgPool.query(
       `INSERT INTO document_folders (name, description, parent_folder_id, created_by, folder_type, is_root)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-      [safeName, `Projectbestanden — ${titlePart || projectId}`, projectdataId, uploadedById, 'data', false]
+      [safeName, `Projectbestanden — projectId:${projectId}`, projectdataId, uploadedById, 'data', false]
     );
     const subfolderId = result.rows[0]?.id;
     if (!subfolderId) return null;
