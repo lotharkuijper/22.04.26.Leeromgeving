@@ -65,6 +65,14 @@ interface MigrateResult {
   errors: string[];
 }
 
+interface BackfillResult {
+  total: number;
+  linked: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+}
+
 interface UnmarkedSubfolder {
   subfolderId: string;
   name: string;
@@ -103,6 +111,8 @@ export function ProjectsAdminTab() {
   const [detailProject, setDetailProject] = useState<ProjectRow | null>(null);
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState<MigrateResult | null>(null);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(null);
   const [unmarkedFolders, setUnmarkedFolders] = useState<UnmarkedSubfolder[] | null>(null);
   const [markedFolders, setMarkedFolders] = useState<MarkedSubfolder[] | null>(null);
   const [showMarked, setShowMarked] = useState(false);
@@ -143,6 +153,26 @@ export function ProjectsAdminTab() {
       setError(e.message);
     } finally {
       setMigrating(false);
+    }
+  };
+
+  const runBackfill = async () => {
+    if (!session?.access_token) return;
+    setBackfilling(true);
+    setBackfillResult(null);
+    setError(null);
+    try {
+      const r = await fetch('/api/admin/backfill-project-doc-folder-links', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Backfill mislukt');
+      setBackfillResult(d);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBackfilling(false);
     }
   };
 
@@ -426,6 +456,37 @@ export function ProjectsAdminTab() {
             )}
           </div>
         )}
+
+        <div className="mt-6 pt-5 border-t border-gray-100">
+          <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-1">
+            <FileText className="w-4 h-4 text-blue-500" /> Herstel mapkoppeling voor tekst-uploads
+          </h4>
+          <p className="text-sm text-gray-500 mb-3">
+            Tekst-uploads (PDF, Word, CSV, …) die vóór Task&nbsp;#102 zijn geüpload missen een koppeling
+            naar de Projectdata-map en zijn daardoor niet zichtbaar in de mappenstructuur.
+            Deze knop maakt voor elk van die bestanden alsnog een map-entry aan en vult de koppeling in.
+            Veilig om meerdere keren uit te voeren — al gekoppelde bestanden worden overgeslagen.
+          </p>
+          <button
+            onClick={runBackfill}
+            disabled={backfilling}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40"
+            data-testid="button-backfill-doc-links"
+          >
+            {backfilling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+            {backfilling ? 'Bezig met herstellen…' : 'Herstel mapkoppeling'}
+          </button>
+          {backfillResult && (
+            <div className={`mt-3 px-3 py-2 rounded text-sm border ${backfillResult.failed > 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`} data-testid="text-backfill-result">
+              Klaar — {backfillResult.total} gevonden, {backfillResult.linked} gekoppeld, {backfillResult.skipped} overgeslagen, {backfillResult.failed} mislukt.
+              {backfillResult.errors.length > 0 && (
+                <ul className="mt-1 list-disc list-inside text-xs text-red-700">
+                  {backfillResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="mt-6 pt-5 border-t border-gray-100">
           <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-1">

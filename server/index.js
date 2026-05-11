@@ -6405,6 +6405,145 @@ app.post('/api/admin/migrate-project-docs-subfolders', async (req, res) => {
 });
 
 // =============================================================================
+// POST /api/admin/backfill-project-doc-folder-links
+// Koppelt tekst-uploads in project_documents die document_ref_id IS NULL hebben
+// maar wel content_text bevatten aan de juiste Projectdata-submap door een
+// documents-rij aan te maken en document_ref_id in te vullen.
+// Idempotent — rijen waar document_ref_id al is ingevuld worden overgeslagen.
+// Alleen admins.
+// =============================================================================
+
+app.post('/api/admin/backfill-project-doc-folder-links', async (req, res) => {
+  if (!supabaseAdmin || !pgPool) return res.status(503).json({ error: 'DB-verbinding niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+  const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+  if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen dit uitvoeren' });
+
+  try {
+    // Haal alle project_documents op zonder document_ref_id maar met content_text
+    const BATCH = 500;
+    let allPDocs = [];
+    let from = 0;
+    while (true) {
+      const { data: batch, error: pdErr } = await supabaseAdmin
+        .from('project_documents')
+        .select('id, project_id, filename, byte_size, mime_type, uploaded_by, created_at')
+        .is('document_ref_id', null)
+        .not('content_text', 'is', null)
+        .range(from, from + BATCH - 1);
+      if (pdErr) return res.status(500).json({ error: pdErr.message });
+      if (!batch || batch.length === 0) break;
+      allPDocs = allPDocs.concat(batch);
+      if (batch.length < BATCH) break;
+      from += BATCH;
+    }
+
+    let linked = 0;
+    let skipped = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (const pd of allPDocs) {
+      try {
+        // Haal project op voor title
+        const { data: project } = await supabaseAdmin
+          .from('projects').select('id, title').eq('id', pd.project_id).maybeSingle();
+        if (!project) { skipped++; continue; }
+
+        // Zoek of maak de projectsubmap aan
+        const folderId = await findOrCreateProjectSubfolder(
+          project.id, project.title, pd.uploaded_by || auth.user.id
+        );
+        if (!folderId) {
+          failed++;
+          errors.push(`project_document ${pd.id} (project "${project.title}"): submap aanmaken mislukt`);
+          continue;
+        }
+
+        const safeFilename = String(pd.filename || 'upload').slice(0, 200);
+        const mimeType = pd.mime_type || 'text/plain';
+
+        // Voer INSERT + UPDATE uit in één transactie zodat er geen wees-rij
+        // in documents achterblijft als de update mislukt (of al gedaan is
+        // door een gelijktijdige run).
+        const client = await pgPool.connect();
+        let documentRefId = null;
+        try {
+          await client.query('BEGIN');
+
+          const docResult = await client.query(
+            `INSERT INTO documents
+               (title, filename, file_path, file_type, file_size, folder_id,
+                uploaded_by, processing_status, total_chunks, mime_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', 0, $8)
+             RETURNING id`,
+            [
+              safeFilename,
+              safeFilename,
+              '',
+              mimeType,
+              pd.byte_size || 0,
+              folderId,
+              pd.uploaded_by || auth.user.id,
+              mimeType,
+            ]
+          );
+          documentRefId = docResult.rows[0]?.id;
+          if (!documentRefId) throw new Error('geen id terug van INSERT');
+
+          // Update project_documents — alleen als document_ref_id nog NULL is
+          // (guard tegen gelijktijdige runs).
+          const updResult = await client.query(
+            `UPDATE project_documents
+             SET document_ref_id = $1
+             WHERE id = $2 AND document_ref_id IS NULL`,
+            [documentRefId, pd.id]
+          );
+
+          if (updResult.rowCount === 0) {
+            // Al gekoppeld door een andere run — rol de documents-insert terug.
+            await client.query('ROLLBACK');
+            skipped++;
+            client.release();
+            continue;
+          }
+
+          await client.query('COMMIT');
+        } catch (txErr) {
+          await client.query('ROLLBACK').catch(() => {});
+          client.release();
+          failed++;
+          errors.push(`project_document ${pd.id}: ${txErr.message}`);
+          continue;
+        }
+        client.release();
+
+        linked++;
+        console.log(`[backfill-doc-links] project_document ${pd.id} → documents ${documentRefId} (project "${project.title}")`);
+      } catch (innerErr) {
+        failed++;
+        errors.push(`project_document ${pd.id}: ${innerErr.message}`);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      total: allPDocs.length,
+      linked,
+      skipped,
+      failed,
+      errors: errors.slice(0, 10),
+    });
+  } catch (err) {
+    console.error('[backfill-doc-links] fout:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
 // Beoordeling opvragen — voor elke evaluator-persona van het project: rubric
 // + alle persona-gesprekken van de groep + projectdocumenten naar Groq, en
 // schrijf één journal-entry per groepslid per evaluator. Alleen leden of staff.
