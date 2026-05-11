@@ -15,7 +15,7 @@ import { PersonaLibraryTab } from './admin/PersonaLibraryTab';
 import { ProjectsAdminTab } from './admin/ProjectsAdminTab';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 
-import FileManager from '../pages/FileManager';
+import DocumentsPage from '../pages/DocumentsPage';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
 type Document = Database['public']['Tables']['documents']['Row'];
@@ -1028,7 +1028,7 @@ const tabGroups = [
 
 {activeTab === 'documents' && (
   <div>
-    <FileManager />
+    <DocumentsPage />
   </div>
 )}
 
