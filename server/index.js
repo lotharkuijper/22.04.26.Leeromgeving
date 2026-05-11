@@ -5975,7 +5975,24 @@ async function findOrCreateCourseProjectdataFolder(courseId, uploadedById) {
     const courseParent = (courseAssigned || []).find(
       a => a.document_folders?.folder_type === 'course' || a.document_folders?.folder_type === 'general'
     );
-    const parentId = courseParent?.folder_id || null;
+    let parentId = courseParent?.folder_id || null;
+
+    // Globale root-fallback: als er geen cursusmap gevonden is via assignments,
+    // gebruik dan de globale is_root-map als parent zodat de Projectdata-map
+    // nooit zwevend (parent_folder_id IS NULL) aangemaakt wordt.
+    if (!parentId) {
+      const { data: rootRows } = await supabaseAdmin
+        .from('document_folders')
+        .select('id')
+        .eq('is_root', true)
+        .limit(1);
+      parentId = rootRows?.[0]?.id || null;
+      if (parentId) {
+        console.log(`[projectdata-folder] Geen cursusmap gevonden voor cursus ${courseId}, valt terug op globale root ${parentId}`);
+      } else {
+        console.warn(`[projectdata-folder] Geen cursusmap én geen globale root gevonden voor cursus ${courseId} — Projectdata-map krijgt parent_folder_id=NULL (zwevend).`);
+      }
+    }
 
     // Subtree-fallback: als er al een "Projectdata"-map bestaat als direct kind
     // van de gevonden parent-map (maar zonder assignment-rij), gebruik die dan
