@@ -6430,6 +6430,116 @@ app.post('/api/admin/migrate-project-docs-subfolders', async (req, res) => {
 // Alleen admins.
 // =============================================================================
 
+// Standalone backfill-functie — kan zowel door het HTTP-endpoint als bij
+// serverstart worden aangeroepen (zonder HTTP-context).
+// fallbackUserId wordt gebruikt als pd.uploaded_by leeg is; mag null zijn.
+async function runBackfillProjectDocFolderLinks(fallbackUserId = null) {
+  if (!supabaseAdmin || !pgPool) {
+    console.warn('[backfill-doc-links] DB-verbinding niet beschikbaar — backfill overgeslagen');
+    return { ok: false, error: 'DB-verbinding niet beschikbaar' };
+  }
+
+  const BATCH = 500;
+  let allPDocs = [];
+  let from = 0;
+  while (true) {
+    const { data: batch, error: pdErr } = await supabaseAdmin
+      .from('project_documents')
+      .select('id, project_id, filename, byte_size, mime_type, uploaded_by, created_at')
+      .is('document_ref_id', null)
+      .not('content_text', 'is', null)
+      .range(from, from + BATCH - 1);
+    if (pdErr) return { ok: false, error: pdErr.message };
+    if (!batch || batch.length === 0) break;
+    allPDocs = allPDocs.concat(batch);
+    if (batch.length < BATCH) break;
+    from += BATCH;
+  }
+
+  let linked = 0;
+  let skipped = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const pd of allPDocs) {
+    try {
+      const { data: project } = await supabaseAdmin
+        .from('projects').select('id, title').eq('id', pd.project_id).maybeSingle();
+      if (!project) { skipped++; continue; }
+
+      const effectiveUserId = pd.uploaded_by || fallbackUserId;
+      const folderId = await findOrCreateProjectSubfolder(
+        project.id, project.title, effectiveUserId
+      );
+      if (!folderId) {
+        failed++;
+        errors.push(`project_document ${pd.id} (project "${project.title}"): submap aanmaken mislukt`);
+        continue;
+      }
+
+      const safeFilename = String(pd.filename || 'upload').slice(0, 200);
+      const mimeType = pd.mime_type || 'text/plain';
+
+      const client = await pgPool.connect();
+      let documentRefId = null;
+      try {
+        await client.query('BEGIN');
+
+        const docResult = await client.query(
+          `INSERT INTO documents
+             (title, filename, file_path, file_type, file_size, folder_id,
+              uploaded_by, processing_status, total_chunks, mime_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', 0, $8)
+           RETURNING id`,
+          [
+            safeFilename,
+            safeFilename,
+            '',
+            mimeType,
+            pd.byte_size || 0,
+            folderId,
+            effectiveUserId,
+            mimeType,
+          ]
+        );
+        documentRefId = docResult.rows[0]?.id;
+        if (!documentRefId) throw new Error('geen id terug van INSERT');
+
+        const updResult = await client.query(
+          `UPDATE project_documents
+           SET document_ref_id = $1
+           WHERE id = $2 AND document_ref_id IS NULL`,
+          [documentRefId, pd.id]
+        );
+
+        if (updResult.rowCount === 0) {
+          await client.query('ROLLBACK');
+          skipped++;
+          client.release();
+          continue;
+        }
+
+        await client.query('COMMIT');
+      } catch (txErr) {
+        await client.query('ROLLBACK').catch(() => {});
+        client.release();
+        failed++;
+        errors.push(`project_document ${pd.id}: ${txErr.message}`);
+        continue;
+      }
+      client.release();
+
+      linked++;
+      console.log(`[backfill-doc-links] project_document ${pd.id} → documents ${documentRefId} (project "${project.title}")`);
+    } catch (innerErr) {
+      failed++;
+      errors.push(`project_document ${pd.id}: ${innerErr.message}`);
+    }
+  }
+
+  return { ok: true, total: allPDocs.length, linked, skipped, failed, errors: errors.slice(0, 10) };
+}
+
 app.post('/api/admin/backfill-project-doc-folder-links', async (req, res) => {
   if (!supabaseAdmin || !pgPool) return res.status(503).json({ error: 'DB-verbinding niet beschikbaar' });
   const auth = await authUser(req);
@@ -6440,120 +6550,9 @@ app.post('/api/admin/backfill-project-doc-folder-links', async (req, res) => {
   if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen dit uitvoeren' });
 
   try {
-    // Haal alle project_documents op zonder document_ref_id maar met content_text
-    const BATCH = 500;
-    let allPDocs = [];
-    let from = 0;
-    while (true) {
-      const { data: batch, error: pdErr } = await supabaseAdmin
-        .from('project_documents')
-        .select('id, project_id, filename, byte_size, mime_type, uploaded_by, created_at')
-        .is('document_ref_id', null)
-        .not('content_text', 'is', null)
-        .range(from, from + BATCH - 1);
-      if (pdErr) return res.status(500).json({ error: pdErr.message });
-      if (!batch || batch.length === 0) break;
-      allPDocs = allPDocs.concat(batch);
-      if (batch.length < BATCH) break;
-      from += BATCH;
-    }
-
-    let linked = 0;
-    let skipped = 0;
-    let failed = 0;
-    const errors = [];
-
-    for (const pd of allPDocs) {
-      try {
-        // Haal project op voor title
-        const { data: project } = await supabaseAdmin
-          .from('projects').select('id, title').eq('id', pd.project_id).maybeSingle();
-        if (!project) { skipped++; continue; }
-
-        // Zoek of maak de projectsubmap aan
-        const folderId = await findOrCreateProjectSubfolder(
-          project.id, project.title, pd.uploaded_by || auth.user.id
-        );
-        if (!folderId) {
-          failed++;
-          errors.push(`project_document ${pd.id} (project "${project.title}"): submap aanmaken mislukt`);
-          continue;
-        }
-
-        const safeFilename = String(pd.filename || 'upload').slice(0, 200);
-        const mimeType = pd.mime_type || 'text/plain';
-
-        // Voer INSERT + UPDATE uit in één transactie zodat er geen wees-rij
-        // in documents achterblijft als de update mislukt (of al gedaan is
-        // door een gelijktijdige run).
-        const client = await pgPool.connect();
-        let documentRefId = null;
-        try {
-          await client.query('BEGIN');
-
-          const docResult = await client.query(
-            `INSERT INTO documents
-               (title, filename, file_path, file_type, file_size, folder_id,
-                uploaded_by, processing_status, total_chunks, mime_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', 0, $8)
-             RETURNING id`,
-            [
-              safeFilename,
-              safeFilename,
-              '',
-              mimeType,
-              pd.byte_size || 0,
-              folderId,
-              pd.uploaded_by || auth.user.id,
-              mimeType,
-            ]
-          );
-          documentRefId = docResult.rows[0]?.id;
-          if (!documentRefId) throw new Error('geen id terug van INSERT');
-
-          // Update project_documents — alleen als document_ref_id nog NULL is
-          // (guard tegen gelijktijdige runs).
-          const updResult = await client.query(
-            `UPDATE project_documents
-             SET document_ref_id = $1
-             WHERE id = $2 AND document_ref_id IS NULL`,
-            [documentRefId, pd.id]
-          );
-
-          if (updResult.rowCount === 0) {
-            // Al gekoppeld door een andere run — rol de documents-insert terug.
-            await client.query('ROLLBACK');
-            skipped++;
-            client.release();
-            continue;
-          }
-
-          await client.query('COMMIT');
-        } catch (txErr) {
-          await client.query('ROLLBACK').catch(() => {});
-          client.release();
-          failed++;
-          errors.push(`project_document ${pd.id}: ${txErr.message}`);
-          continue;
-        }
-        client.release();
-
-        linked++;
-        console.log(`[backfill-doc-links] project_document ${pd.id} → documents ${documentRefId} (project "${project.title}")`);
-      } catch (innerErr) {
-        failed++;
-        errors.push(`project_document ${pd.id}: ${innerErr.message}`);
-      }
-    }
-
-    return res.json({
-      ok: true,
-      total: allPDocs.length,
-      linked,
-      skipped,
-      failed,
-      errors: errors.slice(0, 10),
-    });
+    const result = await runBackfillProjectDocFolderLinks(auth.user.id);
+    if (!result.ok) return res.status(500).json({ error: result.error });
+    return res.json(result);
   } catch (err) {
     console.error('[backfill-doc-links] fout:', err.message);
     return res.status(500).json({ error: err.message });
@@ -7079,4 +7078,27 @@ app.listen(PORT, '0.0.0.0', () => {
   // Wacht kort tot promptsHasSection geinitialiseerd is alvorens quiz-prompts
   // aan te maken (initChatbotPromptSection draait async).
   setTimeout(() => { initQuizPromptDefaults(); }, 2000);
+  // Controleer bij opstarten of er ongekoppelde tekst-uploads zijn en voer
+  // zo nodig automatisch de mapkoppeling-backfill uit (niet-blokkerend).
+  setTimeout(async () => {
+    try {
+      if (!supabaseAdmin) return;
+      const { data: check } = await supabaseAdmin
+        .from('project_documents')
+        .select('id')
+        .is('document_ref_id', null)
+        .not('content_text', 'is', null)
+        .limit(1);
+      if (!check || check.length === 0) return;
+      console.log('[backfill-doc-links] Ongekoppelde uploads gevonden bij opstarten — backfill wordt gestart...');
+      const result = await runBackfillProjectDocFolderLinks(null);
+      if (result.ok) {
+        console.log(`[backfill-doc-links] Klaar: ${result.linked} gekoppeld, ${result.skipped} overgeslagen, ${result.failed} mislukt (totaal ${result.total})`);
+      } else {
+        console.warn('[backfill-doc-links] Backfill mislukt:', result.error);
+      }
+    } catch (e) {
+      console.error('[backfill-doc-links] Fout bij automatische backfill:', e.message);
+    }
+  }, 3000);
 });
