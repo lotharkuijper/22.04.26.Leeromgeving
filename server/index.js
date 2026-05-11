@@ -4514,13 +4514,15 @@ app.post('/api/projects/groups', async (req, res) => {
     // Maak direct een sessie-record aan zodat de studenten-overzichtspagina
     // "Vervolg laatste sessie" kan tonen. Client-side inserts kunnen stil
     // mislukken door RLS — hier gebruiken we supabaseAdmin.
+    // onConflict matcht de bestaande unique-constraint (project_id, student_id).
     if (!isStaff) {
       await supabaseAdmin.from('student_project_sessions').upsert({
         student_id: auth.user.id,
         project_id: projectId,
         group_id: group.id,
         status: 'in_progress',
-      }, { onConflict: 'student_id,project_id,group_id', ignoreDuplicates: true });
+        started_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,student_id' });
     }
 
     return res.json({ group });
@@ -4577,20 +4579,16 @@ app.post('/api/projects/groups/join', async (req, res) => {
     }
 
     // Maak (of herstel) een sessie-record zodat de overzichtspagina
-    // "Vervolg laatste sessie" kan tonen. Idempotent via upsert.
+    // "Vervolg laatste sessie" kan tonen. onConflict matcht de bestaande
+    // unique-constraint (project_id, student_id).
     if (!isStaff) {
-      const { data: activeSes } = await supabaseAdmin
-        .from('student_project_sessions')
-        .select('id').eq('student_id', auth.user.id).eq('project_id', group.project_id)
-        .neq('status', 'completed').limit(1);
-      if (!activeSes || activeSes.length === 0) {
-        await supabaseAdmin.from('student_project_sessions').upsert({
-          student_id: auth.user.id,
-          project_id: group.project_id,
-          group_id: group.id,
-          status: 'in_progress',
-        }, { onConflict: 'student_id,project_id,group_id', ignoreDuplicates: true });
-      }
+      await supabaseAdmin.from('student_project_sessions').upsert({
+        student_id: auth.user.id,
+        project_id: group.project_id,
+        group_id: group.id,
+        status: 'in_progress',
+        started_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,student_id' });
     }
 
     return res.json({ group });
