@@ -6120,6 +6120,7 @@ app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (
           [safeFilename, safeFilename, '', mimeType, req.file.size || 0, folderId, auth.user.id, mimeType]
         );
         documentRefId = docResult.rows[0]?.id || null;
+        if (!documentRefId) console.warn('[project-doc upload] tekst-doc folder-entry aangemaakt maar geen id teruggekregen');
       } catch (e) {
         // Niet fataal: document_ref_id blijft null, bestand is wel opgeslagen.
         console.warn('[project-doc upload] tekst-doc folder-entry mislukt:', e.message);
@@ -6139,7 +6140,8 @@ app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (
         is_visible_to_students: true,
       }).select('id, filename, byte_size, mime_type, document_ref_id, is_visible_to_students, uploaded_by, created_at').single();
     if (e) return res.status(500).json({ error: e.message });
-    return res.json({ document: data });
+    const folderLinkFailed = !isBinaryDownload && text && !data.document_ref_id;
+    return res.json({ document: data, ...(folderLinkFailed ? { warning: 'Bestand opgeslagen, maar kon niet in de Projectdata-map worden geplaatst (controleer de serverlogs).' } : {}) });
   } catch (err) {
     console.error('[project-doc upload]', err.message);
     return res.status(500).json({ error: err.message });

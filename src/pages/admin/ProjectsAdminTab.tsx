@@ -818,7 +818,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Upload mislukt');
       setProjectDocs(prev => [d.document, ...prev]);
-      setLocalInfo(`"${file.name}" geüpload.`);
+      setLocalInfo(d.warning ? `"${file.name}" geüpload. Let op: ${d.warning}` : `"${file.name}" geüpload.`);
     } catch (e: any) {
       setLocalError(e.message);
     } finally {
