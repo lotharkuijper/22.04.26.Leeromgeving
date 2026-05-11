@@ -1060,7 +1060,7 @@ app.delete('/api/admin/folders/:folderId', async (req, res) => {
   }
 });
 
-// GET /api/admin/documents/:documentId/download — download (file_bytes én storage)
+// GET /api/admin/documents/:documentId/download — download (file_bytes via pgPool én storage)
 app.get('/api/admin/documents/:documentId/download', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
@@ -1068,19 +1068,29 @@ app.get('/api/admin/documents/:documentId/download', async (req, res) => {
   if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Geen toegang' });
   const { documentId } = req.params;
   try {
+    // Haal metadata op via Supabase (geen binary-kolom hier)
     const { data: doc } = await supabaseAdmin
       .from('documents')
-      .select('id, title, filename, file_path, bucket, file_bytes, mime_type, file_type')
+      .select('id, title, filename, file_path, bucket, mime_type, file_type')
       .eq('id', documentId)
       .maybeSingle();
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
-    const filename = doc.filename || doc.title || 'download';
+    const filename = String(doc.filename || doc.title || 'download').replace(/[\r\n"]/g, '_');
     const mimeType = doc.mime_type || getFileMimeType((doc.file_type || '').toLowerCase());
-    // Route 1: binary opgeslagen in DB (bijv. .omv, .sav)
-    if (doc.file_bytes) {
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-      res.setHeader('Content-Type', mimeType);
-      return res.send(Buffer.from(doc.file_bytes));
+    // Route 1: binary opgeslagen in DB (bijv. .omv, .sav) — lees via pgPool voor correcte bytes
+    if (!doc.file_path && pgPool) {
+      const result = await pgPool.query(
+        'SELECT file_bytes, mime_type FROM documents WHERE id = $1',
+        [documentId]
+      );
+      const row = result.rows[0];
+      if (row?.file_bytes) {
+        const resolvedMime = row.mime_type || mimeType;
+        res.setHeader('Content-Type', resolvedMime);
+        res.setHeader('Content-Length', row.file_bytes.length);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.end(row.file_bytes);
+      }
     }
     // Route 2: bestand in Supabase Storage
     if (doc.file_path && doc.bucket) {
