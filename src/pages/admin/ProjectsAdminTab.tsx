@@ -74,6 +74,14 @@ interface UnmarkedSubfolder {
   matchCount: number;
 }
 
+interface MarkedSubfolder {
+  subfolderId: string;
+  name: string;
+  parentName: string;
+  linkedProjectId: string | null;
+  linkedProjectTitle: string | null;
+}
+
 interface FixResult {
   total: number;
   fixed: number;
@@ -96,9 +104,12 @@ export function ProjectsAdminTab() {
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState<MigrateResult | null>(null);
   const [unmarkedFolders, setUnmarkedFolders] = useState<UnmarkedSubfolder[] | null>(null);
+  const [markedFolders, setMarkedFolders] = useState<MarkedSubfolder[] | null>(null);
+  const [showMarked, setShowMarked] = useState(false);
   const [loadingUnmarked, setLoadingUnmarked] = useState(false);
   const [fixing, setFixing] = useState(false);
   const [fixingRow, setFixingRow] = useState<string | null>(null);
+  const [resettingRow, setResettingRow] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<FixResult | null>(null);
   const [manualAssign, setManualAssign] = useState<Record<string, string>>({});
   const [claimedProjectIds, setClaimedProjectIds] = useState<string[]>([]);
@@ -134,24 +145,50 @@ export function ProjectsAdminTab() {
     }
   };
 
-  const loadUnmarkedFolders = async () => {
+  const loadUnmarkedFolders = async (withMarked?: boolean) => {
     if (!session?.access_token) return;
     setLoadingUnmarked(true);
     setFixResult(null);
     setError(null);
     setClashSubfolderId(null);
+    const includeMarked = withMarked ?? showMarked;
     try {
-      const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
+      const url = includeMarked
+        ? '/api/admin/fix-unmarked-project-subfolders?includeMarked=true'
+        : '/api/admin/fix-unmarked-project-subfolders';
+      const r = await fetch(url, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Ophalen mislukt');
       setUnmarkedFolders(d.subfolders);
       setClaimedProjectIds(d.claimedProjectIds || []);
+      if (includeMarked) setMarkedFolders(d.markedSubfolders || []);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoadingUnmarked(false);
+    }
+  };
+
+  const resetMarker = async (subfolderId: string) => {
+    if (!session?.access_token) return;
+    setResettingRow(subfolderId);
+    setError(null);
+    try {
+      const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subfolderId, action: 'reset' }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Reset mislukt');
+      setMarkedFolders(prev => prev ? prev.filter(sf => sf.subfolderId !== subfolderId) : prev);
+      await loadUnmarkedFolders(showMarked);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setResettingRow(null);
     }
   };
 
@@ -367,9 +404,9 @@ export function ProjectsAdminTab() {
             Submappen van Projectdata die geen <code className="text-xs bg-gray-100 px-1 rounded">projectId:</code>-markering hebben.
             Controleer de lijst en herstel ze in één klik.
           </p>
-          <div className="flex gap-2 mb-3">
+          <div className="flex flex-wrap items-center gap-2 mb-3">
             <button
-              onClick={loadUnmarkedFolders}
+              onClick={() => loadUnmarkedFolders()}
               disabled={loadingUnmarked || fixing}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40"
               data-testid="button-list-unmarked-subfolders"
@@ -388,6 +425,23 @@ export function ProjectsAdminTab() {
                 {fixing ? 'Bezig met herstellen…' : `Herstel alles (${unmarkedFolders.length})`}
               </button>
             )}
+            <label className="flex items-center gap-1.5 text-sm text-gray-600 ml-auto cursor-pointer select-none" data-testid="toggle-show-marked">
+              <input
+                type="checkbox"
+                checked={showMarked}
+                onChange={e => {
+                  const next = e.target.checked;
+                  setShowMarked(next);
+                  if (next) {
+                    loadUnmarkedFolders(true);
+                  } else {
+                    setMarkedFolders(null);
+                  }
+                }}
+                className="rounded"
+              />
+              Toon al gekoppelde submappen
+            </label>
           </div>
 
           {unmarkedFolders !== null && unmarkedFolders.length === 0 && (
@@ -499,12 +553,71 @@ export function ProjectsAdminTab() {
               {fixResult.skippedConflict > 0 ? `, ${fixResult.skippedConflict} conflict (project al gekoppeld)` : ''}.
               {(fixResult.skippedNoMatch > 0 || fixResult.skippedMulti > 0 || fixResult.skippedConflict > 0) && (
                 <button
-                  onClick={loadUnmarkedFolders}
+                  onClick={() => loadUnmarkedFolders()}
                   className="ml-2 underline text-xs"
                   data-testid="button-reload-after-fix"
                 >
                   Toon resterende submappen
                 </button>
+              )}
+            </div>
+          )}
+
+          {showMarked && markedFolders !== null && (
+            <div className="mt-5 pt-5 border-t border-gray-100" data-testid="section-marked-subfolders">
+              <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-1">
+                <FolderOpen className="w-4 h-4 text-green-600" /> Al gekoppelde submappen ({markedFolders.length})
+              </h4>
+              <p className="text-xs text-gray-500 mb-3">
+                Deze submappen hebben al een <code className="bg-gray-100 px-1 rounded">projectId:</code>-markering.
+                Gebruik "Reset marker" om de koppeling ongedaan te maken zodat de submap opnieuw ingesteld kan worden.
+              </p>
+              {markedFolders.length === 0 ? (
+                <p className="text-sm text-gray-500 italic" data-testid="text-no-marked">Geen gekoppelde submappen gevonden.</p>
+              ) : (
+                <div className="overflow-x-auto rounded border border-gray-200" data-testid="table-marked-subfolders">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-xs text-gray-600 uppercase">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Submap</th>
+                        <th className="px-3 py-2 text-left">Bovenliggende map</th>
+                        <th className="px-3 py-2 text-left">Gekoppeld project</th>
+                        <th className="px-3 py-2 text-left">Actie</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {markedFolders.map(sf => (
+                        <tr key={sf.subfolderId} data-testid={`row-marked-${sf.subfolderId}`}>
+                          <td className="px-3 py-2 font-medium text-gray-900">{sf.name}</td>
+                          <td className="px-3 py-2 text-gray-500">{sf.parentName}</td>
+                          <td className="px-3 py-2">
+                            {sf.linkedProjectTitle ? (
+                              <span className="inline-flex items-center gap-1 text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded text-xs">
+                                {sf.linkedProjectTitle}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
+                                Onbekend project (verwijderd?)
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <button
+                              onClick={() => resetMarker(sf.subfolderId)}
+                              disabled={resettingRow === sf.subfolderId}
+                              className="flex items-center gap-1 px-2 py-1 text-xs text-red-700 border border-red-300 bg-red-50 rounded hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                              data-testid={`button-reset-marker-${sf.subfolderId}`}
+                              title="Verwijder de projectId-markering uit deze submap"
+                            >
+                              {resettingRow === sf.subfolderId ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                              Reset marker
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}

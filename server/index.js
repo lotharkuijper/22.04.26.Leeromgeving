@@ -6589,6 +6589,8 @@ app.get('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
   const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
   if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen dit opvragen' });
 
+  const includeMarked = req.query.includeMarked === 'true';
+
   try {
     // Verzamel alle reeds geclaimde projectId-waarden uit bestaande submapbeschrijvingen.
     const claimedResult = await pgPool.query(`
@@ -6641,7 +6643,36 @@ app.get('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
       });
     }
 
-    return res.json({ subfolders: rows, claimedProjectIds });
+    let markedSubfolders = [];
+    if (includeMarked) {
+      const markedResult = await pgPool.query(`
+        SELECT df.id, df.name, df.description, pd.name AS parent_name
+        FROM   document_folders df
+        JOIN   document_folders pd ON pd.id = df.parent_folder_id
+        WHERE  pd.name        = 'Projectdata'
+          AND  pd.folder_type = 'data'
+          AND  df.description LIKE '%projectId:%'
+        ORDER  BY df.name
+      `);
+      for (const sf of markedResult.rows) {
+        const m = (sf.description || '').match(/projectId:([0-9a-f-]+)/i);
+        const linkedProjectId = m ? m[1] : null;
+        let linkedProjectTitle = null;
+        if (linkedProjectId) {
+          const pRes = await pgPool.query('SELECT title FROM projects WHERE id = $1', [linkedProjectId]);
+          linkedProjectTitle = pRes.rows[0]?.title || null;
+        }
+        markedSubfolders.push({
+          subfolderId: sf.id,
+          name: sf.name,
+          parentName: sf.parent_name,
+          linkedProjectId,
+          linkedProjectTitle,
+        });
+      }
+    }
+
+    return res.json({ subfolders: rows, claimedProjectIds, markedSubfolders });
   } catch (err) {
     console.error('[list-unmarked-subfolders] fout:', err.message);
     return res.status(500).json({ error: err.message });
@@ -6657,9 +6688,31 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
   const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
   if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen deze herstelactie uitvoeren' });
 
-  const { subfolderId, projectId: overrideProjectId } = req.body || {};
+  const { subfolderId, projectId: overrideProjectId, action } = req.body || {};
   const singleMode = typeof subfolderId === 'string' && subfolderId.trim().length > 0;
   const hasProjectOverride = singleMode && typeof overrideProjectId === 'string' && overrideProjectId.trim().length > 0;
+
+  // Reset-actie: verwijder de projectId-marker uit de description zodat de submap
+  // weer als 'ongemarkeerd' verschijnt en opnieuw ingesteld kan worden.
+  if (action === 'reset' && singleMode) {
+    try {
+      const sfRes = await pgPool.query(
+        `SELECT df.id, df.description FROM document_folders df
+         JOIN document_folders pd ON pd.id = df.parent_folder_id
+         WHERE pd.name = 'Projectdata' AND pd.folder_type = 'data' AND df.id = $1`,
+        [subfolderId.trim()]
+      );
+      if (sfRes.rows.length === 0) return res.status(404).json({ error: 'Submap niet gevonden' });
+      const sf = sfRes.rows[0];
+      const cleaned = (sf.description || '').replace(/\s*projectId:[0-9a-f-]+/gi, '').trim();
+      await pgPool.query('UPDATE document_folders SET description = $1 WHERE id = $2', [cleaned || null, sf.id]);
+      console.log(`[reset-marker] Marker verwijderd uit submap ${sf.id}`);
+      return res.json({ ok: true, subfolderId: sf.id });
+    } catch (err) {
+      console.error('[reset-marker] fout:', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  }
 
   try {
     // Haal submappen op zonder projectId-marker — optioneel gefilterd op één submap.
