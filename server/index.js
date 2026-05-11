@@ -14,6 +14,11 @@ const { Pool } = pkg;
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
 // uitvoeren, zoals bytea-inserts van binaire bestanden.
+
+// Resultaat van de meest recente automatische backfill (startup).
+// Null zolang de server nog niet gestart is of de backfill niet nodig was.
+let lastAutoBackfillStatus = null;
+
 let pgPool = null;
 if (process.env.SUPABASE_DB_URL) {
   pgPool = new Pool({
@@ -6540,6 +6545,18 @@ async function runBackfillProjectDocFolderLinks(fallbackUserId = null) {
   return { ok: true, total: allPDocs.length, linked, skipped, failed, errors: errors.slice(0, 10) };
 }
 
+app.get('/api/admin/backfill-project-doc-folder-links/status', async (req, res) => {
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { data: profile } = await supabaseAdmin
+    ? await supabaseAdmin.from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle()
+    : { data: null };
+  const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+  if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen dit opvragen' });
+
+  return res.json({ status: lastAutoBackfillStatus });
+});
+
 app.post('/api/admin/backfill-project-doc-folder-links', async (req, res) => {
   if (!supabaseAdmin || !pgPool) return res.status(503).json({ error: 'DB-verbinding niet beschikbaar' });
   const auth = await authUser(req);
@@ -7092,6 +7109,7 @@ app.listen(PORT, '0.0.0.0', () => {
       if (!check || check.length === 0) return;
       console.log('[backfill-doc-links] Ongekoppelde uploads gevonden bij opstarten — backfill wordt gestart...');
       const result = await runBackfillProjectDocFolderLinks(null);
+      lastAutoBackfillStatus = { ...result, ranAt: new Date().toISOString(), trigger: 'auto' };
       if (result.ok) {
         console.log(`[backfill-doc-links] Klaar: ${result.linked} gekoppeld, ${result.skipped} overgeslagen, ${result.failed} mislukt (totaal ${result.total})`);
       } else {
@@ -7099,6 +7117,7 @@ app.listen(PORT, '0.0.0.0', () => {
       }
     } catch (e) {
       console.error('[backfill-doc-links] Fout bij automatische backfill:', e.message);
+      lastAutoBackfillStatus = { ok: false, error: e.message, ranAt: new Date().toISOString(), trigger: 'auto' };
     }
   }, 3000);
 });

@@ -219,6 +219,35 @@ export function AdminPage() {
     candidatesInAllowedFolders?: number;
   } | null>(null);
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
+  const [autoBackfillStatus, setAutoBackfillStatus] = useState<{
+    ok: boolean;
+    total?: number;
+    linked?: number;
+    skipped?: number;
+    failed?: number;
+    errors?: string[];
+    error?: string;
+    ranAt?: string;
+    trigger?: string;
+  } | null>(null);
+  const [autoBackfillBannerDismissed, setAutoBackfillBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    (async () => {
+      try {
+        const { data: { session: s } } = await supabase.auth.getSession();
+        if (!s?.access_token) return;
+        const r = await fetch('/api/admin/backfill-project-doc-folder-links/status', {
+          headers: { Authorization: `Bearer ${s.access_token}` },
+        });
+        if (r.ok) {
+          const d = await r.json();
+          setAutoBackfillStatus(d.status);
+        }
+      } catch {}
+    })();
+  }, [isAdmin]);
 
   useEffect(() => {
     if (activeTab === 'users') loadUsers();
@@ -813,6 +842,37 @@ const tabGroups = [
           <span>Terug naar Dashboard</span>
         </button>
       </div>
+
+      {isAdmin && autoBackfillStatus && !autoBackfillBannerDismissed && (autoBackfillStatus.failed ?? 0) > 0 && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3" data-testid="banner-backfill-errors">
+          <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-800">
+              Automatische mapkoppeling heeft {autoBackfillStatus.failed} rij{(autoBackfillStatus.failed ?? 0) !== 1 ? 'en' : ''} niet kunnen koppelen
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Totaal: {autoBackfillStatus.total ?? '?'} · Gekoppeld: {autoBackfillStatus.linked ?? 0} · Overgeslagen: {autoBackfillStatus.skipped ?? 0} · Mislukt: {autoBackfillStatus.failed}
+              {autoBackfillStatus.ranAt && <> · Uitgevoerd om {new Date(autoBackfillStatus.ranAt).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}</>}
+            </p>
+            {(autoBackfillStatus.errors ?? []).length > 0 && (
+              <ul className="mt-1.5 text-xs text-amber-700 list-disc list-inside space-y-0.5">
+                {autoBackfillStatus.errors!.map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
+            )}
+            <p className="text-xs text-amber-600 mt-1.5">
+              Ga naar <button className="underline font-medium" onClick={() => setActiveTab('projects_admin')} data-testid="link-backfill-projects-tab">Projecten → Beheer</button> om de mapkoppeling handmatig te herstellen.
+            </p>
+          </div>
+          <button
+            onClick={() => setAutoBackfillBannerDismissed(true)}
+            className="text-amber-500 hover:text-amber-700 transition-colors flex-shrink-0"
+            title="Sluiten"
+            data-testid="button-dismiss-backfill-banner"
+          >
+            <XCircle className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-col md:flex-row gap-4 items-start">
 
