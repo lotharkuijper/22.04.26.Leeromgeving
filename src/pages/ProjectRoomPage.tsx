@@ -796,7 +796,7 @@ export function ProjectRoomPage() {
                           className={`flex items-center gap-1.5 text-xs ${!d.is_visible_to_students ? 'opacity-60' : ''}`}
                           data-testid={`project-material-${d.id}`}
                         >
-                          {d.document_ref_id
+                          {/\.(omv|sav|jasp|rdata|rds|rda|dta|por|zsav|spv|jrp)$/i.test(d.filename || '')
                             ? <Database className="w-3 h-3 text-blue-400 shrink-0" />
                             : <FileText className="w-3 h-3 text-gray-400 shrink-0" />}
                           <button

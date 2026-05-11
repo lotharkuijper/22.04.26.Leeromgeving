@@ -6102,6 +6102,28 @@ app.post('/api/projects/:projectId/documents', docUpload.single('file'), async (
       );
       documentRefId = docResult.rows[0]?.id;
       if (!documentRefId) return res.status(500).json({ error: 'Kon bestandsrecord niet aanmaken' });
+    } else if (pgPool && text) {
+      // Tekst-bestanden krijgen ook een `documents`-tabel-entry zodat ze
+      // zichtbaar zijn in de Projectdata-submap van de bestandsbeheerder.
+      // Geen file_bytes — de inhoud wordt als content_text in project_documents
+      // bewaard en via die rij gedownload.
+      try {
+        const folderId = await findOrCreateProjectSubfolder(projectId, access.project?.title, auth.user.id);
+        const mimeType = req.file.mimetype || 'text/plain';
+        const safeFilename = String(filename).slice(0, 200);
+        const docResult = await pgPool.query(
+          `INSERT INTO documents
+             (title, filename, file_path, file_type, file_size, folder_id,
+              uploaded_by, processing_status, total_chunks, mime_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', 0, $8)
+           RETURNING id`,
+          [safeFilename, safeFilename, '', mimeType, req.file.size || 0, folderId, auth.user.id, mimeType]
+        );
+        documentRefId = docResult.rows[0]?.id || null;
+      } catch (e) {
+        // Niet fataal: document_ref_id blijft null, bestand is wel opgeslagen.
+        console.warn('[project-doc upload] tekst-doc folder-entry mislukt:', e.message);
+      }
     }
 
     // Sla op in project_documents voor de project-eigen boekhoudingslijst.
@@ -6153,16 +6175,24 @@ app.get('/api/projects/:projectId/documents/:docId/download', async (req, res) =
     let buffer;
     let mimeType = doc.mime_type || 'application/octet-stream';
     if (doc.document_ref_id) {
-      // Binair bestand: bytes leven in de documents-tabel. Gebruik pg zodat
-      // we de Buffer direct krijgen (PostgREST retourneert bytea als hex).
+      // Binair of tekst-bestand: zoek de documents-tabel-entry op.
+      // Binair: file_bytes aanwezig → stuur die.
+      // Tekst: file_bytes NULL → val terug op content_text uit project_documents.
       if (!pgPool) return res.status(503).json({ error: 'Directe DB-verbinding niet beschikbaar' });
       const result = await pgPool.query(
         'SELECT file_bytes, mime_type FROM documents WHERE id = $1',
         [doc.document_ref_id]
       );
-      if (!result.rows[0]?.file_bytes) return res.status(404).json({ error: 'Bestandsinhoud niet gevonden' });
-      buffer = result.rows[0].file_bytes;
-      if (result.rows[0].mime_type) mimeType = result.rows[0].mime_type;
+      if (result.rows[0]?.file_bytes) {
+        buffer = result.rows[0].file_bytes;
+        if (result.rows[0].mime_type) mimeType = result.rows[0].mime_type;
+      } else if (doc.content_text != null) {
+        // Tekst-bestand met folder-entry maar zonder file_bytes.
+        buffer = Buffer.from(doc.content_text, 'utf8');
+        mimeType = doc.mime_type || 'text/plain; charset=utf-8';
+      } else {
+        return res.status(404).json({ error: 'Bestandsinhoud niet gevonden' });
+      }
     } else if (doc.content_text != null) {
       buffer = Buffer.from(doc.content_text, 'utf8');
       mimeType = doc.mime_type || 'text/plain; charset=utf-8';
