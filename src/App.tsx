@@ -16,7 +16,6 @@ const ExplainPage = lazy(() => import('./pages/ExplainPage').then(m => ({ defaul
 const QuizPage = lazy(() => import('./pages/QuizPage').then(m => ({ default: m.QuizPage })));
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
 const ProjectRoomPage = lazy(() => import('./pages/ProjectRoomPage').then(m => ({ default: m.ProjectRoomPage })));
-const CollaboratePage = lazy(() => import('./pages/CollaboratePage').then(m => ({ default: m.CollaboratePage })));
 const FeedbackPage = lazy(() => import('./pages/FeedbackPage').then(m => ({ default: m.FeedbackPage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
 const ResourcesPage = lazy(() => import('./pages/ResourcesPage').then(m => ({ default: m.ResourcesPage })));
@@ -117,15 +116,6 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ProjectRoomPage />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/collaborate"
-        element={
-          <ProtectedRoute>
-            <CollaboratePage />
           </ProtectedRoute>
         }
       />

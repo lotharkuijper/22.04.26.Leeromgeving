@@ -5,7 +5,6 @@ import {
   BookOpen,
   FileQuestion,
   BarChart3,
-  Users,
   Settings,
   LogOut,
   Menu,
@@ -66,7 +65,6 @@ export function Layout({ children }: LayoutProps) {
       { to: '/explain', icon: BookOpen, label: 'Ik Leg Uit', color: 'from-blue-500 to-blue-600' },
       { to: '/quiz', icon: FileQuestion, label: 'Quiz', color: 'from-cyan-500 to-cyan-600' },
       { to: '/projects', icon: BarChart3, label: 'Projecten', color: 'from-orange-500 to-orange-600' },
-      { to: '/collaborate', icon: Users, label: 'Samenwerken', color: 'from-pink-500 to-pink-600' },
       { to: '/feedback', icon: BookText, label: 'Leer Dagboek', color: 'from-teal-500 to-teal-600' },
       { to: '/resources', icon: Package, label: 'Bronnen', color: 'from-purple-500 to-purple-600' },
     ];
