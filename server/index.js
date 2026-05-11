@@ -5278,7 +5278,7 @@ ${reflection}`;
           if (tRows.length > 0) {
             const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
             if (tjErr) {
-              if (tjErr.code === '42703' || /column.*source_ref/i.test(tjErr.message || '')) {
+              if (tjErr.code === '42703' || /source_ref/i.test(tjErr.message || '')) {
                 await supabaseAdmin.from('learning_journal_entries').insert(
                   tRows.map(({ source_ref: _ignored, ...rest }) => rest)
                 );
@@ -5355,7 +5355,7 @@ ${reflection}`;
           if (tRows.length > 0) {
             const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
             if (tjErr) {
-              if (tjErr.code === '42703' || /column.*source_ref/i.test(tjErr.message || '')) {
+              if (tjErr.code === '42703' || /source_ref/i.test(tjErr.message || '')) {
                 await supabaseAdmin.from('learning_journal_entries').insert(
                   tRows.map(({ source_ref: _ignored, ...rest }) => rest)
                 );
@@ -6729,7 +6729,7 @@ Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exact
         if (jErr) {
           // Kolom source_ref ontbreekt nog (oudere DB) → schrijf zonder die kolom.
           // We controleren expliciet op de Postgres-foutcode 42703 (undefined column).
-          if (jErr.code === '42703' || /column.*source_ref/i.test(jErr.message || '')) {
+          if (jErr.code === '42703' || /source_ref/i.test(jErr.message || '')) {
             const { error: jErr2 } = await supabaseAdmin.from('learning_journal_entries').insert(
               rows.map(({ source_ref: _ignored, ...rest }) => rest)
             );
