@@ -97,6 +97,7 @@ export function ProjectsAdminTab() {
   const [unmarkedFolders, setUnmarkedFolders] = useState<UnmarkedSubfolder[] | null>(null);
   const [loadingUnmarked, setLoadingUnmarked] = useState(false);
   const [fixing, setFixing] = useState(false);
+  const [fixingRow, setFixingRow] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<FixResult | null>(null);
 
   const load = useCallback(async () => {
@@ -155,7 +156,7 @@ export function ProjectsAdminTab() {
     try {
       const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Herstel mislukt');
@@ -165,6 +166,30 @@ export function ProjectsAdminTab() {
       setError(e.message);
     } finally {
       setFixing(false);
+    }
+  };
+
+  const runFixOne = async (subfolderId: string) => {
+    if (!session?.access_token) return;
+    setFixingRow(subfolderId);
+    setError(null);
+    try {
+      const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subfolderId }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Herstel mislukt');
+      if (d.fixed > 0) {
+        setUnmarkedFolders(prev => prev ? prev.filter(sf => sf.subfolderId !== subfolderId) : prev);
+      } else {
+        setError(`Submap kon niet worden hersteld — probeer de lijst opnieuw op te halen.`);
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setFixingRow(null);
     }
   };
 
@@ -356,6 +381,7 @@ export function ProjectsAdminTab() {
                     <th className="px-3 py-2 text-left">Submap</th>
                     <th className="px-3 py-2 text-left">Bovenliggende map</th>
                     <th className="px-3 py-2 text-left">Matchstatus</th>
+                    <th className="px-3 py-2 text-left">Actie</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -379,6 +405,18 @@ export function ProjectsAdminTab() {
                             Meerdere projecten ({sf.matchCount}) — ambigue
                           </span>
                         )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={() => runFixOne(sf.subfolderId)}
+                          disabled={sf.status !== 'match' || fixingRow === sf.subfolderId || fixing}
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                          data-testid={`button-fix-subfolder-${sf.subfolderId}`}
+                          title={sf.status !== 'match' ? 'Alleen beschikbaar wanneer er een unieke match is' : 'Herstel deze submap'}
+                        >
+                          {fixingRow === sf.subfolderId ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
+                          Herstel
+                        </button>
                       </td>
                     </tr>
                   ))}

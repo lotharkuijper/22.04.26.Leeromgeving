@@ -6642,17 +6642,22 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
   const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
   if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen deze herstelactie uitvoeren' });
 
+  const { subfolderId } = req.body || {};
+  const singleMode = typeof subfolderId === 'string' && subfolderId.trim().length > 0;
+
   try {
-    // Haal alle submappen van een Projectdata-map op zonder projectId-marker.
-    const subsResult = await pgPool.query(`
+    // Haal submappen op zonder projectId-marker — optioneel gefilterd op één submap.
+    const baseQuery = `
       SELECT df.id, df.name, df.description, df.parent_folder_id
       FROM   document_folders df
       JOIN   document_folders pd ON pd.id = df.parent_folder_id
       WHERE  pd.name        = 'Projectdata'
         AND  pd.folder_type = 'data'
         AND  (df.description IS NULL OR df.description NOT LIKE '%projectId:%')
-      ORDER  BY df.id
-    `);
+    `;
+    const subsResult = singleMode
+      ? await pgPool.query(baseQuery + ' AND df.id = $1', [subfolderId.trim()])
+      : await pgPool.query(baseQuery + ' ORDER BY df.id');
 
     const subfolders = subsResult.rows;
     let fixed = 0;
