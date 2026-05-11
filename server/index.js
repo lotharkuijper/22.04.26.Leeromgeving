@@ -6590,6 +6590,21 @@ app.get('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
   if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen dit opvragen' });
 
   try {
+    // Verzamel alle reeds geclaimde projectId-waarden uit bestaande submapbeschrijvingen.
+    const claimedResult = await pgPool.query(`
+      SELECT df.description
+      FROM   document_folders df
+      JOIN   document_folders pd ON pd.id = df.parent_folder_id
+      WHERE  pd.name        = 'Projectdata'
+        AND  pd.folder_type = 'data'
+        AND  df.description LIKE '%projectId:%'
+    `);
+    const claimedProjectIds = [];
+    for (const row of claimedResult.rows) {
+      const m = (row.description || '').match(/projectId:([a-f0-9-]{36})/i);
+      if (m) claimedProjectIds.push(m[1]);
+    }
+
     const subsResult = await pgPool.query(`
       SELECT df.id, df.name, df.description, pd.name AS parent_name
       FROM   document_folders df
@@ -6626,7 +6641,7 @@ app.get('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
       });
     }
 
-    return res.json({ subfolders: rows });
+    return res.json({ subfolders: rows, claimedProjectIds });
   } catch (err) {
     console.error('[list-unmarked-subfolders] fout:', err.message);
     return res.status(500).json({ error: err.message });
@@ -6664,6 +6679,7 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
     let fixed = 0;
     let skippedNoMatch = 0;
     let skippedMulti = 0;
+    let skippedConflict = 0;
     const log = [];
 
     for (const sf of subfolders) {
@@ -6708,6 +6724,32 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
 
         project = matches[0];
       }
+
+      // Controleer of dit project al aan een andere submap is gekoppeld.
+      const clashResult = await pgPool.query(`
+        SELECT df.id, df.name
+        FROM   document_folders df
+        JOIN   document_folders pd ON pd.id = df.parent_folder_id
+        WHERE  pd.name        = 'Projectdata'
+          AND  pd.folder_type = 'data'
+          AND  df.description LIKE $1
+          AND  df.id != $2
+      `, [`%projectId:${project.id}%`, sf.id]);
+
+      if (clashResult.rows.length > 0) {
+        const clash = clashResult.rows[0];
+        const msg = `Project "${project.title}" (${project.id}) is al gekoppeld aan submap "${clash.name}" (${clash.id}).`;
+        console.warn(`[fix-unmarked-subfolders] conflict: ${msg}`);
+        if (singleMode) {
+          return res.status(409).json({
+            error: `Dit project is al gekoppeld aan een andere submap ("${clash.name}"). Kies een ander project.`,
+          });
+        }
+        log.push({ subfolderId: sf.id, name: sf.name, status: 'conflict', projectId: project.id, projectTitle: project.title });
+        skippedConflict++;
+        continue;
+      }
+
       const oldDesc = sf.description || '';
       const newDesc = oldDesc === ''
         ? `Projectbestanden — projectId:${project.id}`
@@ -6724,13 +6766,14 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
       fixed++;
     }
 
-    console.log(`[fix-unmarked-subfolders] Klaar: ${fixed} bijgewerkt, ${skippedNoMatch} geen match, ${skippedMulti} ambigue.`);
+    console.log(`[fix-unmarked-subfolders] Klaar: ${fixed} bijgewerkt, ${skippedNoMatch} geen match, ${skippedMulti} ambigue, ${skippedConflict} conflict.`);
     return res.json({
       ok: true,
       total: subfolders.length,
       fixed,
       skippedNoMatch,
       skippedMulti,
+      skippedConflict,
       log,
     });
   } catch (err) {

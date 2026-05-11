@@ -79,6 +79,7 @@ interface FixResult {
   fixed: number;
   skippedNoMatch: number;
   skippedMulti: number;
+  skippedConflict: number;
   log: { subfolderId: string; name: string; status: string; projectId?: string; projectTitle?: string; matchCount?: number }[];
 }
 
@@ -100,6 +101,7 @@ export function ProjectsAdminTab() {
   const [fixingRow, setFixingRow] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<FixResult | null>(null);
   const [manualAssign, setManualAssign] = useState<Record<string, string>>({});
+  const [claimedProjectIds, setClaimedProjectIds] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     let q = supabase.from('projects').select('*').order('created_at', { ascending: false });
@@ -142,6 +144,7 @@ export function ProjectsAdminTab() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Ophalen mislukt');
       setUnmarkedFolders(d.subfolders);
+      setClaimedProjectIds(d.claimedProjectIds || []);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -187,6 +190,7 @@ export function ProjectsAdminTab() {
       if (d.fixed > 0) {
         setUnmarkedFolders(prev => prev ? prev.filter(sf => sf.subfolderId !== subfolderId) : prev);
         setManualAssign(prev => { const next = { ...prev }; delete next[subfolderId]; return next; });
+        setClaimedProjectIds(prev => projectId && !prev.includes(projectId) ? [...prev, projectId] : prev);
       } else {
         setError(`Submap kon niet worden hersteld — probeer de lijst opnieuw op te halen.`);
       }
@@ -413,7 +417,7 @@ export function ProjectsAdminTab() {
                       <td className="px-3 py-2">
                         {sf.status === 'match' ? (
                           <button
-                            onClick={() => runFixOne(sf.subfolderId)}
+                            onClick={() => runFixOne(sf.subfolderId, sf.matchedProject?.id)}
                             disabled={fixingRow === sf.subfolderId || fixing}
                             className="flex items-center gap-1 px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed"
                             data-testid={`button-fix-subfolder-${sf.subfolderId}`}
@@ -432,7 +436,13 @@ export function ProjectsAdminTab() {
                             >
                               <option value="">— Kies project —</option>
                               {projects.map(p => (
-                                <option key={p.id} value={p.id}>{p.title}</option>
+                                <option
+                                  key={p.id}
+                                  value={p.id}
+                                  disabled={claimedProjectIds.includes(p.id)}
+                                >
+                                  {p.title}{claimedProjectIds.includes(p.id) ? ' (al gekoppeld)' : ''}
+                                </option>
                               ))}
                             </select>
                             <button
@@ -456,10 +466,11 @@ export function ProjectsAdminTab() {
           )}
 
           {fixResult && (
-            <div className={`mt-3 px-3 py-2 rounded text-sm border ${fixResult.skippedNoMatch > 0 || fixResult.skippedMulti > 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`} data-testid="text-fix-result">
+            <div className={`mt-3 px-3 py-2 rounded text-sm border ${fixResult.skippedNoMatch > 0 || fixResult.skippedMulti > 0 || fixResult.skippedConflict > 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`} data-testid="text-fix-result">
               Herstel voltooid — {fixResult.total} verwerkt: {fixResult.fixed} hersteld,{' '}
-              {fixResult.skippedNoMatch} zonder match, {fixResult.skippedMulti} ambigu.
-              {(fixResult.skippedNoMatch > 0 || fixResult.skippedMulti > 0) && (
+              {fixResult.skippedNoMatch} zonder match, {fixResult.skippedMulti} ambigu
+              {fixResult.skippedConflict > 0 ? `, ${fixResult.skippedConflict} conflict (project al gekoppeld)` : ''}.
+              {(fixResult.skippedNoMatch > 0 || fixResult.skippedMulti > 0 || fixResult.skippedConflict > 0) && (
                 <button
                   onClick={loadUnmarkedFolders}
                   className="ml-2 underline text-xs"
