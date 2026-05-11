@@ -245,16 +245,11 @@ export default function DocumentsPage() {
     try {
       const { folders } = await apiFetch('/api/admin/document-tree');
       setTree(folders || []);
+      // Alleen de root-map wordt standaard opengevouwen; cursus-mappen starten gesloten.
       const toExpand = new Set<string>();
-      function walk(nodes: FolderNode[]) {
-        for (const n of nodes) {
-          if (n.is_root || n.folder_type === 'root' || n.folder_type === 'course') {
-            toExpand.add(n.id);
-          }
-          walk(n.children);
-        }
+      for (const n of (folders || [])) {
+        if (n.is_root || n.folder_type === 'root') toExpand.add(n.id);
       }
-      walk(folders || []);
       setExpandedIds((prev) => new Set([...prev, ...toExpand]));
     } catch (e: unknown) {
       setNotice({ kind: 'error', message: (e as Error).message });

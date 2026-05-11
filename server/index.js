@@ -958,12 +958,12 @@ function getFileMimeType(ext) {
   return map[ext] || 'application/octet-stream';
 }
 
-// GET /api/admin/document-tree — volledige mapboom met documentaantallen
+// GET /api/admin/document-tree — volledige mapboom met documentaantallen (admin only)
 app.get('/api/admin/document-tree', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Geen toegang' });
+  if (!r.isAdmin) return res.status(403).json({ error: 'Admin-rol vereist' });
   try {
     const { data: folders, error: fErr } = await supabaseAdmin
       .from('document_folders').select('id, name, parent_folder_id, folder_type, is_root, description').order('name');
@@ -996,12 +996,12 @@ app.get('/api/admin/document-tree', async (req, res) => {
   }
 });
 
-// GET /api/admin/folders/:folderId/documents
+// GET /api/admin/folders/:folderId/documents (admin only)
 app.get('/api/admin/folders/:folderId/documents', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Geen toegang' });
+  if (!r.isAdmin) return res.status(403).json({ error: 'Admin-rol vereist' });
   try {
     const { data, error } = await supabaseAdmin
       .from('documents')
@@ -1060,12 +1060,12 @@ app.delete('/api/admin/folders/:folderId', async (req, res) => {
   }
 });
 
-// GET /api/admin/documents/:documentId/download — download (file_bytes via pgPool én storage)
+// GET /api/admin/documents/:documentId/download — download (file_bytes via pgPool én storage, admin only)
 app.get('/api/admin/documents/:documentId/download', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Geen toegang' });
+  if (!r.isAdmin) return res.status(403).json({ error: 'Admin-rol vereist' });
   const { documentId } = req.params;
   try {
     // Haal metadata op via Supabase (geen binary-kolom hier)
@@ -6202,21 +6202,13 @@ async function findOrCreateCourseProjectdataFolder(courseId, uploadedById) {
     );
     let parentId = courseParent?.folder_id || null;
 
-    // Globale root-fallback: als er geen cursusmap gevonden is via assignments,
-    // gebruik dan de globale is_root-map als parent zodat de Projectdata-map
-    // nooit zwevend (parent_folder_id IS NULL) aangemaakt wordt.
+    // Geen cursusmap gevonden via assignments — weiger de aanmaak in plaats van
+    // een zwevende map onder de globale root te creëren. Elke cursus moet een
+    // expliciete course_folder_assignment hebben met een map van folder_type='course'.
+    // Zie migratie 20260511130000 voor het opzetten van de correcte structuur.
     if (!parentId) {
-      const { data: rootRows } = await supabaseAdmin
-        .from('document_folders')
-        .select('id')
-        .eq('is_root', true)
-        .limit(1);
-      parentId = rootRows?.[0]?.id || null;
-      if (parentId) {
-        console.log(`[projectdata-folder] Geen cursusmap gevonden voor cursus ${courseId}, valt terug op globale root ${parentId}`);
-      } else {
-        console.warn(`[projectdata-folder] Geen cursusmap én geen globale root gevonden voor cursus ${courseId} — Projectdata-map krijgt parent_folder_id=NULL (zwevend).`);
-      }
+      console.error(`[projectdata-folder] Cursus ${courseId} heeft geen cursusmap (folder_type='course') via course_folder_assignments. Stel de mapstructuur in via de admin-UI vóórdat projecten bestanden uploaden.`);
+      return null;
     }
 
     // Subtree-fallback: als er al een "Projectdata"-map bestaat als direct kind
