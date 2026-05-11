@@ -65,6 +65,23 @@ interface MigrateResult {
   errors: string[];
 }
 
+interface UnmarkedSubfolder {
+  subfolderId: string;
+  name: string;
+  parentName: string;
+  status: 'match' | 'no_match' | 'ambiguous';
+  matchedProject: { id: string; title: string } | null;
+  matchCount: number;
+}
+
+interface FixResult {
+  total: number;
+  fixed: number;
+  skippedNoMatch: number;
+  skippedMulti: number;
+  log: { subfolderId: string; name: string; status: string; projectId?: string; projectTitle?: string; matchCount?: number }[];
+}
+
 export function ProjectsAdminTab() {
   const { session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
@@ -77,6 +94,10 @@ export function ProjectsAdminTab() {
   const [detailProject, setDetailProject] = useState<ProjectRow | null>(null);
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState<MigrateResult | null>(null);
+  const [unmarkedFolders, setUnmarkedFolders] = useState<UnmarkedSubfolder[] | null>(null);
+  const [loadingUnmarked, setLoadingUnmarked] = useState(false);
+  const [fixing, setFixing] = useState(false);
+  const [fixResult, setFixResult] = useState<FixResult | null>(null);
 
   const load = useCallback(async () => {
     let q = supabase.from('projects').select('*').order('created_at', { ascending: false });
@@ -104,6 +125,46 @@ export function ProjectsAdminTab() {
       setError(e.message);
     } finally {
       setMigrating(false);
+    }
+  };
+
+  const loadUnmarkedFolders = async () => {
+    if (!session?.access_token) return;
+    setLoadingUnmarked(true);
+    setFixResult(null);
+    setError(null);
+    try {
+      const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Ophalen mislukt');
+      setUnmarkedFolders(d.subfolders);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoadingUnmarked(false);
+    }
+  };
+
+  const runFixUnmarked = async () => {
+    if (!session?.access_token) return;
+    setFixing(true);
+    setFixResult(null);
+    setError(null);
+    try {
+      const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Herstel mislukt');
+      setFixResult(d);
+      setUnmarkedFolders(null);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setFixing(false);
     }
   };
 
@@ -249,6 +310,99 @@ export function ProjectsAdminTab() {
             )}
           </div>
         )}
+
+        <div className="mt-6 pt-5 border-t border-gray-100">
+          <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-1">
+            <ShieldAlert className="w-4 h-4 text-amber-500" /> Submappen zonder projectId-marker
+          </h4>
+          <p className="text-sm text-gray-500 mb-3">
+            Submappen van Projectdata die geen <code className="text-xs bg-gray-100 px-1 rounded">projectId:</code>-markering hebben.
+            Controleer de lijst en herstel ze in één klik.
+          </p>
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={loadUnmarkedFolders}
+              disabled={loadingUnmarked || fixing}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40"
+              data-testid="button-list-unmarked-subfolders"
+            >
+              {loadingUnmarked ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderOpen className="w-4 h-4" />}
+              {loadingUnmarked ? 'Ophalen…' : 'Lijst ophalen'}
+            </button>
+            {unmarkedFolders && unmarkedFolders.length > 0 && (
+              <button
+                onClick={runFixUnmarked}
+                disabled={fixing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-40"
+                data-testid="button-fix-all-unmarked"
+              >
+                {fixing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+                {fixing ? 'Bezig met herstellen…' : `Herstel alles (${unmarkedFolders.length})`}
+              </button>
+            )}
+          </div>
+
+          {unmarkedFolders !== null && unmarkedFolders.length === 0 && (
+            <p className="text-sm text-green-700 bg-green-50 border border-green-200 px-3 py-2 rounded" data-testid="text-no-unmarked">
+              Alle submappen hebben een projectId-markering. Geen actie nodig.
+            </p>
+          )}
+
+          {unmarkedFolders && unmarkedFolders.length > 0 && (
+            <div className="overflow-x-auto rounded border border-gray-200" data-testid="table-unmarked-subfolders">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs text-gray-600 uppercase">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Submap</th>
+                    <th className="px-3 py-2 text-left">Bovenliggende map</th>
+                    <th className="px-3 py-2 text-left">Matchstatus</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {unmarkedFolders.map(sf => (
+                    <tr key={sf.subfolderId} data-testid={`row-unmarked-${sf.subfolderId}`}>
+                      <td className="px-3 py-2 font-medium text-gray-900">{sf.name}</td>
+                      <td className="px-3 py-2 text-gray-500">{sf.parentName}</td>
+                      <td className="px-3 py-2">
+                        {sf.status === 'match' && (
+                          <span className="inline-flex items-center gap-1 text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded text-xs">
+                            Project gevonden: {sf.matchedProject?.title}
+                          </span>
+                        )}
+                        {sf.status === 'no_match' && (
+                          <span className="inline-flex items-center gap-1 text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded text-xs">
+                            Geen overeenkomend project
+                          </span>
+                        )}
+                        {sf.status === 'ambiguous' && (
+                          <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
+                            Meerdere projecten ({sf.matchCount}) — ambigue
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {fixResult && (
+            <div className={`mt-3 px-3 py-2 rounded text-sm border ${fixResult.skippedNoMatch > 0 || fixResult.skippedMulti > 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`} data-testid="text-fix-result">
+              Herstel voltooid — {fixResult.total} verwerkt: {fixResult.fixed} hersteld,{' '}
+              {fixResult.skippedNoMatch} zonder match, {fixResult.skippedMulti} ambigu.
+              {(fixResult.skippedNoMatch > 0 || fixResult.skippedMulti > 0) && (
+                <button
+                  onClick={loadUnmarkedFolders}
+                  className="ml-2 underline text-xs"
+                  data-testid="button-reload-after-fix"
+                >
+                  Toon resterende submappen
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {editing && (

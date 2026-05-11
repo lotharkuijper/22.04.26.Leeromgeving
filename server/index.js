@@ -6579,6 +6579,60 @@ app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (
 // en schrijft de marker. Idempotent en alleen voor admins.
 // =============================================================================
 
+// GET — lijst submappen zonder marker + bijbehorende matchstatus (geen schrijfactie).
+app.get('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
+  if (!supabaseAdmin || !pgPool) return res.status(503).json({ error: 'DB-verbinding niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+  const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+  if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen dit opvragen' });
+
+  try {
+    const subsResult = await pgPool.query(`
+      SELECT df.id, df.name, df.description, pd.name AS parent_name
+      FROM   document_folders df
+      JOIN   document_folders pd ON pd.id = df.parent_folder_id
+      WHERE  pd.name        = 'Projectdata'
+        AND  pd.folder_type = 'data'
+        AND  (df.description IS NULL OR df.description NOT LIKE '%projectId:%')
+      ORDER  BY df.name
+    `);
+
+    const rows = [];
+    for (const sf of subsResult.rows) {
+      const matchResult = await pgPool.query(
+        `SELECT id, title FROM projects WHERE lower(trim(title)) = lower(trim($1))`,
+        [sf.name]
+      );
+      const matches = matchResult.rows;
+      let status, matchedProject;
+      if (matches.length === 0) {
+        status = 'no_match';
+      } else if (matches.length > 1) {
+        status = 'ambiguous';
+      } else {
+        status = 'match';
+        matchedProject = matches[0];
+      }
+      rows.push({
+        subfolderId: sf.id,
+        name: sf.name,
+        parentName: sf.parent_name,
+        status,
+        matchedProject: matchedProject || null,
+        matchCount: matches.length,
+      });
+    }
+
+    return res.json({ subfolders: rows });
+  } catch (err) {
+    console.error('[list-unmarked-subfolders] fout:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
   if (!supabaseAdmin || !pgPool) return res.status(503).json({ error: 'DB-verbinding niet beschikbaar' });
   const auth = await authUser(req);
