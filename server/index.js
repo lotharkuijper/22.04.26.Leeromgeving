@@ -4506,6 +4506,18 @@ app.post('/api/projects/groups', async (req, res) => {
       .insert({ group_id: group.id, user_id: auth.user.id, role: 'owner' });
     if (mErr) return res.status(500).json({ error: mErr.message });
 
+    // Maak direct een sessie-record aan zodat de studenten-overzichtspagina
+    // "Vervolg laatste sessie" kan tonen. Client-side inserts kunnen stil
+    // mislukken door RLS — hier gebruiken we supabaseAdmin.
+    if (!isStaff) {
+      await supabaseAdmin.from('student_project_sessions').upsert({
+        student_id: auth.user.id,
+        project_id: projectId,
+        group_id: group.id,
+        status: 'in_progress',
+      }, { onConflict: 'student_id,project_id,group_id', ignoreDuplicates: true });
+    }
+
     return res.json({ group });
   } catch (err) {
     console.error('[projects/groups POST]', err);
@@ -4556,6 +4568,23 @@ app.post('/api/projects/groups/join', async (req, res) => {
         .insert({ group_id: group.id, user_id: auth.user.id, role: 'member' });
       if (mErr && mErr.code !== '23505' && !/duplicate key/i.test(mErr.message || '')) {
         return res.status(500).json({ error: mErr.message });
+      }
+    }
+
+    // Maak (of herstel) een sessie-record zodat de overzichtspagina
+    // "Vervolg laatste sessie" kan tonen. Idempotent via upsert.
+    if (!isStaff) {
+      const { data: activeSes } = await supabaseAdmin
+        .from('student_project_sessions')
+        .select('id').eq('student_id', auth.user.id).eq('project_id', group.project_id)
+        .neq('status', 'completed').limit(1);
+      if (!activeSes || activeSes.length === 0) {
+        await supabaseAdmin.from('student_project_sessions').upsert({
+          student_id: auth.user.id,
+          project_id: group.project_id,
+          group_id: group.id,
+          status: 'in_progress',
+        }, { onConflict: 'student_id,project_id,group_id', ignoreDuplicates: true });
       }
     }
 

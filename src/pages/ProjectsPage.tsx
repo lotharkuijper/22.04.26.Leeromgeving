@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
 import {
   PlayCircle, RefreshCw, ArrowRight, FolderOpen, BookOpen, Loader2,
   AlertCircle, Users,
@@ -72,13 +71,7 @@ export function ProjectsPage() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Aanmaken mislukt');
-      // Sessie-record bijhouden voor dashboard/leerdagboek.
-      await supabase.from('student_project_sessions').insert({
-        student_id: profile.id,
-        project_id: p.id,
-        group_id: d.group.id,
-        status: 'in_progress',
-      });
+      // Sessie-record wordt server-side aangemaakt (supabaseAdmin).
       navigate(`/projects/${p.id}/group/${d.group.id}`);
     } catch (e: any) {
       setError(e.message);
@@ -127,19 +120,7 @@ export function ProjectsPage() {
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Aansluiten mislukt');
-      // Maak voor deze student óók een sessie-record als die nog niet bestaat.
-      if (profile?.id) {
-        const { data: existing } = await supabase
-          .from('student_project_sessions').select('id')
-          .eq('student_id', profile.id).eq('project_id', d.group.project_id)
-          .neq('status', 'completed').limit(1);
-        if (!existing || existing.length === 0) {
-          await supabase.from('student_project_sessions').insert({
-            student_id: profile.id, project_id: d.group.project_id,
-            group_id: d.group.id, status: 'in_progress',
-          });
-        }
-      }
+      // Sessie-record wordt server-side aangemaakt (supabaseAdmin).
       setJoinDialog(false); setInviteCode('');
       navigate(`/projects/${d.group.project_id}/group/${d.group.id}`);
     } catch (e: any) {
