@@ -6743,6 +6743,8 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
         if (singleMode) {
           return res.status(409).json({
             error: `Dit project is al gekoppeld aan een andere submap ("${clash.name}"). Kies een ander project.`,
+            clashSubfolderId: clash.id,
+            clashSubfolderName: clash.name,
           });
         }
         log.push({ subfolderId: sf.id, name: sf.name, status: 'conflict', projectId: project.id, projectTitle: project.title });

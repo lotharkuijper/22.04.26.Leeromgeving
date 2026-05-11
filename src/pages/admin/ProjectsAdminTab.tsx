@@ -102,6 +102,8 @@ export function ProjectsAdminTab() {
   const [fixResult, setFixResult] = useState<FixResult | null>(null);
   const [manualAssign, setManualAssign] = useState<Record<string, string>>({});
   const [claimedProjectIds, setClaimedProjectIds] = useState<string[]>([]);
+  const [clashSubfolderId, setClashSubfolderId] = useState<string | null>(null);
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const load = useCallback(async () => {
     let q = supabase.from('projects').select('*').order('created_at', { ascending: false });
@@ -137,6 +139,7 @@ export function ProjectsAdminTab() {
     setLoadingUnmarked(true);
     setFixResult(null);
     setError(null);
+    setClashSubfolderId(null);
     try {
       const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
         headers: { Authorization: `Bearer ${session.access_token}` },
@@ -173,10 +176,17 @@ export function ProjectsAdminTab() {
     }
   };
 
+  useEffect(() => {
+    if (!clashSubfolderId) return;
+    const el = rowRefs.current[clashSubfolderId];
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [clashSubfolderId]);
+
   const runFixOne = async (subfolderId: string, projectId?: string) => {
     if (!session?.access_token) return;
     setFixingRow(subfolderId);
     setError(null);
+    setClashSubfolderId(null);
     try {
       const body: Record<string, string> = { subfolderId };
       if (projectId) body.projectId = projectId;
@@ -186,6 +196,11 @@ export function ProjectsAdminTab() {
         body: JSON.stringify(body),
       });
       const d = await r.json();
+      if (r.status === 409) {
+        setError(d.error || 'Conflict: project al gekoppeld aan een andere submap.');
+        if (d.clashSubfolderId) setClashSubfolderId(d.clashSubfolderId);
+        return;
+      }
       if (!r.ok) throw new Error(d.error || 'Herstel mislukt');
       if (d.fixed > 0) {
         setUnmarkedFolders(prev => prev ? prev.filter(sf => sf.subfolderId !== subfolderId) : prev);
@@ -394,8 +409,20 @@ export function ProjectsAdminTab() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {unmarkedFolders.map(sf => (
-                    <tr key={sf.subfolderId} data-testid={`row-unmarked-${sf.subfolderId}`}>
-                      <td className="px-3 py-2 font-medium text-gray-900">{sf.name}</td>
+                    <tr
+                      key={sf.subfolderId}
+                      ref={el => { rowRefs.current[sf.subfolderId] = el; }}
+                      data-testid={`row-unmarked-${sf.subfolderId}`}
+                      className={clashSubfolderId === sf.subfolderId ? 'bg-amber-50 ring-2 ring-inset ring-amber-400' : ''}
+                    >
+                      <td className="px-3 py-2 font-medium text-gray-900">
+                        {sf.name}
+                        {clashSubfolderId === sf.subfolderId && (
+                          <span className="ml-2 inline-flex items-center text-[10px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded font-semibold" data-testid={`badge-clash-${sf.subfolderId}`}>
+                            conflicterende submap
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-gray-500">{sf.parentName}</td>
                       <td className="px-3 py-2">
                         {sf.status === 'match' && (
