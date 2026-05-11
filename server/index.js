@@ -940,6 +940,180 @@ app.get('/api/course-rag-folder-ids', async (req, res) => {
   }
 });
 
+// ── Document-tree & CRUD endpoints ──────────────────────────────────────────
+
+async function resolveAdminUser(req) {
+  const auth = await authUser(req);
+  if (auth.error) return { error: auth.error };
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+  if (!profile) return { error: { status: 403, body: { error: 'Profiel niet gevonden' } } };
+  const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
+  const isDocent = profile.role === 'docent';
+  return { user: auth.user, profile, isAdmin, isDocent };
+}
+
+function getFileMimeType(ext) {
+  const map = { pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword', txt: 'text/plain', csv: 'text/csv', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', omv: 'application/octet-stream', sav: 'application/octet-stream', jasp: 'application/octet-stream', rdata: 'application/octet-stream' };
+  return map[ext] || 'application/octet-stream';
+}
+
+// GET /api/admin/document-tree — volledige mapboom met documentaantallen
+app.get('/api/admin/document-tree', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Geen toegang' });
+  try {
+    const { data: folders, error: fErr } = await supabaseAdmin
+      .from('document_folders').select('id, name, parent_folder_id, folder_type, is_root, description').order('name');
+    if (fErr) return res.status(500).json({ error: fErr.message });
+    const { data: docRows } = await supabaseAdmin.from('documents').select('folder_id');
+    const countMap = {};
+    for (const d of docRows || []) {
+      if (d.folder_id) countMap[d.folder_id] = (countMap[d.folder_id] || 0) + 1;
+    }
+    const nodeMap = {};
+    for (const f of folders || []) {
+      nodeMap[f.id] = { ...f, document_count: countMap[f.id] || 0, children: [] };
+    }
+    const roots = [];
+    for (const node of Object.values(nodeMap)) {
+      if (node.parent_folder_id && nodeMap[node.parent_folder_id]) {
+        nodeMap[node.parent_folder_id].children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+    function sortTree(nodes) {
+      nodes.sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+      nodes.forEach(n => sortTree(n.children));
+    }
+    sortTree(roots);
+    return res.json({ folders: roots });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/folders/:folderId/documents
+app.get('/api/admin/folders/:folderId/documents', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Geen toegang' });
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, filename, file_type, file_size, processing_status, created_at, bucket, file_path, mime_type')
+      .eq('folder_id', req.params.folderId)
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ documents: data || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/folders — nieuwe map aanmaken
+app.post('/api/admin/folders', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen mappen aanmaken' });
+  const { name, parent_folder_id, folder_type } = req.body || {};
+  if (!name || !parent_folder_id) return res.status(400).json({ error: 'name en parent_folder_id zijn verplicht' });
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('document_folders')
+      .insert({ name, parent_folder_id, folder_type: folder_type || 'general', is_root: false, created_by: r.user.id })
+      .select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    await supabaseAdmin.from('folder_permissions').insert([
+      { folder_id: data.id, role: 'admin',   can_view: true, can_edit: true  },
+      { folder_id: data.id, role: 'docent',  can_view: true, can_edit: true  },
+      { folder_id: data.id, role: 'student', can_view: true, can_edit: false },
+    ]);
+    return res.json({ folder: data });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/folders/:folderId — lege map verwijderen
+app.delete('/api/admin/folders/:folderId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen mappen verwijderen' });
+  const { folderId } = req.params;
+  try {
+    const { count: docCount } = await supabaseAdmin.from('documents').select('id', { count: 'exact', head: true }).eq('folder_id', folderId);
+    if (docCount > 0) return res.status(409).json({ error: 'Map bevat nog documenten. Verwijder de documenten eerst.' });
+    const { count: childCount } = await supabaseAdmin.from('document_folders').select('id', { count: 'exact', head: true }).eq('parent_folder_id', folderId);
+    if (childCount > 0) return res.status(409).json({ error: 'Map bevat nog submappen. Verwijder de submappen eerst.' });
+    const { error } = await supabaseAdmin.from('document_folders').delete().eq('id', folderId);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/documents/:documentId — document verwijderen
+app.delete('/api/admin/documents/:documentId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen documenten verwijderen' });
+  const { documentId } = req.params;
+  try {
+    const { data: doc } = await supabaseAdmin.from('documents').select('file_path, bucket').eq('id', documentId).maybeSingle();
+    if (doc?.file_path && doc.bucket) {
+      await supabaseAdmin.storage.from(doc.bucket).remove([doc.file_path]);
+    }
+    const { error } = await supabaseAdmin.from('documents').delete().eq('id', documentId);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/folders/:folderId/upload — upload als base64-JSON
+app.post('/api/admin/folders/:folderId/upload', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen uploaden' });
+  const { folderId } = req.params;
+  const { filename, mimeType, data: base64Data } = req.body || {};
+  if (!filename || !base64Data) return res.status(400).json({ error: 'filename en data zijn verplicht' });
+  try {
+    const { data: folder } = await supabaseAdmin.from('document_folders').select('folder_type').eq('id', folderId).maybeSingle();
+    const bucket = (folder?.folder_type === 'rag_sources') ? 'rag_sources' : 'documents';
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    const safeFilename = filename.replace(/[^a-zA-Z0-9._\- ]/g, '_');
+    const filePath = `${folderId}/${Date.now()}_${safeFilename}`;
+    const fileExt = (filename.split('.').pop() || '').toLowerCase();
+    const resolvedMime = mimeType || getFileMimeType(fileExt);
+    const { error: storageErr } = await supabaseAdmin.storage.from(bucket).upload(filePath, fileBuffer, { contentType: resolvedMime, upsert: false });
+    if (storageErr) return res.status(500).json({ error: `Storage upload mislukt: ${storageErr.message}` });
+    const { data: doc, error: dbErr } = await supabaseAdmin.from('documents').insert({
+      title: filename, filename, file_path: filePath, file_type: fileExt,
+      file_size: fileBuffer.length, folder_id: folderId, bucket,
+      mime_type: resolvedMime, uploaded_by: r.user.id, processing_status: 'pending',
+    }).select().single();
+    if (dbErr) {
+      await supabaseAdmin.storage.from(bucket).remove([filePath]);
+      return res.status(500).json({ error: dbErr.message });
+    }
+    return res.json({ document: doc });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/create-rag-folder', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
