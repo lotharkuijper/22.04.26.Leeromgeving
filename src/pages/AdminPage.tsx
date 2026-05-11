@@ -230,6 +230,7 @@ export function AdminPage() {
     ranAt?: string;
     trigger?: string;
   } | null>(null);
+  const BACKFILL_DISMISS_KEY = 'backfill_banner_dismissed_ranAt';
   const [autoBackfillBannerDismissed, setAutoBackfillBannerDismissed] = useState(false);
 
   useEffect(() => {
@@ -243,7 +244,19 @@ export function AdminPage() {
         });
         if (r.ok) {
           const d = await r.json();
-          setAutoBackfillStatus(d.status);
+          const status = d.status;
+          setAutoBackfillStatus(status);
+          if ((status?.failed ?? 0) === 0) {
+            localStorage.removeItem(BACKFILL_DISMISS_KEY);
+            setAutoBackfillBannerDismissed(false);
+          } else {
+            const storedRanAt = localStorage.getItem(BACKFILL_DISMISS_KEY);
+            if (storedRanAt && storedRanAt === status?.ranAt) {
+              setAutoBackfillBannerDismissed(true);
+            } else {
+              setAutoBackfillBannerDismissed(false);
+            }
+          }
         }
       } catch {}
     })();
@@ -864,7 +877,12 @@ const tabGroups = [
             </p>
           </div>
           <button
-            onClick={() => setAutoBackfillBannerDismissed(true)}
+            onClick={() => {
+              if (autoBackfillStatus?.ranAt) {
+                localStorage.setItem(BACKFILL_DISMISS_KEY, autoBackfillStatus.ranAt);
+              }
+              setAutoBackfillBannerDismissed(true);
+            }}
             className="text-amber-500 hover:text-amber-700 transition-colors flex-shrink-0"
             title="Sluiten"
             data-testid="button-dismiss-backfill-banner"
