@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   getRootFolder,
   getFolderById,
-  getFolderTree,
+  getAllFolders,
   createFolder,
 } from "../services/folder.service";
 import {
@@ -34,7 +34,7 @@ export default function DocumentsPage() {
     setLoading(true);
 
     const folder = await getFolderById(folderId);
-    const tree = await getFolderTree();
+    const tree = await getAllFolders();
     const docs = await getDocumentsInFolder(folderId);
 
     setCurrentFolder(folder);
