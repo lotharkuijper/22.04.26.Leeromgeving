@@ -114,6 +114,7 @@ export function ProjectsAdminTab() {
   const [manualAssign, setManualAssign] = useState<Record<string, string>>({});
   const [claimedProjectIds, setClaimedProjectIds] = useState<string[]>([]);
   const [clashSubfolderId, setClashSubfolderId] = useState<string | null>(null);
+  const [resetConfirm, setResetConfirm] = useState<{ subfolderId: string; name: string; documentCount: number } | null>(null);
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const load = useCallback(async () => {
@@ -171,9 +172,39 @@ export function ProjectsAdminTab() {
     }
   };
 
-  const resetMarker = async (subfolderId: string) => {
+  const resetMarker = async (subfolderId: string, name: string) => {
     if (!session?.access_token) return;
     setResettingRow(subfolderId);
+    setError(null);
+    try {
+      // Droge run: controleer eerst hoeveel documenten in de submap zitten.
+      const checkRes = await fetch('/api/admin/fix-unmarked-project-subfolders', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subfolderId, action: 'reset', dryRun: true }),
+      });
+      const checkData = await checkRes.json();
+      if (!checkRes.ok) throw new Error(checkData.error || 'Controleren mislukt');
+
+      if (checkData.documentCount > 0) {
+        // Toon bevestigingsdialoog — de daadwerkelijke reset wacht op gebruikersbevestiging.
+        setResetConfirm({ subfolderId, name, documentCount: checkData.documentCount });
+        setResettingRow(null);
+        return;
+      }
+
+      // Geen documenten — direct resetten.
+      await doResetMarker(subfolderId);
+    } catch (e: any) {
+      setError(e.message);
+      setResettingRow(null);
+    }
+  };
+
+  const doResetMarker = async (subfolderId: string) => {
+    if (!session?.access_token) return;
+    setResettingRow(subfolderId);
+    setResetConfirm(null);
     setError(null);
     try {
       const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
@@ -603,7 +634,7 @@ export function ProjectsAdminTab() {
                           </td>
                           <td className="px-3 py-2">
                             <button
-                              onClick={() => resetMarker(sf.subfolderId)}
+                              onClick={() => resetMarker(sf.subfolderId, sf.name)}
                               disabled={resettingRow === sf.subfolderId}
                               className="flex items-center gap-1 px-2 py-1 text-xs text-red-700 border border-red-300 bg-red-50 rounded hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
                               data-testid={`button-reset-marker-${sf.subfolderId}`}
@@ -623,6 +654,38 @@ export function ProjectsAdminTab() {
           )}
         </div>
       </div>
+
+      {resetConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="dialog-reset-confirm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
+            <h3 className="text-base font-bold text-gray-900 mb-2">Marker resetten?</h3>
+            <p className="text-sm text-gray-700 mb-4">
+              De submap <strong>{resetConfirm.name}</strong> bevat{' '}
+              <strong>{resetConfirm.documentCount} {resetConfirm.documentCount === 1 ? 'document' : 'documenten'}</strong>.
+              Als je de marker reset, zijn deze documenten niet langer bereikbaar via de normale projectdocumentenstroom.
+              Weet je het zeker?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setResetConfirm(null)}
+                className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg"
+                data-testid="button-reset-confirm-cancel"
+              >
+                Annuleren
+              </button>
+              <button
+                onClick={() => doResetMarker(resetConfirm.subfolderId)}
+                disabled={resettingRow === resetConfirm.subfolderId}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-40"
+                data-testid="button-reset-confirm-ok"
+              >
+                {resettingRow === resetConfirm.subfolderId ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                Ja, reset marker
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">

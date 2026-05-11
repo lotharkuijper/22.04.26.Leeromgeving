@@ -6726,7 +6726,9 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
 
   // Reset-actie: verwijder de projectId-marker uit de description zodat de submap
   // weer als 'ongemarkeerd' verschijnt en opnieuw ingesteld kan worden.
+  // Met dryRun:true wordt alleen het aantal documenten in de submap teruggegeven.
   if (action === 'reset' && singleMode) {
+    const dryRun = req.body.dryRun === true;
     try {
       const sfRes = await pgPool.query(
         `SELECT df.id, df.description FROM document_folders df
@@ -6736,10 +6738,22 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
       );
       if (sfRes.rows.length === 0) return res.status(404).json({ error: 'Submap niet gevonden' });
       const sf = sfRes.rows[0];
+
+      // Tel documenten in de submap (om admin te waarschuwen bij reset).
+      const docCountRes = await pgPool.query(
+        'SELECT COUNT(*)::int AS cnt FROM documents WHERE folder_id = $1',
+        [sf.id]
+      );
+      const documentCount = docCountRes.rows[0]?.cnt ?? 0;
+
+      if (dryRun) {
+        return res.json({ ok: true, dryRun: true, subfolderId: sf.id, documentCount });
+      }
+
       const cleaned = (sf.description || '').replace(/\s*projectId:[0-9a-f-]+/gi, '').trim();
       await pgPool.query('UPDATE document_folders SET description = $1 WHERE id = $2', [cleaned || null, sf.id]);
-      console.log(`[reset-marker] Marker verwijderd uit submap ${sf.id}`);
-      return res.json({ ok: true, subfolderId: sf.id });
+      console.log(`[reset-marker] Marker verwijderd uit submap ${sf.id} (${documentCount} documenten in submap)`);
+      return res.json({ ok: true, subfolderId: sf.id, documentCount });
     } catch (err) {
       console.error('[reset-marker] fout:', err.message);
       return res.status(500).json({ error: err.message });
