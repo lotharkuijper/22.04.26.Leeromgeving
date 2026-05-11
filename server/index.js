@@ -6573,6 +6573,97 @@ app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (
 });
 
 // =============================================================================
+// Task #92 — Herstel Projectdata-submappen zonder projectId-marker.
+// Zoekt alle submappen van een "Projectdata"-map die geen "projectId:<uuid>"
+// in hun description hebben, matcht ze aan een project op naam (case-insensitief)
+// en schrijft de marker. Idempotent en alleen voor admins.
+// =============================================================================
+
+app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
+  if (!supabaseAdmin || !pgPool) return res.status(503).json({ error: 'DB-verbinding niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+  const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+  if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen deze herstelactie uitvoeren' });
+
+  try {
+    // Haal alle submappen van een Projectdata-map op zonder projectId-marker.
+    const subsResult = await pgPool.query(`
+      SELECT df.id, df.name, df.description, df.parent_folder_id
+      FROM   document_folders df
+      JOIN   document_folders pd ON pd.id = df.parent_folder_id
+      WHERE  pd.name        = 'Projectdata'
+        AND  pd.folder_type = 'data'
+        AND  (df.description IS NULL OR df.description NOT LIKE '%projectId:%')
+      ORDER  BY df.id
+    `);
+
+    const subfolders = subsResult.rows;
+    let fixed = 0;
+    let skippedNoMatch = 0;
+    let skippedMulti = 0;
+    const log = [];
+
+    for (const sf of subfolders) {
+      // Zoek project(en) waarvan de naam overeenkomt met de mapnaam.
+      const matchResult = await pgPool.query(
+        `SELECT id, title FROM projects
+         WHERE lower(trim(title)) = lower(trim($1))`,
+        [sf.name]
+      );
+      const matches = matchResult.rows;
+
+      if (matches.length === 0) {
+        const msg = `Submap ${sf.id} ("${sf.name}"): geen overeenkomend project – overgeslagen.`;
+        console.log(`[fix-unmarked-subfolders] ${msg}`);
+        log.push({ subfolderId: sf.id, name: sf.name, status: 'no_match' });
+        skippedNoMatch++;
+        continue;
+      }
+
+      if (matches.length > 1) {
+        const msg = `Submap ${sf.id} ("${sf.name}"): ${matches.length} projecten matchen – overgeslagen (ambigue).`;
+        console.log(`[fix-unmarked-subfolders] ${msg}`);
+        log.push({ subfolderId: sf.id, name: sf.name, status: 'ambiguous', matchCount: matches.length });
+        skippedMulti++;
+        continue;
+      }
+
+      const project = matches[0];
+      const oldDesc = sf.description || '';
+      const newDesc = oldDesc === ''
+        ? `Projectbestanden — projectId:${project.id}`
+        : `${oldDesc} projectId:${project.id}`;
+
+      await pgPool.query(
+        'UPDATE document_folders SET description = $1 WHERE id = $2',
+        [newDesc, sf.id]
+      );
+
+      const msg = `Submap ${sf.id} ("${sf.name}") ← projectId:${project.id} toegevoegd (project: "${project.title}").`;
+      console.log(`[fix-unmarked-subfolders] ${msg}`);
+      log.push({ subfolderId: sf.id, name: sf.name, status: 'fixed', projectId: project.id, projectTitle: project.title });
+      fixed++;
+    }
+
+    console.log(`[fix-unmarked-subfolders] Klaar: ${fixed} bijgewerkt, ${skippedNoMatch} geen match, ${skippedMulti} ambigue.`);
+    return res.json({
+      ok: true,
+      total: subfolders.length,
+      fixed,
+      skippedNoMatch,
+      skippedMulti,
+      log,
+    });
+  } catch (err) {
+    console.error('[fix-unmarked-subfolders] fout:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[API Server] Running on port ${PORT}`);
