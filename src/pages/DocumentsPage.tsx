@@ -376,21 +376,27 @@ export default function DocumentsPage() {
 
   async function downloadDocument(doc: DocItem) {
     try {
-      if (!doc.file_path) {
-        setNotice({ kind: 'error', message: 'Dit bestand heeft geen opslagpad en kan niet direct worden gedownload.' });
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      // Server-endpoint: werkt voor zowel file_bytes (binair) als storage-bestanden
+      const res = await fetch(`/api/admin/documents/${doc.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        redirect: 'follow',
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setNotice({ kind: 'error', message: body.error || 'Download mislukt.' });
         return;
       }
-      const { data, error: sErr } = await supabase.storage
-        .from(doc.bucket || 'documents')
-        .createSignedUrl(doc.file_path, 120);
-      if (sErr || !data?.signedUrl) {
-        setNotice({ kind: 'error', message: 'Kon geen downloadlink aanmaken.' });
-        return;
-      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = data.signedUrl;
+      a.href = url;
       a.download = doc.filename || doc.title;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (e: unknown) {
       setNotice({ kind: 'error', message: (e as Error).message });
     }

@@ -1060,6 +1060,44 @@ app.delete('/api/admin/folders/:folderId', async (req, res) => {
   }
 });
 
+// GET /api/admin/documents/:documentId/download — download (file_bytes én storage)
+app.get('/api/admin/documents/:documentId/download', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Geen toegang' });
+  const { documentId } = req.params;
+  try {
+    const { data: doc } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, filename, file_path, bucket, file_bytes, mime_type, file_type')
+      .eq('id', documentId)
+      .maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    const filename = doc.filename || doc.title || 'download';
+    const mimeType = doc.mime_type || getFileMimeType((doc.file_type || '').toLowerCase());
+    // Route 1: binary opgeslagen in DB (bijv. .omv, .sav)
+    if (doc.file_bytes) {
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+      res.setHeader('Content-Type', mimeType);
+      return res.send(Buffer.from(doc.file_bytes));
+    }
+    // Route 2: bestand in Supabase Storage
+    if (doc.file_path && doc.bucket) {
+      const { data: signed, error: signErr } = await supabaseAdmin.storage
+        .from(doc.bucket)
+        .createSignedUrl(doc.file_path, 120);
+      if (signErr || !signed?.signedUrl) {
+        return res.status(500).json({ error: 'Kon geen downloadlink aanmaken.' });
+      }
+      return res.redirect(signed.signedUrl);
+    }
+    return res.status(404).json({ error: 'Dit document heeft geen downloadbaar bestand.' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/admin/documents/:documentId — document verwijderen
 app.delete('/api/admin/documents/:documentId', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
