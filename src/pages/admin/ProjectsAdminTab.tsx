@@ -99,6 +99,7 @@ export function ProjectsAdminTab() {
   const [fixing, setFixing] = useState(false);
   const [fixingRow, setFixingRow] = useState<string | null>(null);
   const [fixResult, setFixResult] = useState<FixResult | null>(null);
+  const [manualAssign, setManualAssign] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     let q = supabase.from('projects').select('*').order('created_at', { ascending: false });
@@ -169,20 +170,23 @@ export function ProjectsAdminTab() {
     }
   };
 
-  const runFixOne = async (subfolderId: string) => {
+  const runFixOne = async (subfolderId: string, projectId?: string) => {
     if (!session?.access_token) return;
     setFixingRow(subfolderId);
     setError(null);
     try {
+      const body: Record<string, string> = { subfolderId };
+      if (projectId) body.projectId = projectId;
       const r = await fetch('/api/admin/fix-unmarked-project-subfolders', {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subfolderId }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Herstel mislukt');
       if (d.fixed > 0) {
         setUnmarkedFolders(prev => prev ? prev.filter(sf => sf.subfolderId !== subfolderId) : prev);
+        setManualAssign(prev => { const next = { ...prev }; delete next[subfolderId]; return next; });
       } else {
         setError(`Submap kon niet worden hersteld — probeer de lijst opnieuw op te halen.`);
       }
@@ -407,16 +411,42 @@ export function ProjectsAdminTab() {
                         )}
                       </td>
                       <td className="px-3 py-2">
-                        <button
-                          onClick={() => runFixOne(sf.subfolderId)}
-                          disabled={sf.status !== 'match' || fixingRow === sf.subfolderId || fixing}
-                          className="flex items-center gap-1 px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                          data-testid={`button-fix-subfolder-${sf.subfolderId}`}
-                          title={sf.status !== 'match' ? 'Alleen beschikbaar wanneer er een unieke match is' : 'Herstel deze submap'}
-                        >
-                          {fixingRow === sf.subfolderId ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
-                          Herstel
-                        </button>
+                        {sf.status === 'match' ? (
+                          <button
+                            onClick={() => runFixOne(sf.subfolderId)}
+                            disabled={fixingRow === sf.subfolderId || fixing}
+                            className="flex items-center gap-1 px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                            data-testid={`button-fix-subfolder-${sf.subfolderId}`}
+                            title="Herstel deze submap"
+                          >
+                            {fixingRow === sf.subfolderId ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
+                            Herstel
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={manualAssign[sf.subfolderId] || ''}
+                              onChange={e => setManualAssign(prev => ({ ...prev, [sf.subfolderId]: e.target.value }))}
+                              className="text-xs border border-gray-300 rounded px-1.5 py-1 max-w-[180px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              data-testid={`select-project-${sf.subfolderId}`}
+                            >
+                              <option value="">— Kies project —</option>
+                              {projects.map(p => (
+                                <option key={p.id} value={p.id}>{p.title}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => runFixOne(sf.subfolderId, manualAssign[sf.subfolderId])}
+                              disabled={!manualAssign[sf.subfolderId] || fixingRow === sf.subfolderId || fixing}
+                              className="flex items-center gap-1 px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                              data-testid={`button-fix-manual-${sf.subfolderId}`}
+                              title="Koppel aan geselecteerd project"
+                            >
+                              {fixingRow === sf.subfolderId ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
+                              Bevestig
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}

@@ -6642,8 +6642,9 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
   const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
   if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen deze herstelactie uitvoeren' });
 
-  const { subfolderId } = req.body || {};
+  const { subfolderId, projectId: overrideProjectId } = req.body || {};
   const singleMode = typeof subfolderId === 'string' && subfolderId.trim().length > 0;
+  const hasProjectOverride = singleMode && typeof overrideProjectId === 'string' && overrideProjectId.trim().length > 0;
 
   try {
     // Haal submappen op zonder projectId-marker — optioneel gefilterd op één submap.
@@ -6666,31 +6667,47 @@ app.post('/api/admin/fix-unmarked-project-subfolders', async (req, res) => {
     const log = [];
 
     for (const sf of subfolders) {
-      // Zoek project(en) waarvan de naam overeenkomt met de mapnaam.
-      const matchResult = await pgPool.query(
-        `SELECT id, title FROM projects
-         WHERE lower(trim(title)) = lower(trim($1))`,
-        [sf.name]
-      );
-      const matches = matchResult.rows;
+      let project;
 
-      if (matches.length === 0) {
-        const msg = `Submap ${sf.id} ("${sf.name}"): geen overeenkomend project – overgeslagen.`;
-        console.log(`[fix-unmarked-subfolders] ${msg}`);
-        log.push({ subfolderId: sf.id, name: sf.name, status: 'no_match' });
-        skippedNoMatch++;
-        continue;
+      if (hasProjectOverride) {
+        // Admin heeft handmatig een project gekozen — sla naamsovereenkomst over.
+        const overrideResult = await pgPool.query(
+          'SELECT id, title FROM projects WHERE id = $1',
+          [overrideProjectId.trim()]
+        );
+        if (overrideResult.rows.length === 0) {
+          log.push({ subfolderId: sf.id, name: sf.name, status: 'no_match' });
+          skippedNoMatch++;
+          continue;
+        }
+        project = overrideResult.rows[0];
+      } else {
+        // Zoek project(en) waarvan de naam overeenkomt met de mapnaam.
+        const matchResult = await pgPool.query(
+          `SELECT id, title FROM projects
+           WHERE lower(trim(title)) = lower(trim($1))`,
+          [sf.name]
+        );
+        const matches = matchResult.rows;
+
+        if (matches.length === 0) {
+          const msg = `Submap ${sf.id} ("${sf.name}"): geen overeenkomend project – overgeslagen.`;
+          console.log(`[fix-unmarked-subfolders] ${msg}`);
+          log.push({ subfolderId: sf.id, name: sf.name, status: 'no_match' });
+          skippedNoMatch++;
+          continue;
+        }
+
+        if (matches.length > 1) {
+          const msg = `Submap ${sf.id} ("${sf.name}"): ${matches.length} projecten matchen – overgeslagen (ambigue).`;
+          console.log(`[fix-unmarked-subfolders] ${msg}`);
+          log.push({ subfolderId: sf.id, name: sf.name, status: 'ambiguous', matchCount: matches.length });
+          skippedMulti++;
+          continue;
+        }
+
+        project = matches[0];
       }
-
-      if (matches.length > 1) {
-        const msg = `Submap ${sf.id} ("${sf.name}"): ${matches.length} projecten matchen – overgeslagen (ambigue).`;
-        console.log(`[fix-unmarked-subfolders] ${msg}`);
-        log.push({ subfolderId: sf.id, name: sf.name, status: 'ambiguous', matchCount: matches.length });
-        skippedMulti++;
-        continue;
-      }
-
-      const project = matches[0];
       const oldDesc = sf.description || '';
       const newDesc = oldDesc === ''
         ? `Projectbestanden — projectId:${project.id}`
