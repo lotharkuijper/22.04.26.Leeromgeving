@@ -1,4 +1,4 @@
-# VU Amsterdam Epi/Bio Leeromgeving
+# LAIR-VU — Leeromgeving met AI-integratie en Reflectie
 
 Vite/React SPA + Express server + Supabase (PostgreSQL/auth/RLS).
 LLM: Groq `llama-3.3-70b-versatile`. Embeddings: OpenAI `text-embedding-3-small`.

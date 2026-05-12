@@ -100,15 +100,10 @@ export function Layout({ children }: LayoutProps) {
           <div className="flex items-center justify-between h-16">
 
             {/* LEFT SIDE: LOGO + TITLE */}
-            <div className="flex items-center gap-3">
-              <div className="bg-white p-2 rounded-lg border-2 border-blue-600">
-                <div className="text-center leading-tight">
-                  <div className="text-sm font-bold text-blue-600">VU</div>
-                  <div className="text-[8px] text-gray-600">Amsterdam</div>
-                </div>
-              </div>
+            <div className="flex items-center gap-2">
+              <img src="/lair-vu-logo.png" alt="LAIR-VU logo" className="h-10 w-auto" />
               <span className="font-bold text-lg text-gray-900 hidden sm:block">
-                VU Leeromgeving Epi & Biostat
+                LAIR-VU
               </span>
             </div>
 

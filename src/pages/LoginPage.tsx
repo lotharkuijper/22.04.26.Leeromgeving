@@ -56,14 +56,9 @@ export function LoginPage() {
       <div className="w-full max-w-md">
         <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
           <div className="flex flex-col items-center mb-8">
-            <div className="bg-white p-4 rounded-2xl mb-4 border-2 border-blue-600">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-blue-600">VU</div>
-                <div className="text-xs text-gray-600">Amsterdam</div>
-              </div>
-            </div>
+            <img src="/lair-vu-logo.png" alt="LAIR-VU logo" className="h-24 w-auto mb-4" />
             <h1 className="text-2xl font-bold text-gray-900 mb-2 text-center">
-              Vrije Universiteit leeromgeving<br/>Epidemiologie en Biostatistiek
+              LAIR-VU
             </h1>
             <p className="text-gray-600 text-center">
               {isSignUp ? 'Maak een nieuw account aan' : 'Log in op je account'}
