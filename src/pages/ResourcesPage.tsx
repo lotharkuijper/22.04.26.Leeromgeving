@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Download, Search, FolderOpen, FileText } from 'lucide-react';
-import { Layout } from '../components/Layout';
+import { Download, Search, FileText, BookOpen, FolderOpen } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { STORAGE_CONFIG } from '../config/storage.config';
 import { formatFileSize, getFileIcon } from '../services/dataset.service';
@@ -19,96 +18,57 @@ interface Resource {
   folder_name?: string;
 }
 
+function toResource(doc: any): Resource {
+  return {
+    id: doc.id,
+    name: doc.title || doc.filename,
+    description: doc.description,
+    file_path: doc.file_path,
+    file_size: doc.file_size,
+    file_type: doc.file_type,
+    bucket: doc.bucket,
+    folder_id: doc.folder_id,
+    created_at: doc.created_at,
+    folder_name: doc.document_folders?.name,
+  };
+}
+
 export function ResourcesPage() {
-  const [datasets, setDatasets] = useState<Resource[]>([]);
-  const [documents, setDocuments] = useState<Resource[]>([]);
+  const [otherDocs, setOtherDocs] = useState<Resource[]>([]);
+  const [ragFiles, setRagFiles] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'datasets' | 'docs'>('datasets');
   const [searchQuery, setSearchQuery] = useState('');
-  const [ragFiles, setRagFiles] = useState([]);
   const { activeCourse, activeCourseRagFolderIds } = useActiveCourse();
 
   useEffect(() => {
-    loadResources();
+    loadOtherDocs();
   }, []);
 
   useEffect(() => {
     loadRagFiles();
   }, [activeCourseRagFolderIds]);
 
+  const fetchFromBucket = async (bucket: string): Promise<Resource[]> => {
+    const { data, error } = await supabase
+      .from('documents')
+      .select('*, document_folders (name)')
+      .eq('bucket', bucket)
+      .eq('processing_status', 'completed')
+      .order('created_at', { ascending: false });
+    if (error) { console.error(`[Bronnen] fout bij ophalen ${bucket}:`, error.message); return []; }
+    return (data || []).map(toResource);
+  };
 
-  const loadResources = async () => {
+  const loadOtherDocs = async () => {
     setLoading(true);
     try {
-      const [datasetsData, docsData] = await Promise.all([
-        fetchResources(STORAGE_CONFIG.buckets.DATASETS),
-        fetchResources(STORAGE_CONFIG.buckets.DOCS_GENERAL),
+      const [datasets, docs] = await Promise.all([
+        fetchFromBucket(STORAGE_CONFIG.buckets.DATASETS),
+        fetchFromBucket(STORAGE_CONFIG.buckets.DOCS_GENERAL),
       ]);
-
-      setDatasets(datasetsData);
-      setDocuments(docsData);
-    } catch (error) {
-      console.error('Error loading resources:', error);
+      setOtherDocs([...datasets, ...docs]);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchResources = async (bucket: string): Promise<Resource[]> => {
-    try {
-      const { data, error } = await supabase
-        .from('documents')
-        .select(`
-          *,
-          document_folders (
-            name
-          )
-        `)
-        .eq('bucket', bucket)
-        .eq('processing_status', 'completed')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      return (data || []).map(doc => ({
-        id: doc.id,
-        name: doc.title || doc.filename,
-        description: doc.description,
-        file_path: doc.file_path,
-        file_size: doc.file_size,
-        file_type: doc.file_type,
-        bucket: doc.bucket,
-        folder_id: doc.folder_id,
-        created_at: doc.created_at,
-        folder_name: doc.document_folders?.name,
-      }));
-    } catch (error) {
-      console.error(`Error fetching resources from ${bucket}:`, error);
-      return [];
-    }
-  };
-
-  const handleDownload = async (resource: Resource) => {
-    try {
-      const { data, error } = await supabase.storage
-        .from(resource.bucket)
-        .download(resource.file_path);
-
-      if (error) {
-        alert(`Fout bij downloaden: ${error.message}`);
-        return;
-      }
-
-      const url = URL.createObjectURL(data);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = resource.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error: any) {
-      alert(`Fout bij downloaden: ${error.message}`);
     }
   };
 
@@ -117,168 +77,146 @@ export function ResourcesPage() {
       setRagFiles([]);
       return;
     }
-
     const { data, error } = await supabase
-      .from("documents")
-      .select(`
-        *,
-        document_folders (
-          name
-        )
-      `)
-      .in("folder_id", activeCourseRagFolderIds)
-      .eq("processing_status", "completed")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("Error loading RAG files:", error);
-      setRagFiles([]);
-      return;
-    }
-
-    setRagFiles(data || []);
+      .from('documents')
+      .select('*, document_folders (name)')
+      .in('folder_id', activeCourseRagFolderIds)
+      .eq('processing_status', 'completed')
+      .order('created_at', { ascending: false });
+    if (error) { console.error('[Bronnen] fout bij ophalen RAG-bestanden:', error.message); setRagFiles([]); return; }
+    setRagFiles((data || []).map(toResource));
   };
 
+  const handleDownload = async (resource: Resource) => {
+    const { data, error } = await supabase.storage
+      .from(resource.bucket)
+      .download(resource.file_path);
+    if (error) { alert(`Fout bij downloaden: ${error.message}`); return; }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = resource.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
-  const filterResources = (resources: Resource[]) => {
+  const filter = (resources: Resource[]) => {
     if (!searchQuery.trim()) return resources;
-
-    const query = searchQuery.toLowerCase();
-    return resources.filter(
-      r =>
-        r.name.toLowerCase().includes(query) ||
-        r.description?.toLowerCase().includes(query) ||
-        r.folder_name?.toLowerCase().includes(query)
+    const q = searchQuery.toLowerCase();
+    return resources.filter(r =>
+      r.name.toLowerCase().includes(q) ||
+      r.description?.toLowerCase().includes(q) ||
+      r.folder_name?.toLowerCase().includes(q)
     );
   };
 
-  const currentResources = activeTab === 'datasets' ? datasets : documents;
-  const filteredResources = filterResources(currentResources);
+  const filteredRag = filter(ragFiles);
+  const filteredOther = filter(otherDocs);
 
-  return (
-      <div className="max-w-6xl mx-auto space-y-6">
-
-                {/* 🟦 SECTIE: CURSUSINHOUD */}
-        <section className="bg-white border border-gray-200 rounded-lg p-5">
-          <h2 className="text-xl font-semibold mb-3">Cursusinhoud</h2>
-
-          {ragFiles.length === 0 ? (
-            <p className="text-gray-500">Geen bestanden gevonden in de cursusinhoud.</p>
-          ) : (
-            <div className="space-y-2">
-              {ragFiles.map((file) => (
-                <div
-                  key={file.id}
-                  className="flex items-center justify-between p-2 border rounded"
-                >
-                  <span>{file.name}</span>
-<button
-  onClick={() => handleDownload(file)}
-  className="text-blue-600 hover:underline"
->
-  Download
-</button>
-
-                </div>
-              ))}
-            </div>
+  const ResourceRow = ({ resource }: { resource: Resource }) => (
+    <div
+      className="flex items-center gap-3 p-3 border border-gray-100 rounded-lg hover:bg-gray-50 transition-colors"
+      data-testid={`resource-row-${resource.id}`}
+    >
+      <span className="text-xl flex-shrink-0">{getFileIcon(resource.file_type)}</span>
+      <div className="flex-1 min-w-0">
+        <p className="font-medium text-gray-900 text-sm truncate">{resource.name}</p>
+        <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+          {resource.folder_name && (
+            <span className="flex items-center gap-1">
+              <FolderOpen className="w-3 h-3" />
+              {resource.folder_name}
+            </span>
           )}
-        </section>
-
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Bronnen & Datasets</h1>
-          <p className="text-gray-600 mt-2">
-            Download datasets en cursusmateriaal
-          </p>
+          {resource.file_size > 0 && <span>{formatFileSize(resource.file_size)}</span>}
+          <span>{new Date(resource.created_at).toLocaleDateString('nl-NL')}</span>
         </div>
-
-        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-          <div className="flex gap-2">
-            <button
-              onClick={() => setActiveTab('datasets')}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                activeTab === 'datasets'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              📊 Datasets ({datasets.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('docs')}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                activeTab === 'docs'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              📄 Documenten ({documents.length})
-            </button>
-          </div>
-
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Zoeken..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Laden...</p>
-          </div>
-        ) : filteredResources.length === 0 ? (
-          <div className="bg-gray-50 rounded-lg p-12 text-center">
-            <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600">
-              {searchQuery ? 'Geen resultaten gevonden' : `Geen ${activeTab === 'datasets' ? 'datasets' : 'documenten'} beschikbaar`}
-            </p>
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            {filteredResources.map(resource => (
-              <div
-                key={resource.id}
-                className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-4 flex-1">
-                    <span className="text-4xl">{getFileIcon(resource.file_type)}</span>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-gray-900">{resource.name}</h3>
-                      {resource.description && (
-                        <p className="text-sm text-gray-600 mt-1">{resource.description}</p>
-                      )}
-                      <div className="flex items-center gap-4 mt-3 text-sm text-gray-500">
-                        {resource.folder_name && (
-                          <span className="flex items-center gap-1">
-                            <FolderOpen className="w-4 h-4" />
-                            {resource.folder_name}
-                          </span>
-                        )}
-                        <span>{formatFileSize(resource.file_size)}</span>
-                        <span>{new Date(resource.created_at).toLocaleDateString('nl-NL')}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleDownload(resource)}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+        {resource.description && (
+          <p className="text-xs text-gray-500 mt-0.5 truncate">{resource.description}</p>
         )}
       </div>
+      <button
+        onClick={() => handleDownload(resource)}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors flex-shrink-0"
+        data-testid={`download-btn-${resource.id}`}
+      >
+        <Download className="w-3.5 h-3.5" />
+        Download
+      </button>
+    </div>
+  );
+
+  const EmptyState = ({ search }: { search: boolean }) => (
+    <p className="text-sm text-gray-400 text-center py-8">
+      {search ? 'Geen resultaten gevonden voor je zoekopdracht.' : 'Geen bestanden beschikbaar.'}
+    </p>
+  );
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Paginaheader */}
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Bronnen</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Beschikbare bestanden voor {activeCourse?.name ?? 'deze cursus'}
+          </p>
+        </div>
+        <div className="relative w-60">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Zoeken..."
+            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            data-testid="resources-search"
+          />
+        </div>
+      </div>
+
+      {/* Sectie 1: Cursusmateriaal (RAG) */}
+      <section className="bg-white border border-gray-200 rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <BookOpen className="w-5 h-5 text-blue-600 flex-shrink-0" />
+          <h2 className="text-base font-semibold text-gray-900">Cursusmateriaal</h2>
+          <span className="ml-auto text-xs text-gray-400 font-medium">
+            {filteredRag.length} bestand{filteredRag.length !== 1 ? 'en' : ''}
+          </span>
+        </div>
+        <p className="text-xs text-gray-500 mb-4 ml-7">
+          Documenten die als kennisbron dienen voor Chat, Ik Leg Uit en Quiz.
+        </p>
+        {filteredRag.length === 0
+          ? <EmptyState search={!!searchQuery} />
+          : <div className="space-y-2">{filteredRag.map(r => <ResourceRow key={r.id} resource={r} />)}</div>
+        }
+      </section>
+
+      {/* Sectie 2: Overige documenten */}
+      <section className="bg-white border border-gray-200 rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <FileText className="w-5 h-5 text-purple-600 flex-shrink-0" />
+          <h2 className="text-base font-semibold text-gray-900">Overige documenten</h2>
+          <span className="ml-auto text-xs text-gray-400 font-medium">
+            {filteredOther.length} bestand{filteredOther.length !== 1 ? 'en' : ''}
+          </span>
+        </div>
+        <p className="text-xs text-gray-500 mb-4 ml-7">
+          Datasets en overige bestanden beschikbaar gesteld door de docent.
+        </p>
+        {loading ? (
+          <div className="flex justify-center py-8">
+            <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-purple-600" />
+          </div>
+        ) : filteredOther.length === 0 ? (
+          <EmptyState search={!!searchQuery} />
+        ) : (
+          <div className="space-y-2">{filteredOther.map(r => <ResourceRow key={r.id} resource={r} />)}</div>
+        )}
+      </section>
+    </div>
   );
 }
