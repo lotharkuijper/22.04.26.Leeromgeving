@@ -171,7 +171,9 @@ export function ProjectsPage() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {c.projects.map(p => {
-                    const inProgress = p.activeGroup && p.lastSession && p.lastSession.status !== 'completed';
+                    // activeGroup is de bron van waarheid: als de user lid is van een actieve groep
+                    // kan hij/zij doorgaan — ongeacht of er een sessie-record bestaat.
+                    const inProgress = !!p.activeGroup;
                     const completed = p.sessions.some(s => s.status === 'completed');
                     return (
                       <div key={p.id} className="border border-gray-200 rounded-xl p-5 flex flex-col gap-3" data-testid={`overview-project-${p.id}`}>

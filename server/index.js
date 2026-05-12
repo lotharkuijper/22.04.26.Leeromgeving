@@ -4733,19 +4733,17 @@ app.post('/api/projects/groups', async (req, res) => {
       .insert({ group_id: group.id, user_id: auth.user.id, role: 'owner' });
     if (mErr) return res.status(500).json({ error: mErr.message });
 
-    // Maak direct een sessie-record aan zodat de studenten-overzichtspagina
-    // "Vervolg laatste sessie" kan tonen. Client-side inserts kunnen stil
+    // Maak een sessie-record aan voor ALLE gebruikers (ook admin/docent die
+    // het project als student gebruiken). Client-side inserts kunnen stil
     // mislukken door RLS — hier gebruiken we supabaseAdmin.
     // onConflict matcht de bestaande unique-constraint (project_id, student_id).
-    if (!isStaff) {
-      await supabaseAdmin.from('student_project_sessions').upsert({
-        student_id: auth.user.id,
-        project_id: projectId,
-        group_id: group.id,
-        status: 'in_progress',
-        started_at: new Date().toISOString(),
-      }, { onConflict: 'project_id,student_id' });
-    }
+    await supabaseAdmin.from('student_project_sessions').upsert({
+      student_id: auth.user.id,
+      project_id: projectId,
+      group_id: group.id,
+      status: 'in_progress',
+      started_at: new Date().toISOString(),
+    }, { onConflict: 'project_id,student_id' });
 
     return res.json({ group });
   } catch (err) {
@@ -4800,18 +4798,16 @@ app.post('/api/projects/groups/join', async (req, res) => {
       }
     }
 
-    // Maak (of herstel) een sessie-record zodat de overzichtspagina
-    // "Vervolg laatste sessie" kan tonen. onConflict matcht de bestaande
-    // unique-constraint (project_id, student_id).
-    if (!isStaff) {
-      await supabaseAdmin.from('student_project_sessions').upsert({
-        student_id: auth.user.id,
-        project_id: group.project_id,
-        group_id: group.id,
-        status: 'in_progress',
-        started_at: new Date().toISOString(),
-      }, { onConflict: 'project_id,student_id' });
-    }
+    // Maak (of herstel) een sessie-record voor ALLE gebruikers zodat de
+    // overzichtspagina "Ga verder" kan tonen.
+    // onConflict matcht de bestaande unique-constraint (project_id, student_id).
+    await supabaseAdmin.from('student_project_sessions').upsert({
+      student_id: auth.user.id,
+      project_id: group.project_id,
+      group_id: group.id,
+      status: 'in_progress',
+      started_at: new Date().toISOString(),
+    }, { onConflict: 'project_id,student_id' });
 
     return res.json({ group });
   } catch (err) {
@@ -6054,9 +6050,10 @@ app.get('/api/projects/student-overview', async (req, res) => {
     }
 
     // Groepslidmaatschappen voor "vervolg in groep".
+    // Inclusief created_at zodat we de meest recente actieve groep kunnen kiezen.
     const { data: groupRows } = await supabaseAdmin
       .from('project_group_members')
-      .select('group_id, project_groups!inner(id, project_id, name, status, invite_code)')
+      .select('group_id, project_groups!inner(id, project_id, name, status, invite_code, created_at)')
       .eq('user_id', auth.user.id);
     const groupsByProject = new Map();
     for (const g of (groupRows || [])) {
@@ -6093,7 +6090,19 @@ app.get('/api/projects/student-overview', async (req, res) => {
         const pSessions = sessions.filter(s => s.project_id === p.id);
         const lastSession = pSessions[0] || null;
         const groups = groupsByProject.get(p.id) || [];
-        const activeGroup = groups.find(g => g.status === 'active') || null;
+        // Kies de "beste" actieve groep: eerst op meest recente checkpoint,
+        // daarna op meest recent aangemaakt (bij meerdere actieve groepen door
+        // eerder mislukte herstart-pogingen).
+        const activeGroups = groups.filter(g => g.status === 'active');
+        activeGroups.sort((a, b) => {
+          const cpA = lastCheckpointByGroup.get(a.id) || null;
+          const cpB = lastCheckpointByGroup.get(b.id) || null;
+          if (cpA && !cpB) return -1;
+          if (!cpA && cpB) return 1;
+          if (cpA && cpB) return new Date(cpB) - new Date(cpA);
+          return new Date(b.created_at) - new Date(a.created_at);
+        });
+        const activeGroup = activeGroups[0] || null;
         const activeGroupWithCp = activeGroup
           ? { ...activeGroup, lastCheckpointAt: lastCheckpointByGroup.get(activeGroup.id) || null }
           : null;
