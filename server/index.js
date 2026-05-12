@@ -1,7 +1,12 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 import officeParserPkg from 'officeparser';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const parseOfficeAsync = (buffer) => new Promise((resolve, reject) => {
   officeParserPkg.parseOffice(buffer, (data, err) => {
     if (err) reject(err); else resolve(data);
@@ -34,7 +39,7 @@ const docUpload = multer({
 });
 
 const app = express();
-const PORT = process.env.API_PORT || 3001;
+const PORT = process.env.PORT || process.env.API_PORT || 3001;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -6794,6 +6799,15 @@ app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (
 });
 
 // =============================================================================
+// Serveer de gebouwde Vite-frontend als dist/index.html bestaat (productie).
+const distPath = path.join(__dirname, '..', 'dist');
+if (fs.existsSync(path.join(distPath, 'index.html'))) {
+  app.use(express.static(distPath));
+  app.get('/*splat', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[API Server] Running on port ${PORT}`);
