@@ -537,12 +537,18 @@ export function ProjectRoomPage() {
             <h1 className="font-bold text-gray-900 truncate" data-testid="text-project-title">{project.title}</h1>
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-xs text-gray-500 truncate">{group.name}{isFinalized && ' · afgesloten'}</p>
-              {checkpoints.length > 0 && (() => {
-                const lastCp = checkpoints.reduce((a, b) => new Date(a.created_at) > new Date(b.created_at) ? a : b);
-                return (
+              {(() => {
+                const lastCp = checkpoints.length > 0
+                  ? checkpoints.reduce((a, b) => new Date(a.created_at) > new Date(b.created_at) ? a : b)
+                  : null;
+                return lastCp ? (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[10px] rounded border border-blue-100" data-testid="badge-last-checkpoint">
                     <CheckCircle2 className="w-2.5 h-2.5" />
-                    Checkpoint: {new Date(lastCp.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    Laatste checkpoint: {new Date(lastCp.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-50 text-gray-400 text-[10px] rounded border border-gray-200" data-testid="badge-no-checkpoint">
+                    Nog geen checkpoint
                   </span>
                 );
               })()}

@@ -192,16 +192,16 @@ export function ProjectsPage() {
                               data-testid={`button-continue-${p.id}`}
                             >
                               <ArrowRight className="w-4 h-4" />
-                              <span className="flex flex-col items-start leading-tight">
-                                <span>Ga verder</span>
-                                {p.activeGroup?.lastCheckpointAt ? (
+                              {p.activeGroup?.lastCheckpointAt ? (
+                                <span className="flex flex-col items-start leading-tight">
+                                  <span>Ga verder</span>
                                   <span className="text-[10px] font-normal opacity-80">
-                                    checkpoint: {new Date(p.activeGroup.lastCheckpointAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                    Laatste checkpoint: {new Date(p.activeGroup.lastCheckpointAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                                   </span>
-                                ) : (
-                                  <span className="text-[10px] font-normal opacity-70">nog geen checkpoint</span>
-                                )}
-                              </span>
+                                </span>
+                              ) : (
+                                <span>Ga verder</span>
+                              )}
                             </button>
                           )}
                           <button
