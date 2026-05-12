@@ -17,7 +17,7 @@ interface OverviewProject {
   max_group_size: number | null;
   sessions: any[];
   lastSession: any | null;
-  activeGroup: { id: string; name: string; invite_code: string; status: string } | null;
+  activeGroup: { id: string; name: string; invite_code: string; status: string; lastCheckpointAt: string | null } | null;
 }
 
 interface OverviewCourse {
@@ -191,7 +191,17 @@ export function ProjectsPage() {
                               className="flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700"
                               data-testid={`button-continue-${p.id}`}
                             >
-                              <ArrowRight className="w-4 h-4" /> Vervolg laatste sessie
+                              <ArrowRight className="w-4 h-4" />
+                              <span className="flex flex-col items-start leading-tight">
+                                <span>Ga verder</span>
+                                {p.activeGroup?.lastCheckpointAt ? (
+                                  <span className="text-[10px] font-normal opacity-80">
+                                    checkpoint: {new Date(p.activeGroup.lastCheckpointAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-normal opacity-70">nog geen checkpoint</span>
+                                )}
+                              </span>
                             </button>
                           )}
                           <button
@@ -209,7 +219,7 @@ export function ProjectsPage() {
                               className="flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-40"
                               data-testid={`button-restart-${p.id}`}
                             >
-                              <RefreshCw className="w-4 h-4" /> Herstart (sluit huidige af)
+                              <RefreshCw className="w-4 h-4" /> Opnieuw beginnen
                             </button>
                           )}
                         </div>
@@ -226,14 +236,20 @@ export function ProjectsPage() {
       {restartConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6">
-            <h3 className="text-lg font-bold mb-2">Project opnieuw starten?</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Je huidige sessie van <strong>"{restartConfirm.title}"</strong> wordt afgesloten en als afgerond gemarkeerd. Je oude voortgang blijft bewaard. Daarna start een verse projectruimte met een nieuwe groep.
+            <h3 className="text-lg font-bold mb-2">Opnieuw beginnen?</h3>
+            <p className="text-sm text-gray-600 mb-3">
+              Je huidige sessie van <strong>"{restartConfirm.title}"</strong> wordt verlaten en je stapt uit de groep.
             </p>
+            <ul className="text-sm text-gray-600 mb-4 space-y-1">
+              <li className="flex items-start gap-1.5"><span className="text-green-600 mt-0.5">✓</span> Jullie checkpoints en leerdagboek-notities blijven bewaard.</li>
+              <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> De gesprekken in de projectkamer zijn daarna niet meer zichtbaar voor jou — je groepsgenoten kunnen er nog wel bij.</li>
+              <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> Daarna start een nieuwe, lege projectkamer met een nieuwe groep.</li>
+            </ul>
+            <p className="text-sm font-medium text-gray-800 mb-4">Wil je echt opnieuw beginnen in plaats van <span className="text-blue-700">"Ga verder"</span>?</p>
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setRestartConfirm(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-restart-cancel">Annuleren</button>
+              <button onClick={() => setRestartConfirm(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-restart-cancel">Annuleren — ga toch verder</button>
               <button onClick={() => restart(restartConfirm)} disabled={busyProjectId === restartConfirm.id} className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-40" data-testid="button-restart-confirm">
-                {busyProjectId === restartConfirm.id ? 'Bezig…' : 'Ja, herstarten'}
+                {busyProjectId === restartConfirm.id ? 'Bezig…' : 'Ja, opnieuw beginnen'}
               </button>
             </div>
           </div>

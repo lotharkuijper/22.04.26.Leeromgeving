@@ -106,6 +106,7 @@ export function ProjectRoomPage() {
   const [chatInput, setChatInput] = useState('');
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [showCheckpointModal, setShowCheckpointModal] = useState<null | 'checkpoint' | 'final'>(null);
+  const [checkpointSaved, setCheckpointSaved] = useState(false);
   const [reflection, setReflection] = useState('');
   const [submittingCheckpoint, setSubmittingCheckpoint] = useState(false);
   // Stabiele requestId per checkpoint-poging: pas resetten na succesvolle
@@ -444,20 +445,18 @@ export function ProjectRoomPage() {
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Checkpoint mislukt');
       setCheckpoints(prev => [data.checkpoint, ...prev]);
-      setShowCheckpointModal(null);
       setReflection('');
       setCheckpointPreview(null);
       setCheckpointRequestId(null);
-      const added = Number(data.threadSummariesAdded || 0);
-      if (added > 0) {
-        const word = added === 1 ? 'gesprekssamenvatting' : 'gesprekssamenvattingen';
-        setInfo(`Checkpoint opgeslagen — ${added} ${word} toegevoegd aan jullie leerdagboeken.`);
-        setTimeout(() => setInfo(null), 6000);
+      if (data.checkpoint?.kind === 'final') {
+        // Afronden: sluit modal en herlaad kamer (status → finalized).
+        setShowCheckpointModal(null);
+        setCheckpointSaved(false);
+        loadRoom();
       } else {
-        setInfo('Checkpoint opgeslagen.');
-        setTimeout(() => setInfo(null), 4000);
+        // Tussentijds checkpoint: toon bevestigingsscherm in de modal.
+        setCheckpointSaved(true);
       }
-      if (data.checkpoint?.kind === 'final') loadRoom();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -536,7 +535,18 @@ export function ProjectRoomPage() {
           </button>
           <div className="min-w-0">
             <h1 className="font-bold text-gray-900 truncate" data-testid="text-project-title">{project.title}</h1>
-            <p className="text-xs text-gray-500 truncate">{group.name}{isFinalized && ' · afgesloten'}</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-xs text-gray-500 truncate">{group.name}{isFinalized && ' · afgesloten'}</p>
+              {checkpoints.length > 0 && (() => {
+                const lastCp = checkpoints.reduce((a, b) => new Date(a.created_at) > new Date(b.created_at) ? a : b);
+                return (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[10px] rounded border border-blue-100" data-testid="badge-last-checkpoint">
+                    <CheckCircle2 className="w-2.5 h-2.5" />
+                    Checkpoint: {new Date(lastCp.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                );
+              })()}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2 text-sm">
@@ -955,30 +965,50 @@ export function ProjectRoomPage() {
               </>
             )}
 
-            <div className="flex gap-2 mt-5 justify-end">
-              <button
-                onClick={() => { setShowCheckpointModal(null); setReflection(''); setCheckpointPreview(null); setCheckpointPreviewError(null); }}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg text-sm"
-                data-testid="button-cancel-checkpoint"
-              >
-                Annuleren
-              </button>
-              {/* Sla-knop: verberg bij lege preview of preview-fout */}
-              {!(showCheckpointModal === 'checkpoint' && (checkpointPreviewError !== null || (checkpointPreview !== null && checkpointPreview.length === 0))) && (
+            {/* ── Bevestigingsscherm na tussentijds checkpoint ── */}
+            {checkpointSaved && (
+              <div className="mt-5 rounded-xl bg-blue-50 border border-blue-200 p-5 text-center" data-testid="checkpoint-saved-confirmation">
+                <CheckCircle2 className="w-10 h-10 text-blue-500 mx-auto mb-3" />
+                <p className="font-semibold text-gray-900 mb-1">Checkpoint opgeslagen!</p>
+                <p className="text-sm text-gray-600 mb-4">
+                  De samenvattingen staan in jullie leerdagboeken. Het project staat nog open — je kunt gewoon doorgaan met de gesprekken.
+                </p>
                 <button
-                  onClick={submitCheckpoint}
-                  disabled={
-                    submittingCheckpoint ||
-                    checkpointPreviewLoading ||
-                    (showCheckpointModal === 'final' && reflection.trim().length < 20)
-                  }
-                  className={`px-4 py-2 text-white rounded-lg text-sm disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
-                  data-testid="button-submit-checkpoint"
+                  onClick={() => { setShowCheckpointModal(null); setCheckpointSaved(false); }}
+                  className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+                  data-testid="button-continue-after-checkpoint"
                 >
-                  {submittingCheckpoint ? 'Even geduld…' : (showCheckpointModal === 'final' ? 'Afronden + opslaan' : 'Opslaan in leerdagboek')}
+                  Ga verder met het project
                 </button>
-              )}
-            </div>
+              </div>
+            )}
+
+            {!checkpointSaved && (
+              <div className="flex gap-2 mt-5 justify-end">
+                <button
+                  onClick={() => { setShowCheckpointModal(null); setCheckpointSaved(false); setReflection(''); setCheckpointPreview(null); setCheckpointPreviewError(null); }}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg text-sm"
+                  data-testid="button-cancel-checkpoint"
+                >
+                  Annuleren
+                </button>
+                {/* Sla-knop: verberg bij lege preview of preview-fout */}
+                {!(showCheckpointModal === 'checkpoint' && (checkpointPreviewError !== null || (checkpointPreview !== null && checkpointPreview.length === 0))) && (
+                  <button
+                    onClick={submitCheckpoint}
+                    disabled={
+                      submittingCheckpoint ||
+                      checkpointPreviewLoading ||
+                      (showCheckpointModal === 'final' && reflection.trim().length < 20)
+                    }
+                    className={`px-4 py-2 text-white rounded-lg text-sm disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    data-testid="button-submit-checkpoint"
+                  >
+                    {submittingCheckpoint ? 'Even geduld…' : (showCheckpointModal === 'final' ? 'Afronden + opslaan' : 'Opslaan in leerdagboek')}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -5595,6 +5595,10 @@ ${reflection}`;
       console.error('[checkpoint thread summaries]', e.message);
     }
 
+    // BEWUST GEEN DELETE/TRUNCATE op group_persona_messages of group_chat_messages.
+    // Een tussentijds checkpoint (kind='checkpoint') mag NOOIT gesprekken wissen.
+    // Berichten blijven altijd bewaard zodat studenten dagen later kunnen doorgaan.
+    // Alleen kind='final' sluit de groep (status → finalized) — gesprekken blijven leesbaar.
     if (kind === 'final') {
       await supabaseAdmin.from('project_groups')
         .update({ status: 'finalized', finalized_at: new Date().toISOString() })
@@ -6063,13 +6067,37 @@ app.get('/api/projects/student-overview', async (req, res) => {
       groupsByProject.set(grp.project_id, list);
     }
 
+    // Haal het meest recente checkpoint op voor elke actieve groep zodat de
+    // UI "Ga verder (checkpoint: ...)" kan tonen.
+    const allActiveGroupIds = [];
+    for (const [, groups] of groupsByProject) {
+      const ag = groups.find(g => g.status === 'active');
+      if (ag) allActiveGroupIds.push(ag.id);
+    }
+    const lastCheckpointByGroup = new Map();
+    if (allActiveGroupIds.length > 0) {
+      const { data: cpRows } = await supabaseAdmin
+        .from('group_checkpoints')
+        .select('group_id, created_at')
+        .in('group_id', allActiveGroupIds)
+        .order('created_at', { ascending: false });
+      for (const row of (cpRows || [])) {
+        if (!lastCheckpointByGroup.has(row.group_id)) {
+          lastCheckpointByGroup.set(row.group_id, row.created_at);
+        }
+      }
+    }
+
     const result = courses.map(c => {
       const cps = (projects || []).filter(p => p.course_id === c.id).map(p => {
         const pSessions = sessions.filter(s => s.project_id === p.id);
         const lastSession = pSessions[0] || null;
         const groups = groupsByProject.get(p.id) || [];
         const activeGroup = groups.find(g => g.status === 'active') || null;
-        return { ...p, sessions: pSessions, lastSession, activeGroup };
+        const activeGroupWithCp = activeGroup
+          ? { ...activeGroup, lastCheckpointAt: lastCheckpointByGroup.get(activeGroup.id) || null }
+          : null;
+        return { ...p, sessions: pSessions, lastSession, activeGroup: activeGroupWithCp };
       });
       return { course: c, projects: cps };
     });
