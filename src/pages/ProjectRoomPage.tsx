@@ -385,6 +385,7 @@ export function ProjectRoomPage() {
 
   const openCheckpoint = async (kind: 'checkpoint' | 'final') => {
     setShowCheckpointModal(kind);
+    setCheckpointSaved(false);
     setCheckpointPreviewError(null);
     if (kind === 'checkpoint') {
       setCheckpointPreview(null);
