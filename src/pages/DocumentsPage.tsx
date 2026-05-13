@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { NoticeBanner, ConfirmDialog, useNotice } from '../components/Notice';
 import { supabase } from '../lib/supabase';
+import { useLanguage } from '../i18n';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,11 +75,14 @@ function FolderTypeBadge({ type }: { type: string }) {
   return null;
 }
 
-function StatusPill({ status }: { status: string }) {
-  if (status === 'completed') return <span className="text-green-600 text-xs">✓ verwerkt</span>;
-  if (status === 'failed')    return <span className="text-red-500 text-xs">⚠ fout</span>;
-  if (status === 'processing') return <span className="text-amber-500 text-xs animate-pulse">⏳ verwerkt…</span>;
-  return <span className="text-gray-400 text-xs">wachtend</span>;
+function StatusPill({ status, lang }: { status: string; lang: string }) {
+  if (status === 'completed')
+    return <span className="text-green-600 text-xs">✓ {lang === 'en' ? 'processed' : 'verwerkt'}</span>;
+  if (status === 'failed')
+    return <span className="text-red-500 text-xs">⚠ {lang === 'en' ? 'error' : 'fout'}</span>;
+  if (status === 'processing')
+    return <span className="text-amber-500 text-xs animate-pulse">⏳ {lang === 'en' ? 'processing…' : 'verwerkt…'}</span>;
+  return <span className="text-gray-400 text-xs">{lang === 'en' ? 'pending' : 'wachtend'}</span>;
 }
 
 function findNode(nodes: FolderNode[], id: string): FolderNode | null {
@@ -162,16 +166,18 @@ function TreeNode({
 // ── NewFolderModal ───────────────────────────────────────────────────────────
 
 function NewFolderModal({
-  parentName, open, busy, onConfirm, onCancel,
+  parentName, open, busy, onConfirm, onCancel, lang,
 }: {
   parentName: string;
   open: boolean;
   busy: boolean;
   onConfirm: (name: string) => void;
   onCancel: () => void;
+  lang: string;
 }) {
   const [name, setName] = useState('');
   if (!open) return null;
+  const en = lang === 'en';
   return (
     <div
       className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
@@ -180,13 +186,15 @@ function NewFolderModal({
     >
       <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold text-gray-900">Nieuwe map aanmaken</h3>
+          <h3 className="text-base font-semibold text-gray-900">
+            {en ? 'Create new folder' : 'Nieuwe map aanmaken'}
+          </h3>
           <button onClick={onCancel} className="text-gray-400 hover:text-gray-600">
             <X className="w-4 h-4" />
           </button>
         </div>
         <p className="text-sm text-gray-500 mb-3">
-          Map wordt aangemaakt in: <strong>{parentName}</strong>
+          {en ? 'Folder will be created in:' : 'Map wordt aangemaakt in:'} <strong>{parentName}</strong>
         </p>
         <input
           autoFocus
@@ -194,7 +202,7 @@ function NewFolderModal({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) { onConfirm(name.trim()); setName(''); } }}
-          placeholder="Mapnaam"
+          placeholder={en ? 'Folder name' : 'Mapnaam'}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
           data-testid="input-new-folder-name"
         />
@@ -202,8 +210,9 @@ function NewFolderModal({
           <button
             onClick={onCancel}
             className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+            data-testid="button-cancel-new-folder"
           >
-            Annuleren
+            {en ? 'Cancel' : 'Annuleren'}
           </button>
           <button
             onClick={() => { if (name.trim()) { onConfirm(name.trim()); setName(''); } }}
@@ -212,7 +221,7 @@ function NewFolderModal({
             data-testid="button-confirm-new-folder"
           >
             {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-            Aanmaken
+            {en ? 'Create' : 'Aanmaken'}
           </button>
         </div>
       </div>
@@ -223,6 +232,9 @@ function NewFolderModal({
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function DocumentsPage() {
+  const { lang } = useLanguage();
+  const en = lang === 'en';
+
   const [tree, setTree] = useState<FolderNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -306,7 +318,12 @@ export default function DocumentsPage() {
           body: JSON.stringify({ filename: file.name, mimeType: file.type, data: base64 }),
         });
       }
-      setNotice({ kind: 'success', message: `${files.length === 1 ? 'Bestand' : 'Bestanden'} geüpload.` });
+      setNotice({
+        kind: 'success',
+        message: en
+          ? `${files.length === 1 ? 'File' : 'Files'} uploaded.`
+          : `${files.length === 1 ? 'Bestand' : 'Bestanden'} geüpload.`,
+      });
       await Promise.all([loadDocuments(selectedId), loadTree()]);
     } catch (e: unknown) {
       setNotice({ kind: 'error', message: (e as Error).message });
@@ -322,7 +339,7 @@ export default function DocumentsPage() {
     try {
       await apiFetch(`/api/admin/documents/${deleteDocId}`, { method: 'DELETE' });
       setDeleteDocId(null);
-      setNotice({ kind: 'success', message: 'Document verwijderd.' });
+      setNotice({ kind: 'success', message: en ? 'Document deleted.' : 'Document verwijderd.' });
       await Promise.all([loadDocuments(selectedId), loadTree()]);
     } catch (e: unknown) {
       setNotice({ kind: 'error', message: (e as Error).message });
@@ -341,7 +358,7 @@ export default function DocumentsPage() {
         setSelectedId(null);
         setDocuments([]);
       }
-      setNotice({ kind: 'success', message: 'Map verwijderd.' });
+      setNotice({ kind: 'success', message: en ? 'Folder deleted.' : 'Map verwijderd.' });
       await loadTree();
     } catch (e: unknown) {
       setNotice({ kind: 'error', message: (e as Error).message });
@@ -360,7 +377,10 @@ export default function DocumentsPage() {
         body: JSON.stringify({ name, parent_folder_id: selectedId }),
       });
       setNewFolderOpen(false);
-      setNotice({ kind: 'success', message: `Map "${name}" aangemaakt.` });
+      setNotice({
+        kind: 'success',
+        message: en ? `Folder "${name}" created.` : `Map "${name}" aangemaakt.`,
+      });
       await loadTree();
     } catch (e: unknown) {
       setNotice({ kind: 'error', message: (e as Error).message });
@@ -380,7 +400,7 @@ export default function DocumentsPage() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setNotice({ kind: 'error', message: body.error || 'Download mislukt.' });
+        setNotice({ kind: 'error', message: body.error || (en ? 'Download failed.' : 'Download mislukt.') });
         return;
       }
       const blob = await res.blob();
@@ -408,7 +428,7 @@ export default function DocumentsPage() {
     selectedFolder.children.length === 0;
 
   const deleteDocName = deleteDocId
-    ? (documents.find((d) => d.id === deleteDocId)?.title || 'dit document')
+    ? (documents.find((d) => d.id === deleteDocId)?.title || (en ? 'this document' : 'dit document'))
     : '';
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -419,7 +439,9 @@ export default function DocumentsPage() {
       {/* ── Sidebar ──────────────────────────────────────────────────── */}
       <aside className="w-56 shrink-0 border-r border-gray-200 flex flex-col overflow-hidden bg-gray-50">
         <div className="px-3 py-2.5 border-b border-gray-200 shrink-0">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Mappen</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            {en ? 'Folders' : 'Mappen'}
+          </p>
         </div>
         <div className="flex-1 overflow-y-auto py-1.5 px-1">
           {loadingTree ? (
@@ -457,7 +479,7 @@ export default function DocumentsPage() {
             </div>
           ) : (
             <span className="text-sm text-gray-400 italic">
-              Selecteer een map om de inhoud te bekijken
+              {en ? 'Select a folder to view its contents' : 'Selecteer een map om de inhoud te bekijken'}
             </span>
           )}
 
@@ -469,7 +491,7 @@ export default function DocumentsPage() {
                 data-testid="button-new-folder"
               >
                 <FolderPlus className="w-4 h-4" />
-                Nieuwe map
+                {en ? 'New folder' : 'Nieuwe map'}
               </button>
 
               <button
@@ -481,7 +503,7 @@ export default function DocumentsPage() {
                 {uploading
                   ? <Loader2 className="w-4 h-4 animate-spin" />
                   : <Upload className="w-4 h-4" />}
-                {uploading ? 'Bezig…' : 'Uploaden'}
+                {uploading ? (en ? 'Uploading…' : 'Bezig…') : (en ? 'Upload' : 'Uploaden')}
               </button>
 
               <input
@@ -498,7 +520,7 @@ export default function DocumentsPage() {
                   onClick={() => setDeleteFolderId(selectedId)}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-sm font-medium text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
                   data-testid="button-delete-folder"
-                  title="Lege map verwijderen"
+                  title={en ? 'Delete empty folder' : 'Lege map verwijderen'}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -519,7 +541,9 @@ export default function DocumentsPage() {
           {!selectedFolder ? (
             <div className="flex flex-col items-center justify-center py-20 text-gray-400 gap-3">
               <Folder className="w-12 h-12 opacity-30" />
-              <p className="text-sm">Klik op een map in de zijbalk om de inhoud te bekijken.</p>
+              <p className="text-sm">
+                {en ? 'Click a folder in the sidebar to view its contents.' : 'Klik op een map in de zijbalk om de inhoud te bekijken.'}
+              </p>
             </div>
 
           ) : loadingDocs ? (
@@ -530,9 +554,11 @@ export default function DocumentsPage() {
           ) : documents.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-14 text-gray-400 gap-2">
               <FileText className="w-10 h-10 opacity-30" />
-              <p className="text-sm">Geen documenten in deze map.</p>
+              <p className="text-sm">{en ? 'No documents in this folder.' : 'Geen documenten in deze map.'}</p>
               <p className="text-xs opacity-70">
-                Gebruik de knop 'Uploaden' om bestanden toe te voegen.
+                {en
+                  ? "Use the 'Upload' button to add files."
+                  : "Gebruik de knop 'Uploaden' om bestanden toe te voegen."}
               </p>
             </div>
 
@@ -540,12 +566,12 @@ export default function DocumentsPage() {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="border-b border-gray-200 text-left">
-                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-5/12">Naam</th>
-                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-16">Type</th>
-                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Grootte</th>
-                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">Datum</th>
-                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Status</th>
-                  <th className="pb-2 text-xs font-semibold text-gray-500 uppercase tracking-wide text-right w-20">Acties</th>
+                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-5/12">{en ? 'Name' : 'Naam'}</th>
+                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-16">{en ? 'Type' : 'Type'}</th>
+                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">{en ? 'Size' : 'Grootte'}</th>
+                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">{en ? 'Date' : 'Datum'}</th>
+                  <th className="pb-2 pr-4 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">{en ? 'Status' : 'Status'}</th>
+                  <th className="pb-2 text-xs font-semibold text-gray-500 uppercase tracking-wide text-right w-20">{en ? 'Actions' : 'Acties'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -573,7 +599,7 @@ export default function DocumentsPage() {
                       {formatDate(doc.created_at)}
                     </td>
                     <td className="py-2.5 pr-4">
-                      <StatusPill status={doc.processing_status} />
+                      <StatusPill status={doc.processing_status} lang={lang} />
                     </td>
                     <td className="py-2.5">
                       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -581,7 +607,7 @@ export default function DocumentsPage() {
                           onClick={() => downloadDocument(doc)}
                           className="p-1.5 rounded-lg text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
                           data-testid={`button-download-${doc.id}`}
-                          title="Downloaden"
+                          title={en ? 'Download' : 'Downloaden'}
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
@@ -589,7 +615,7 @@ export default function DocumentsPage() {
                           onClick={() => setDeleteDocId(doc.id)}
                           className="p-1.5 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors"
                           data-testid={`button-delete-doc-${doc.id}`}
-                          title="Verwijderen"
+                          title={en ? 'Delete' : 'Verwijderen'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -607,9 +633,11 @@ export default function DocumentsPage() {
 
       <ConfirmDialog
         open={!!deleteDocId}
-        title="Document verwijderen"
-        description={`Weet je zeker dat je "${deleteDocName}" wilt verwijderen? Dit kan niet ongedaan worden gemaakt.`}
-        confirmLabel="Verwijderen"
+        title={en ? 'Delete document' : 'Document verwijderen'}
+        description={en
+          ? `Are you sure you want to delete "${deleteDocName}"? This cannot be undone.`
+          : `Weet je zeker dat je "${deleteDocName}" wilt verwijderen? Dit kan niet ongedaan worden gemaakt.`}
+        confirmLabel={en ? 'Delete' : 'Verwijderen'}
         variant="danger"
         busy={confirmBusy}
         onConfirm={handleDeleteDocument}
@@ -618,9 +646,11 @@ export default function DocumentsPage() {
 
       <ConfirmDialog
         open={!!deleteFolderId}
-        title="Map verwijderen"
-        description={`Weet je zeker dat je de map "${selectedFolder?.name}" wilt verwijderen?`}
-        confirmLabel="Verwijderen"
+        title={en ? 'Delete folder' : 'Map verwijderen'}
+        description={en
+          ? `Are you sure you want to delete the folder "${selectedFolder?.name}"?`
+          : `Weet je zeker dat je de map "${selectedFolder?.name}" wilt verwijderen?`}
+        confirmLabel={en ? 'Delete' : 'Verwijderen'}
         variant="danger"
         busy={confirmBusy}
         onConfirm={handleDeleteFolder}
@@ -633,6 +663,7 @@ export default function DocumentsPage() {
         busy={newFolderBusy}
         onConfirm={handleCreateFolder}
         onCancel={() => setNewFolderOpen(false)}
+        lang={lang}
       />
     </div>
   );
