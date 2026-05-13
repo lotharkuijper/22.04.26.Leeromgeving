@@ -145,7 +145,7 @@ export function ExplainPage() {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) {
-        setPageNotice({ kind: 'error', message: 'Kon uitleg niet laden.' });
+        setPageNotice({ kind: 'error', message: lang === 'en' ? 'Could not load explanation.' : 'Kon uitleg niet laden.' });
         return;
       }
       const data = await res.json();
@@ -179,7 +179,7 @@ export function ExplainPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setPageNotice({ kind: 'error', message: `Verwijderen mislukt: ${err.error || res.status}` });
+        setPageNotice({ kind: 'error', message: lang === 'en' ? `Delete failed: ${err.error || res.status}` : `Verwijderen mislukt: ${err.error || res.status}` });
         return;
       }
       setDeleteConfirm(null);
@@ -191,7 +191,7 @@ export function ExplainPage() {
       }
       await loadHistory();
     } catch (err: any) {
-      setPageNotice({ kind: 'error', message: `Fout bij verwijderen: ${err?.message || 'onbekend'}` });
+      setPageNotice({ kind: 'error', message: lang === 'en' ? `Error deleting: ${err?.message || 'unknown'}` : `Fout bij verwijderen: ${err?.message || 'onbekend'}` });
     } finally {
       setHistoryItemBusy(null);
     }
@@ -209,7 +209,7 @@ export function ExplainPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setPageNotice({ kind: 'error', message: `Verplaatsen naar leerdagboek mislukt: ${err.error || res.status}` });
+        setPageNotice({ kind: 'error', message: lang === 'en' ? `Move to journal failed: ${err.error || res.status}` : `Verplaatsen naar leerdagboek mislukt: ${err.error || res.status}` });
         return;
       }
       const result = await res.json();
@@ -224,11 +224,11 @@ export function ExplainPage() {
       if (generateSummary && result.summaryFailed) {
         setPageNotice({
           kind: 'warning',
-          message: 'De uitleg is verwijderd, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
+          message: lang === 'en' ? 'The explanation was removed, but the summary could not be saved to your journal. Please try again later.' : 'De uitleg is verwijderd, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
         });
       }
     } catch (err: any) {
-      setPageNotice({ kind: 'error', message: `Fout bij archiveren: ${err?.message || 'onbekend'}` });
+      setPageNotice({ kind: 'error', message: lang === 'en' ? `Error archiving: ${err?.message || 'unknown'}` : `Fout bij archiveren: ${err?.message || 'onbekend'}` });
     } finally {
       setArchiving(false);
     }
@@ -386,7 +386,7 @@ export function ExplainPage() {
     } catch (error) {
       console.error('[EXPLAIN] Error submitting explanation:', error);
       setFeedbackError({
-        title: 'Er is een fout opgetreden bij het indienen van je uitleg.',
+        title: lang === 'en' ? 'An error occurred while submitting your explanation.' : 'Er is een fout opgetreden bij het indienen van je uitleg.',
         detail: error instanceof Error ? error.message : undefined,
       });
     } finally {
@@ -403,9 +403,9 @@ export function ExplainPage() {
           <div className="flex items-center justify-center min-h-[400px]">
             <div className="text-center max-w-md mx-auto px-4">
               <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-              <h2 className="text-xl font-bold text-gray-900 mb-2">Profiel kon niet worden geladen</h2>
+              <h2 className="text-xl font-bold text-gray-900 mb-2">{lang === 'en' ? 'Profile could not be loaded' : 'Profiel kon niet worden geladen'}</h2>
               <p className="text-gray-600 mb-6">
-                Er is iets misgegaan bij het laden van je profiel. Dit kan komen door een verbindingsprobleem of een technisch probleem.
+                {lang === 'en' ? 'Something went wrong while loading your profile. This may be due to a connection or technical issue.' : 'Er is iets misgegaan bij het laden van je profiel. Dit kan komen door een verbindingsprobleem of een technisch probleem.'}
               </p>
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <button
@@ -413,14 +413,14 @@ export function ExplainPage() {
                   className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-xl hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg"
                 >
                   <RefreshCw className="w-5 h-5" />
-                  Vernieuw pagina
+                  {lang === 'en' ? 'Refresh page' : 'Vernieuw pagina'}
                 </button>
                 <button
                   onClick={() => signOut()}
                   className="flex items-center justify-center gap-2 px-6 py-3 bg-gray-200 text-gray-700 font-semibold rounded-xl hover:bg-gray-300 transition-all"
                 >
                   <LogOut className="w-5 h-5" />
-                  Uitloggen
+                  {lang === 'en' ? 'Sign out' : 'Uitloggen'}
                 </button>
               </div>
             </div>
@@ -455,7 +455,7 @@ export function ExplainPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1 space-y-6">
         <div className="bg-white rounded-2xl border border-gray-200 p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">Begrippen</h2>
+          <h2 className="text-xl font-bold text-gray-900 mb-4">{lang === 'en' ? 'Concepts' : 'Begrippen'}</h2>
 
           <div className="space-y-4 mb-4">
             <div className="relative">
@@ -507,21 +507,21 @@ export function ExplainPage() {
             {conceptsLoading && (
               <div className="text-center py-6">
                 <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                <p className="text-xs text-gray-500">Begrippen laden...</p>
+                <p className="text-xs text-gray-500">{lang === 'en' ? 'Loading concepts...' : 'Begrippen laden...'}</p>
               </div>
             )}
             {!conceptsLoading && (conceptSource === 'empty' || (conceptSource === 'global' && !!activeCourse)) && (
               <div className="text-center py-6 px-2">
                 <Sparkles className="w-8 h-8 mx-auto mb-2 text-purple-300" />
-                <p className="text-sm font-medium text-gray-700 mb-1">Nog geen begrippen voor deze cursus</p>
+                <p className="text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'No concepts yet for this course' : 'Nog geen begrippen voor deze cursus'}</p>
                 <p className="text-xs text-gray-500">
-                  Vraag de beheerder om begrippen te extraheren via het Admin-paneel (RAG-instellingen).
+                  {lang === 'en' ? 'Ask the administrator to extract concepts via the Admin panel (RAG settings).' : 'Vraag de beheerder om begrippen te extraheren via het Admin-paneel (RAG-instellingen).'}
                 </p>
               </div>
             )}
             {!conceptsLoading && (conceptSource === 'course' || (conceptSource === 'global' && !activeCourse)) && filteredConcepts.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-4">
-                Geen begrippen gevonden
+                {lang === 'en' ? 'No concepts found' : 'Geen begrippen gevonden'}
               </p>
             )}
             {(conceptSource === 'course' || (conceptSource === 'global' && !activeCourse)) && filteredConcepts.map((concept) => {
@@ -566,7 +566,7 @@ export function ExplainPage() {
             )}
           </div>
           <p className="text-xs text-gray-500 mb-3">
-            Klik op een uitleg om die terug te zien. Verwijder of verplaats naar je leerdagboek.
+            {lang === 'en' ? 'Click an explanation to review it. Delete or move it to your journal.' : 'Klik op een uitleg om die terug te zien. Verwijder of verplaats naar je leerdagboek.'}
           </p>
 
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
@@ -619,7 +619,7 @@ export function ExplainPage() {
                     <button
                       data-testid={`btn-archive-explanation-${item.id}`}
                       onClick={(e) => { e.stopPropagation(); setArchiveDialog({ id: item.id, conceptName: item.conceptName }); }}
-                      title="Verplaats naar leerdagboek"
+                      title={lang === 'en' ? 'Move to journal' : 'Verplaats naar leerdagboek'}
                       className="p-1.5 rounded hover:bg-green-200 text-green-700"
                     >
                       <BookText className="w-4 h-4" />
@@ -627,7 +627,7 @@ export function ExplainPage() {
                     <button
                       data-testid={`btn-delete-explanation-${item.id}`}
                       onClick={(e) => { e.stopPropagation(); setDeleteConfirm(item.id); }}
-                      title="Verwijderen"
+                      title={lang === 'en' ? 'Delete' : 'Verwijderen'}
                       className="p-1.5 rounded hover:bg-red-200 text-red-700"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -635,7 +635,7 @@ export function ExplainPage() {
                   </div>
                   {isConfirming && (
                     <div className="border-t border-red-200 bg-red-50 p-3 rounded-b-lg">
-                      <p className="text-xs text-red-800 mb-2">Weet je zeker dat je deze uitleg wilt verwijderen?</p>
+                      <p className="text-xs text-red-800 mb-2">{lang === 'en' ? 'Are you sure you want to delete this explanation?' : 'Weet je zeker dat je deze uitleg wilt verwijderen?'}</p>
                       <div className="flex gap-2">
                         <button
                           data-testid={`btn-confirm-delete-${item.id}`}
@@ -643,7 +643,7 @@ export function ExplainPage() {
                           disabled={isBusy}
                           className="flex-1 px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded hover:bg-red-700 disabled:opacity-50"
                         >
-                          {isBusy ? 'Bezig...' : 'Ja, verwijder'}
+                          {isBusy ? '...' : (lang === 'en' ? 'Yes, delete' : 'Ja, verwijder')}
                         </button>
                         <button
                           data-testid={`btn-cancel-delete-${item.id}`}
@@ -651,7 +651,7 @@ export function ExplainPage() {
                           disabled={isBusy}
                           className="flex-1 px-3 py-1.5 bg-white border border-gray-300 text-gray-700 text-xs font-medium rounded hover:bg-gray-50"
                         >
-                          Annuleren
+                          {lang === 'en' ? 'Cancel' : 'Annuleren'}
                         </button>
                       </div>
                     </div>
@@ -667,8 +667,8 @@ export function ExplainPage() {
           {!selectedConcept ? (
             <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
               <BookOpen className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-              <p className="text-lg font-semibold text-gray-900 mb-2">Selecteer een begrip</p>
-              <p className="text-sm text-gray-600">Kies een begrip uit de lijst om te beginnen</p>
+              <p className="text-lg font-semibold text-gray-900 mb-2">{lang === 'en' ? 'Select a concept' : 'Selecteer een begrip'}</p>
+              <p className="text-sm text-gray-600">{lang === 'en' ? 'Choose a concept from the list to get started' : 'Kies een begrip uit de lijst om te beginnen'}</p>
             </div>
           ) : (
             <>
@@ -684,18 +684,18 @@ export function ExplainPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      Leg dit begrip uit in je eigen woorden
+                      {lang === 'en' ? 'Explain this concept in your own words' : 'Leg dit begrip uit in je eigen woorden'}
                     </label>
                     <textarea
                       value={explanation}
                       onChange={(e) => setExplanation(e.target.value)}
-                      placeholder="Begin met typen..."
+                      placeholder={lang === 'en' ? 'Start typing...' : 'Begin met typen...'}
                       rows={8}
                       className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none resize-none"
                     />
                     <div className="flex justify-between items-center mt-2">
                       <span className={`text-sm ${wordCount >= 50 ? 'text-green-600' : 'text-gray-500'}`}>
-                        {wordCount} woorden {wordCount >= 50 && <CheckCircle className="w-4 h-4 inline" />}
+                        {wordCount} {lang === 'en' ? 'words' : 'woorden'} {wordCount >= 50 && <CheckCircle className="w-4 h-4 inline" />}
                       </span>
                     </div>
                   </div>
@@ -781,10 +781,12 @@ export function ExplainPage() {
                     >
                       <div className="flex items-start gap-2 mb-1">
                         <AlertCircle className="w-4 h-4 text-amber-700 mt-0.5 flex-shrink-0" />
-                        <h4 className="text-sm font-semibold text-amber-900">Aanvulling buiten je cursusmateriaal</h4>
+                        <h4 className="text-sm font-semibold text-amber-900">{lang === 'en' ? 'Supplement beyond your course material' : 'Aanvulling buiten je cursusmateriaal'}</h4>
                       </div>
                       <p className="text-sm text-amber-800">
-                        Een deel van deze feedback (gemarkeerd met "(buiten cursusmateriaal)") is gebaseerd op algemene kennis van het taalmodel en niet op je cursusbestanden. Vooral bij die zinnen is het verstandig om met je docent te overleggen voordat je het overneemt in een tentamen of opdracht.
+                        {lang === 'en'
+                          ? 'Part of this feedback (marked with "(beyond course material)") is based on general knowledge from the language model and not on your course files. For those sentences in particular, it is advisable to consult your instructor before using them in an exam or assignment.'
+                          : 'Een deel van deze feedback (gemarkeerd met "(buiten cursusmateriaal)") is gebaseerd op algemene kennis van het taalmodel en niet op je cursusbestanden. Vooral bij die zinnen is het verstandig om met je docent te overleggen voordat je het overneemt in een tentamen of opdracht.'}
                       </p>
                     </div>
                   )}
@@ -815,7 +817,7 @@ export function ExplainPage() {
               <div className="p-2 bg-green-100 rounded-xl">
                 <BookText className="w-5 h-5 text-green-700" />
               </div>
-              <h2 className="text-lg font-semibold text-gray-900">Verplaats naar leerdagboek</h2>
+              <h2 className="text-lg font-semibold text-gray-900">{lang === 'en' ? 'Move to journal' : 'Verplaats naar leerdagboek'}</h2>
               <button
                 onClick={() => !archiving && setArchiveDialog(null)}
                 className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
@@ -826,10 +828,14 @@ export function ExplainPage() {
             </div>
 
             <p className="text-sm text-gray-600 mb-2">
-              Je staat op het punt je uitleg van <strong>"{archiveDialog.conceptName}"</strong> uit de actieve lijst te verwijderen.
+              {lang === 'en'
+                ? <>You are about to remove your explanation of <strong>"{archiveDialog.conceptName}"</strong> from the active list.</>
+                : <>Je staat op het punt je uitleg van <strong>"{archiveDialog.conceptName}"</strong> uit de actieve lijst te verwijderen.</>}
             </p>
             <p className="text-sm text-gray-600 mb-6">
-              Wil je dat de leerassistent een formatieve samenvatting (met sterke punten, verbeterpunten en een vervolgsuggestie) opslaat in je leerdagboek? Die kun je later teruglezen om op te reflecteren.
+              {lang === 'en'
+                ? 'Would you like the learning assistant to save a formative summary (with strengths, areas for improvement, and a follow-up suggestion) to your journal? You can review it later to reflect on your learning.'
+                : 'Wil je dat de leerassistent een formatieve samenvatting (met sterke punten, verbeterpunten en een vervolgsuggestie) opslaat in je leerdagboek? Die kun je later teruglezen om op te reflecteren.'}
             </p>
 
             <div className="flex flex-col gap-3">
@@ -840,7 +846,7 @@ export function ExplainPage() {
                 className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
-                Samenvatting opslaan en uitleg afsluiten
+                {lang === 'en' ? 'Save summary and close explanation' : 'Samenvatting opslaan en uitleg afsluiten'}
               </button>
 
               <button
@@ -849,7 +855,7 @@ export function ExplainPage() {
                 disabled={archiving}
                 className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Alleen verwijderen (geen dagboekvermelding)
+                {lang === 'en' ? 'Delete only (no journal entry)' : 'Alleen verwijderen (geen dagboekvermelding)'}
               </button>
 
               <button
@@ -858,7 +864,7 @@ export function ExplainPage() {
                 disabled={archiving}
                 className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
               >
-                Annuleren
+                {lang === 'en' ? 'Cancel' : 'Annuleren'}
               </button>
             </div>
           </div>

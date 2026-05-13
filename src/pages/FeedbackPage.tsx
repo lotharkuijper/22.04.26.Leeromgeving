@@ -259,7 +259,7 @@ export function FeedbackPage() {
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           console.error('Error updating entry:', err);
-          alert('Er is een fout opgetreden bij het bijwerken van je dagboek');
+          alert(lang === 'en' ? 'An error occurred while updating your journal.' : 'Er is een fout opgetreden bij het bijwerken van je dagboek');
         } else {
           const focusId = editingEntry.id;
           resetForm();
@@ -274,7 +274,7 @@ export function FeedbackPage() {
 
         if (error) {
           console.error('Error creating entry:', error);
-          alert('Er is een fout opgetreden bij het opslaan van je dagboek');
+          alert(lang === 'en' ? 'An error occurred while saving your journal.' : 'Er is een fout opgetreden bij het opslaan van je dagboek');
         } else {
           const focusId = inserted?.id as string | undefined;
           resetForm();
@@ -311,7 +311,7 @@ export function FeedbackPage() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         console.error('Error deleting entry:', err);
-        setDeleteError('Verwijderen mislukt. Probeer het opnieuw.');
+        setDeleteError(lang === 'en' ? 'Delete failed. Please try again.' : 'Verwijderen mislukt. Probeer het opnieuw.');
       } else {
         setDeleteConfirmId(null);
         setOpenEntryIds(prev => {
@@ -323,7 +323,7 @@ export function FeedbackPage() {
       }
     } catch (err) {
       console.error('Error deleting entry:', err);
-      setDeleteError('Verwijderen mislukt. Probeer het opnieuw.');
+      setDeleteError(lang === 'en' ? 'Delete failed. Please try again.' : 'Verwijderen mislukt. Probeer het opnieuw.');
     }
   };
 
@@ -473,7 +473,9 @@ export function FeedbackPage() {
         <div className="bg-green-50 border border-green-200 rounded-2xl p-5 flex items-start gap-3" data-testid="empty-journal-banner">
           <BookText className="w-5 h-5 text-green-700 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-green-800">
-            Nog geen notities. Sluit een chat, uitleg, quiz of project af en laat de leerassistent een samenvatting in je leerdagboek zetten — of gebruik "Nieuwe Notitie" voor een eigen reflectie. De vakken hieronder vullen zich vanzelf zodra je begint.
+            {lang === 'en'
+              ? 'No notes yet. Complete a chat, explanation, quiz or project and let the learning assistant save a summary to your journal — or use "New note" for your own reflection. The sections below will fill up automatically once you get started.'
+              : 'Nog geen notities. Sluit een chat, uitleg, quiz of project af en laat de leerassistent een samenvatting in je leerdagboek zetten — of gebruik "Nieuwe Notitie" voor een eigen reflectie. De vakken hieronder vullen zich vanzelf zodra je begint.'}
           </p>
         </div>
       )}
@@ -573,7 +575,7 @@ export function FeedbackPage() {
                                       onClick={() => handleEdit(entry)}
                                       data-testid={`btn-edit-${entry.id}`}
                                       className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                      title="Bewerken"
+                                      title={lang === 'en' ? 'Edit' : 'Bewerken'}
                                     >
                                       <Edit2 className="w-4 h-4" />
                                     </button>
@@ -581,7 +583,7 @@ export function FeedbackPage() {
                                       onClick={() => { setDeleteConfirmId(entry.id); setDeleteError(null); }}
                                       data-testid={`btn-delete-${entry.id}`}
                                       className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                      title="Verwijderen"
+                                      title={lang === 'en' ? 'Delete' : 'Verwijderen'}
                                     >
                                       <Trash2 className="w-4 h-4" />
                                     </button>
@@ -591,20 +593,20 @@ export function FeedbackPage() {
                                 {deleteConfirmId === entry.id && (
                                   <div className="flex flex-col items-start gap-1 mt-2" data-testid={`confirm-delete-${entry.id}`}>
                                     <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-                                      <span className="text-sm text-red-700 font-medium">Weet je het zeker?</span>
+                                      <span className="text-sm text-red-700 font-medium">{lang === 'en' ? 'Are you sure?' : 'Weet je het zeker?'}</span>
                                       <button
                                         onClick={() => handleDelete(entry.id)}
                                         data-testid={`btn-confirm-delete-${entry.id}`}
                                         className="px-2.5 py-1 bg-red-600 text-white text-xs font-semibold rounded hover:bg-red-700 transition-colors"
                                       >
-                                        Verwijderen
+                                        {lang === 'en' ? 'Delete' : 'Verwijderen'}
                                       </button>
                                       <button
                                         onClick={() => { setDeleteConfirmId(null); setDeleteError(null); }}
                                         data-testid={`btn-cancel-delete-${entry.id}`}
                                         className="px-2.5 py-1 bg-white text-gray-600 text-xs font-semibold rounded border border-gray-300 hover:bg-gray-50 transition-colors"
                                       >
-                                        Annuleren
+                                        {lang === 'en' ? 'Cancel' : 'Annuleren'}
                                       </button>
                                     </div>
                                     {deleteError && (
