@@ -5509,7 +5509,8 @@ app.get('/api/projects/groups/:groupId/conversation-log', async (req, res) => {
 
 // Helper: genereert cross-agent synthese op basis van afgesloten gesprekken.
 // Geeft null terug als er minder dan 2 afgesloten gesprekken zijn.
-async function generateCrossAgentSynthesis(groupId, apiKey) {
+async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
+  const enMode = lang === 'en';
   const { data: closedThreads } = await supabaseAdmin
     .from('group_persona_threads')
     .select('id, persona_id, topics, agreements')
@@ -5528,10 +5529,14 @@ async function generateCrossAgentSynthesis(groupId, apiKey) {
     const p = personaMap[t.persona_id] || {};
     const topics = (t.topics || []).join('; ');
     const agreements = (t.agreements || []).join('; ');
-    return `${p.avatar_emoji || '💬'} ${p.name || 'Persona'}:\n- Besproken: ${topics || '(geen)'}\n- Afgesproken: ${agreements || '(geen)'}`;
+    return enMode
+      ? `${p.avatar_emoji || '💬'} ${p.name || 'Persona'}:\n- Discussed: ${topics || '(none)'}\n- Agreed: ${agreements || '(none)'}`
+      : `${p.avatar_emoji || '💬'} ${p.name || 'Persona'}:\n- Besproken: ${topics || '(geen)'}\n- Afgesproken: ${agreements || '(geen)'}`;
   }).join('\n\n');
 
-  const prompt = `Je analyseert gesprekken die een groep studenten heeft gevoerd met verschillende AI-personas in een onderzoeksproject.\n\nGesprekssamenvatting per persona:\n${convText}\n\nGeef je antwoord UITSLUITEND als geldige JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 punten waarover meerdere personas het eens zijn of vergelijkbare informatie gaven.\n- "spanningspunten": 1-3 punten waarover personas duidelijk anders denken of tegenstrijdige informatie gaven. Laat de array leeg als er geen zijn.\n- "suggesties": 2-3 concrete volgende stappen die de groep kan zetten op basis van de gesprekken.\n\nSchrijf in het Nederlands, bondig en concreet. Geen markdown buiten de JSON.`;
+  const prompt = enMode
+    ? `You are analysing conversations a group of students has had with different AI personas in a research project.\n\nConversation summary per persona:\n${convText}\n\nReturn your answer ONLY as valid JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 points that multiple personas agreed on or gave similar information about.\n- "spanningspunten": 1-3 points where personas clearly disagreed or gave contradictory information. Leave the array empty if there are none.\n- "suggesties": 2-3 concrete next steps the group can take based on the conversations.\n\nWrite in English, concise and concrete. No markdown outside the JSON.`
+    : `Je analyseert gesprekken die een groep studenten heeft gevoerd met verschillende AI-personas in een onderzoeksproject.\n\nGesprekssamenvatting per persona:\n${convText}\n\nGeef je antwoord UITSLUITEND als geldige JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 punten waarover meerdere personas het eens zijn of vergelijkbare informatie gaven.\n- "spanningspunten": 1-3 punten waarover personas duidelijk anders denken of tegenstrijdige informatie gaven. Laat de array leeg als er geen zijn.\n- "suggesties": 2-3 concrete volgende stappen die de groep kan zetten op basis van de gesprekken.\n\nSchrijf in het Nederlands, bondig en concreet. Geen markdown buiten de JSON.`;
 
   try {
     const resp = await fetch(GROQ_API_URL, {
@@ -5552,6 +5557,7 @@ async function generateCrossAgentSynthesis(groupId, apiKey) {
         overeenstemming: Array.isArray(parsed.overeenstemming) ? parsed.overeenstemming.filter(s => typeof s === 'string' && s.trim()) : [],
         spanningspunten: Array.isArray(parsed.spanningspunten) ? parsed.spanningspunten.filter(s => typeof s === 'string' && s.trim()) : [],
         suggesties: Array.isArray(parsed.suggesties) ? parsed.suggesties.filter(s => typeof s === 'string' && s.trim()) : [],
+        lang,
       };
     }
   } catch (e) {
@@ -5656,7 +5662,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
     // Cross-agent synthese (alleen als ≥ 2 afgesloten gesprekken).
     let synthesis = null;
     try {
-      synthesis = await generateCrossAgentSynthesis(groupId, apiKey);
+      synthesis = await generateCrossAgentSynthesis(groupId, apiKey, lang);
     } catch (e) {
       console.error('[checkpoint-preview] synthese fout:', e.message);
     }
@@ -5901,17 +5907,19 @@ ${reflection}`;
     let synthesisAdded = false;
     if (kind === 'checkpoint' && members && members.length > 0) {
       try {
-        const synthesis = await generateCrossAgentSynthesis(groupId, apiKey);
+        const synthesis = await generateCrossAgentSynthesis(groupId, apiKey, lang);
         if (synthesis) {
+          const synthLang = synthesis.lang || lang;
+          const synthEnMode = synthLang === 'en';
           const sections = [
             synthesis.overeenstemming.length > 0
-              ? `**Overeenstemming**\n${synthesis.overeenstemming.map(s => `• ${s}`).join('\n')}`
+              ? `**${synthEnMode ? 'Agreement' : 'Overeenstemming'}**\n${synthesis.overeenstemming.map(s => `• ${s}`).join('\n')}`
               : '',
             synthesis.spanningspunten.length > 0
-              ? `**Spanningspunten**\n${synthesis.spanningspunten.map(s => `• ${s}`).join('\n')}`
+              ? `**${synthEnMode ? 'Tensions' : 'Spanningspunten'}**\n${synthesis.spanningspunten.map(s => `• ${s}`).join('\n')}`
               : '',
             synthesis.suggesties.length > 0
-              ? `**Suggesties voor vervolg**\n${synthesis.suggesties.map(s => `• ${s}`).join('\n')}`
+              ? `**${synthEnMode ? 'Suggestions for next steps' : 'Suggesties voor vervolg'}**\n${synthesis.suggesties.map(s => `• ${s}`).join('\n')}`
               : '',
           ].filter(Boolean);
           if (sections.length > 0) {
@@ -5919,7 +5927,9 @@ ${reflection}`;
             const synthSourceRef = `group_checkpoint_synthesis:${cp.id}`;
             const synthRows = members.map(m => ({
               user_id: m.user_id,
-              title: `🔗 Overzicht over alle gesprekken: ${projectTitle}`,
+              title: synthEnMode
+                ? `🔗 Overview across all conversations: ${projectTitle}`
+                : `🔗 Overzicht over alle gesprekken: ${projectTitle}`,
               content: synthesisContent,
               activity_type: 'project_reflection',
               source_ref: synthSourceRef,
