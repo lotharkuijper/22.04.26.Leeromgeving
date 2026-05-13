@@ -77,6 +77,12 @@ interface PreviewThread {
   personaSummary: string;
 }
 
+interface CheckpointSynthesis {
+  overeenstemming: string[];
+  spanningspunten: string[];
+  suggesties: string[];
+}
+
 interface ProjectMaterialDoc {
   id: string;
   filename: string;
@@ -123,6 +129,7 @@ export function ProjectRoomPage() {
   // submit, zodat netwerk-retries van dezelfde knopdruk dedupeer-baar blijven.
   const [checkpointRequestId, setCheckpointRequestId] = useState<string | null>(null);
   const [checkpointPreview, setCheckpointPreview] = useState<PreviewThread[] | null>(null);
+  const [checkpointSynthesis, setCheckpointSynthesis] = useState<CheckpointSynthesis | null>(null);
   const [checkpointPreviewLoading, setCheckpointPreviewLoading] = useState(false);
   const [checkpointPreviewError, setCheckpointPreviewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -420,6 +427,7 @@ export function ProjectRoomPage() {
     setCheckpointPreviewError(null);
     if (kind === 'checkpoint') {
       setCheckpointPreview(null);
+      setCheckpointSynthesis(null);
       setCheckpointPreviewLoading(true);
       try {
         const r = await fetch(`/api/projects/groups/${groupId}/checkpoint-preview`, {
@@ -429,6 +437,7 @@ export function ProjectRoomPage() {
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Preview ophalen mislukt');
         setCheckpointPreview(data.threads || []);
+        setCheckpointSynthesis(data.synthesis || null);
       } catch (e: any) {
         setCheckpointPreviewError(e.message);
       } finally {
@@ -479,6 +488,7 @@ export function ProjectRoomPage() {
       setCheckpoints(prev => [data.checkpoint, ...prev]);
       setReflection('');
       setCheckpointPreview(null);
+      setCheckpointSynthesis(null);
       setCheckpointRequestId(null);
       if (data.checkpoint?.kind === 'final') {
         // Afronden: sluit modal en herlaad kamer (status → finalized).
@@ -1228,6 +1238,55 @@ export function ProjectRoomPage() {
                     ))}
                   </div>
                 )}
+
+                {/* Cross-agent synthese — alleen als ≥ 2 afgesloten gesprekken */}
+                {!checkpointPreviewLoading && checkpointSynthesis && (
+                  <div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4" data-testid="checkpoint-synthesis">
+                    <div className="flex items-center gap-2 mb-3">
+                      <ScrollText className="w-4 h-4 text-indigo-600" />
+                      <h3 className="font-semibold text-indigo-900 text-sm">Overzicht over alle gesprekken</h3>
+                    </div>
+
+                    {checkpointSynthesis.overeenstemming.length > 0 && (
+                      <div className="mb-3">
+                        <p className="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide mb-1.5">Overeenstemming</p>
+                        <ul className="space-y-1">
+                          {checkpointSynthesis.overeenstemming.map((item, i) => (
+                            <li key={i} className="flex gap-2 text-xs text-gray-800">
+                              <span className="text-indigo-500 shrink-0 mt-0.5">•</span>{item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {checkpointSynthesis.spanningspunten.length > 0 && (
+                      <div className="mb-3">
+                        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">Spanningspunten</p>
+                        <ul className="space-y-1">
+                          {checkpointSynthesis.spanningspunten.map((item, i) => (
+                            <li key={i} className="flex gap-2 text-xs text-gray-800">
+                              <span className="text-amber-500 shrink-0 mt-0.5">⚡</span>{item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {checkpointSynthesis.suggesties.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide mb-1.5">Suggesties voor vervolg</p>
+                        <ul className="space-y-1">
+                          {checkpointSynthesis.suggesties.map((item, i) => (
+                            <li key={i} className="flex gap-2 text-xs text-gray-800">
+                              <span className="text-green-600 shrink-0 mt-0.5">→</span>{item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
 
@@ -1252,7 +1311,7 @@ export function ProjectRoomPage() {
             {!checkpointSaved && (
               <div className="flex gap-2 mt-5 justify-end">
                 <button
-                  onClick={() => { setShowCheckpointModal(null); setCheckpointSaved(false); setReflection(''); setCheckpointPreview(null); setCheckpointPreviewError(null); }}
+                  onClick={() => { setShowCheckpointModal(null); setCheckpointSaved(false); setReflection(''); setCheckpointPreview(null); setCheckpointSynthesis(null); setCheckpointPreviewError(null); }}
                   className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg text-sm"
                   data-testid="button-cancel-checkpoint"
                 >

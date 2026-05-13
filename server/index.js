@@ -5401,9 +5401,62 @@ app.get('/api/projects/groups/:groupId/conversation-log', async (req, res) => {
   }
 });
 
+// Helper: genereert cross-agent synthese op basis van afgesloten gesprekken.
+// Geeft null terug als er minder dan 2 afgesloten gesprekken zijn.
+async function generateCrossAgentSynthesis(groupId, apiKey) {
+  const { data: closedThreads } = await supabaseAdmin
+    .from('group_persona_threads')
+    .select('id, persona_id, topics, agreements')
+    .eq('group_id', groupId)
+    .not('closed_at', 'is', null)
+    .order('closed_at', { ascending: false });
+
+  if (!closedThreads || closedThreads.length < 2) return null;
+
+  const personaIds = [...new Set(closedThreads.map(t => t.persona_id))];
+  const { data: personas } = await supabaseAdmin
+    .from('project_personas').select('id, name, avatar_emoji').in('id', personaIds);
+  const personaMap = Object.fromEntries((personas || []).map(p => [p.id, p]));
+
+  const convText = closedThreads.map(t => {
+    const p = personaMap[t.persona_id] || {};
+    const topics = (t.topics || []).join('; ');
+    const agreements = (t.agreements || []).join('; ');
+    return `${p.avatar_emoji || '💬'} ${p.name || 'Persona'}:\n- Besproken: ${topics || '(geen)'}\n- Afgesproken: ${agreements || '(geen)'}`;
+  }).join('\n\n');
+
+  const prompt = `Je analyseert gesprekken die een groep studenten heeft gevoerd met verschillende AI-personas in een onderzoeksproject.\n\nGesprekssamenvatting per persona:\n${convText}\n\nGeef je antwoord UITSLUITEND als geldige JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 punten waarover meerdere personas het eens zijn of vergelijkbare informatie gaven.\n- "spanningspunten": 1-3 punten waarover personas duidelijk anders denken of tegenstrijdige informatie gaven. Laat de array leeg als er geen zijn.\n- "suggesties": 2-3 concrete volgende stappen die de groep kan zetten op basis van de gesprekken.\n\nSchrijf in het Nederlands, bondig en concreet. Geen markdown buiten de JSON.`;
+
+  try {
+    const resp = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 800,
+        response_format: { type: 'json_object' },
+      }),
+    });
+    if (resp.ok) {
+      const raw = ((await resp.json()).choices?.[0]?.message?.content || '{}').trim();
+      const parsed = JSON.parse(raw);
+      return {
+        overeenstemming: Array.isArray(parsed.overeenstemming) ? parsed.overeenstemming.filter(s => typeof s === 'string' && s.trim()) : [],
+        spanningspunten: Array.isArray(parsed.spanningspunten) ? parsed.spanningspunten.filter(s => typeof s === 'string' && s.trim()) : [],
+        suggesties: Array.isArray(parsed.suggesties) ? parsed.suggesties.filter(s => typeof s === 'string' && s.trim()) : [],
+      };
+    }
+  } catch (e) {
+    console.error('[cross-agent-synthese] LLM fout:', e.message);
+  }
+  return null;
+}
+
 // POST /api/projects/groups/:groupId/checkpoint-preview — genereer AI-samenvattingen
 // per persona-thread ter preview vóór opslaan. Geen DB-schrijven.
-// Response: { threads: [{ threadId, personaId, personaName, avatarEmoji, studentSummary, personaSummary }] }
+// Response: { threads: [{ threadId, personaId, personaName, avatarEmoji, studentSummary, personaSummary }], synthesis? }
 app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
@@ -5487,7 +5540,16 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
       }
       result.push({ threadId: t.id, personaId: t.persona_id, personaName, avatarEmoji, studentSummary, personaSummary });
     }
-    return res.json({ threads: result });
+
+    // Cross-agent synthese (alleen als ≥ 2 afgesloten gesprekken).
+    let synthesis = null;
+    try {
+      synthesis = await generateCrossAgentSynthesis(groupId, apiKey);
+    } catch (e) {
+      console.error('[checkpoint-preview] synthese fout:', e.message);
+    }
+
+    return res.json({ threads: result, synthesis });
   } catch (err) {
     console.error('[checkpoint-preview]', err);
     return res.status(500).json({ error: err.message });
@@ -5693,6 +5755,48 @@ ${reflection}`;
         await supabaseAdmin.from('learning_journal_entries').insert(
           rows.map(({ source_ref, ...rest }) => rest)
         );
+      }
+    }
+
+    // Cross-agent synthese journal-entry (alleen bij tussentijds checkpoint).
+    let synthesisAdded = false;
+    if (kind === 'checkpoint' && members && members.length > 0) {
+      try {
+        const synthesis = await generateCrossAgentSynthesis(groupId, apiKey);
+        if (synthesis) {
+          const sections = [
+            synthesis.overeenstemming.length > 0
+              ? `**Overeenstemming**\n${synthesis.overeenstemming.map(s => `• ${s}`).join('\n')}`
+              : '',
+            synthesis.spanningspunten.length > 0
+              ? `**Spanningspunten**\n${synthesis.spanningspunten.map(s => `• ${s}`).join('\n')}`
+              : '',
+            synthesis.suggesties.length > 0
+              ? `**Suggesties voor vervolg**\n${synthesis.suggesties.map(s => `• ${s}`).join('\n')}`
+              : '',
+          ].filter(Boolean);
+          if (sections.length > 0) {
+            const synthesisContent = sections.join('\n\n');
+            const synthSourceRef = `group_checkpoint_synthesis:${cp.id}`;
+            const synthRows = members.map(m => ({
+              user_id: m.user_id,
+              title: `🔗 Overzicht over alle gesprekken: ${projectTitle}`,
+              content: synthesisContent,
+              activity_type: 'project_reflection',
+              source_ref: synthSourceRef,
+            }));
+            const { error: synthErr } = await supabaseAdmin.from('learning_journal_entries').insert(synthRows);
+            if (synthErr && (synthErr.code === '42703' || /source_ref/i.test(synthErr.message || ''))) {
+              await supabaseAdmin.from('learning_journal_entries').insert(
+                synthRows.map(({ source_ref: _ignored, ...rest }) => rest)
+              );
+            } else if (!synthErr) {
+              synthesisAdded = true;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[checkpoint] synthese journal-entry fout:', e.message);
       }
     }
 
