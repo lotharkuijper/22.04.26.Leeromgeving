@@ -5940,7 +5940,7 @@ ${reflection}`;
         .eq('id', groupId);
     }
 
-    return res.json({ checkpoint: cp, threadSummariesAdded });
+    return res.json({ checkpoint: cp, threadSummariesAdded, synthesisAdded });
   } catch (err) {
     console.error('[projects/groups/checkpoint]', err);
     return res.status(500).json({ error: err.message });
