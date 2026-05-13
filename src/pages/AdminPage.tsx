@@ -84,9 +84,10 @@ interface ConceptCardProps {
   onDeleteCancel: () => void;
   isSelected?: boolean;
   onToggleSelect?: (id: string) => void;
+  lang: string;
 }
 
-function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deletingConceptId, onDeleteRequest, onDeleteConfirm, onDeleteCancel, isSelected, onToggleSelect }: ConceptCardProps) {
+function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deletingConceptId, onDeleteRequest, onDeleteConfirm, onDeleteCancel, isSelected, onToggleSelect, lang }: ConceptCardProps) {
   return (
     <div
       className={`p-4 border rounded-lg transition-colors ${isSelected ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
@@ -116,27 +117,27 @@ function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deleting
             <div className="flex items-center gap-1 ml-2 flex-shrink-0">
               {deleteConfirmId === concept.id ? (
                 <div className="flex items-center gap-1">
-                  <span className="text-xs text-red-600">Verwijderen?</span>
+                  <span className="text-xs text-red-600">{lang === 'en' ? 'Delete?' : 'Verwijderen?'}</span>
                   <button
                     onClick={() => onDeleteConfirm(concept.id)}
                     disabled={deletingConceptId === concept.id}
                     className="px-2 py-0.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
                     data-testid={`button-confirm-delete-${concept.id}`}
                   >
-                    {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : 'Ja'}
+                    {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : (lang === 'en' ? 'Yes' : 'Ja')}
                   </button>
                   <button
                     onClick={onDeleteCancel}
                     className="px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
                   >
-                    Nee
+                    {lang === 'en' ? 'No' : 'Nee'}
                   </button>
                 </div>
               ) : (
                 <button
                   onClick={() => onDeleteRequest(concept.id)}
                   className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  title="Verwijderen"
+                  title={lang === 'en' ? 'Delete' : 'Verwijderen'}
                   data-testid={`button-delete-${concept.id}`}
                 >
                   <Trash2 className="w-4 h-4" />
@@ -478,7 +479,7 @@ export function AdminPage() {
         setRagSettingsMsg({ type: 'success', text: 'Cursus-override verwijderd. Globale standaard wordt nu gebruikt.' });
         loadRagSettingsAdmin();
       } else {
-        setRagSettingsMsg({ type: 'error', text: data.error || 'Verwijderen mislukt.' });
+        setRagSettingsMsg({ type: 'error', text: data.error || (lang === 'en' ? 'Delete failed.' : 'Verwijderen mislukt.') });
       }
     } catch (err: any) {
       setRagSettingsMsg({ type: 'error', text: err.message });
@@ -527,7 +528,7 @@ export function AdminPage() {
         setDiagnosticResult(data);
       }
     } catch (err: any) {
-      setDiagnosticError(err.message || 'Onbekende fout');
+      setDiagnosticError(err.message || (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
     } finally {
       setDiagnosticLoading(false);
     }
@@ -551,7 +552,7 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error updating role:', error);
-      setRoleMsg({ type: 'error', text: 'Fout bij wijzigen van rol: ' + error.message });
+      setRoleMsg({ type: 'error', text: (lang === 'en' ? 'Error changing role: ' : 'Fout bij wijzigen van rol: ') + error.message });
     } else {
       setRoleMsg({ type: 'success', text: 'Rol succesvol gewijzigd.' });
       loadUsers();
@@ -597,7 +598,7 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error adding concept:', error);
-      setAddConceptError('Fout bij toevoegen: ' + error.message);
+      setAddConceptError((lang === 'en' ? 'Error adding: ' : 'Fout bij toevoegen: ') + error.message);
     } else {
       setAddConceptSuccess(true);
       setAddConceptName('');
@@ -621,13 +622,13 @@ export function AdminPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Fout ${res.status}`);
+        throw new Error(data.error || (lang === 'en' ? `Error ${res.status}` : `Fout ${res.status}`));
       }
       setDeleteConfirmId(null);
       await loadConcepts();
       await loadConceptsMeta();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Onbekende fout');
+      setDeleteError(err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
     } finally {
       setDeletingConceptId(null);
     }
@@ -659,7 +660,7 @@ export function AdminPage() {
       await loadConcepts();
       await loadConceptsMeta();
     } catch (err) {
-      setRegenerateError(err instanceof Error ? err.message : 'Onbekende fout');
+      setRegenerateError(err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
     } finally {
       setRegeneratingConcepts(false);
     }
@@ -713,7 +714,7 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error updating prompt:', error);
-      setPromptMsg({ type: 'error', text: 'Fout bij opslaan: ' + error.message });
+      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error saving: ' : 'Fout bij opslaan: ') + error.message });
     } else {
       setPromptMsg({ type: 'success', text: 'Prompt succesvol bijgewerkt.' });
       setEditingPrompt(null);
@@ -737,7 +738,7 @@ export function AdminPage() {
         section: 'project',
       });
     if (error) {
-      setPromptMsg({ type: 'error', text: 'Fout bij aanmaken: ' + error.message });
+      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error creating: ' : 'Fout bij aanmaken: ') + error.message });
     } else {
       setPromptMsg({ type: 'success', text: 'Agent prompt aangemaakt.' });
       setNewProjectName('');
@@ -755,7 +756,7 @@ export function AdminPage() {
       .delete()
       .eq('id', promptId);
     if (error) {
-      setPromptMsg({ type: 'error', text: 'Fout bij verwijderen: ' + error.message });
+      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error deleting: ' : 'Fout bij verwijderen: ') + error.message });
     } else {
       setPromptMsg({ type: 'success', text: 'Prompt verwijderd.' });
       setConfirmDeletePromptId(null);
@@ -781,7 +782,7 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error activating prompt:', error);
-      setPromptMsg({ type: 'error', text: 'Fout bij activeren: ' + error.message });
+      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error activating: ' : 'Fout bij activeren: ') + error.message });
     } else {
       setPromptMsg({ type: 'success', text: 'Prompt geactiveerd.' });
       loadPrompts();
@@ -1392,6 +1393,7 @@ const tabGroups = [
                               next.has(id) ? next.delete(id) : next.add(id);
                               return next;
                             })}
+                            lang={lang}
                           />
                         );
                       })}
@@ -1417,7 +1419,7 @@ const tabGroups = [
                       <ConceptCard
                         key={concept.id}
                         concept={concept}
-                        sourceLabel="Globaal"
+                        sourceLabel={lang === 'en' ? 'Global' : 'Globaal'}
                         sourceBg="bg-gray-100 text-gray-600"
                         deleteConfirmId={deleteConfirmId}
                         deletingConceptId={deletingConceptId}
@@ -1430,6 +1432,7 @@ const tabGroups = [
                           next.has(id) ? next.delete(id) : next.add(id);
                           return next;
                         })}
+                        lang={lang}
                       />
                     ))}
                   </div>
