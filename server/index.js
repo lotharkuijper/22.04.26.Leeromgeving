@@ -5266,13 +5266,13 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
 });
 
 // POST /api/projects/groups/:groupId/threads/:threadId/close
-// Markeert de thread als afgesloten met de opgegeven topics + agreements.
+// Genereert server-side de AI-samenvatting en markeert de thread als afgesloten.
+// Accepteert GEEN topics/agreements van de client — de server is de enige bron.
 app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId, threadId } = req.params;
-  const { topics = [], agreements = [] } = req.body || {};
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -5284,18 +5284,71 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
       .eq('id', threadId).eq('group_id', groupId).is('closed_at', null).maybeSingle();
     if (!thread) return res.status(404).json({ error: 'Thread niet gevonden of al afgesloten' });
 
+    // --- Server-side samenvatting genereren (zelfde logica als /close-preview) ---
+    const { data: msgs } = await supabaseAdmin
+      .from('group_persona_messages')
+      .select('role, content')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: true });
+    const allMsgs = msgs || [];
+    if (allMsgs.length < 2) {
+      return res.status(400).json({ error: 'Het gesprek is te kort om samen te vatten (minimaal 2 berichten).' });
+    }
+
+    let topics = [];
+    let agreements = [];
+
+    const apiKey = process.env.GROQ_API_KEY;
+    if (apiKey) {
+      const conversationText = allMsgs
+        .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
+        .join('\n').slice(0, 12000);
+      const msgCount = allMsgs.filter(m => m.role === 'user').length;
+      const topicsInstruction = msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen';
+      const prompt = `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\nSchrijf in het Nederlands. Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
+
+      try {
+        const groqResp = await fetch(GROQ_API_URL, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: 600,
+            response_format: { type: 'json_object' },
+          }),
+        });
+        if (groqResp.ok) {
+          const raw = ((await groqResp.json()).choices?.[0]?.message?.content || '{}').trim();
+          const parsed = JSON.parse(raw);
+          topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
+          agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
+        }
+      } catch (e) {
+        console.error('[threads/close] LLM/parse fout:', e.message);
+      }
+    }
+    // Fallback als het model geen bruikbare output geeft.
+    if (topics.length === 0) {
+      topics = allMsgs.filter(m => m.role === 'user')
+        .map(m => (m.content || '').slice(0, 100))
+        .filter(Boolean).slice(0, 3);
+    }
+
+    // --- Schrijf naar DB: alleen server gegenereerde waarden ---
     const { error: updErr } = await supabaseAdmin
       .from('group_persona_threads')
       .update({
         closed_at: new Date().toISOString(),
         closed_by: auth.user.id,
-        topics: topics,
-        agreements: agreements,
+        topics,
+        agreements,
       })
       .eq('id', threadId);
     if (updErr) return res.status(500).json({ error: updErr.message });
 
-    return res.json({ ok: true, threadId });
+    return res.json({ ok: true, threadId, topics, agreements });
   } catch (err) {
     console.error('[threads/close]', err);
     return res.status(500).json({ error: err.message });

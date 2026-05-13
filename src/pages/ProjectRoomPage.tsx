@@ -577,8 +577,7 @@ export function ProjectRoomPage() {
     try {
       const r = await fetch(`/api/projects/groups/${groupId}/threads/${activeThreadId}/close`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ topics: closePreviewData.topics, agreements: closePreviewData.agreements }),
+        headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Afsluiten mislukt');
