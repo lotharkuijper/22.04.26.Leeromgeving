@@ -5568,6 +5568,8 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId } = req.params;
+  const lang = req.body?.lang || 'nl';
+  const enMode = lang === 'en';
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -5615,7 +5617,9 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: 'llama-3.3-70b-versatile',
-              messages: [{ role: 'user', content: `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
+              messages: [{ role: 'user', content: enMode
+                ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
+                : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
               temperature: 0.3, max_tokens: 300,
             }),
           });
@@ -5627,7 +5631,9 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: 'llama-3.3-70b-versatile',
-              messages: [{ role: 'user', content: `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
+              messages: [{ role: 'user', content: enMode
+                ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
+                : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
               temperature: 0.3, max_tokens: 600,
             }),
           });
@@ -5671,7 +5677,8 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId } = req.params;
-  const { kind = 'checkpoint', reflection, requestId, personaSummaries } = req.body || {};
+  const { kind = 'checkpoint', reflection, requestId, personaSummaries, lang = 'nl' } = req.body || {};
+  const enMode = lang === 'en';
   if (!['checkpoint', 'final'].includes(kind)) {
     return res.status(400).json({ error: "kind moet 'checkpoint' of 'final' zijn" });
   }
@@ -5724,7 +5731,27 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
     let rubricFeedback = null;
 
     if (kind === 'final') {
-      const prompt = `Je bent een "critical friend" voor een groep VU-studenten epi/biostat. De groep heeft een onderzoeksproject afgerond en geeft hieronder een gezamenlijke eindreflectie. Beoordeel het werk per rubriekspunt — eerlijk, formatief en concreet. Spreek de groep aan met "jullie".
+      const prompt = enMode
+        ? `You are a "critical friend" for a group of VU students (epi/biostat). The group has completed a research project and submits a joint final reflection below. Assess the work per rubric criterion — honestly, formatively and concretely. Address the group as "you" (plural).
+
+Project: ${project?.title || '(unnamed)'}
+Research question: ${project?.research_question || '(none)'}
+
+Rubric:
+${rubricText}
+
+Group's final reflection:
+${reflection}
+
+Return ONLY valid JSON with this structure:
+{
+  "samenvatting": "<2-4 sentences overall assessment, second person>",
+  "per_criterium": [{"criterium": "<name>", "oordeel": "<strong/sufficient/needs attention>", "feedback": "<2-3 sentences>"}],
+  "vervolgstappen": "<1-3 concrete suggestions>"
+}
+
+No text outside the JSON.`
+        : `Je bent een "critical friend" voor een groep VU-studenten epi/biostat. De groep heeft een onderzoeksproject afgerond en geeft hieronder een gezamenlijke eindreflectie. Beoordeel het werk per rubriekspunt — eerlijk, formatief en concreet. Spreek de groep aan met "jullie".
 
 Project: ${project?.title || '(naamloos)'}
 Onderzoeksvraag: ${project?.research_question || '(geen)'}
@@ -5767,7 +5794,13 @@ Geen tekst buiten de JSON.`;
       }
     } else if (!hasPersonaSummaries) {
       // Geen AI-preview-samenvattingen: vat de handmatige reflectietekst samen.
-      const prompt = `Je bent een "critical friend" voor een groep VU-studenten epi/biostat. Hieronder schrijft een groep een tussentijdse reflectie op hun project. Schrijf in 6-10 regels, in het Nederlands, gericht aan de groep ("jullie"), een formatief verslag: wat valt op aan jullie aanpak, waar zit nog twijfel of een gat, en welke concrete vervolgstap ligt voor de hand. Geen aanhef, geen afsluitende groet.
+      const prompt = enMode
+        ? `You are a "critical friend" for a group of VU students (epi/biostat). Below, a group writes a mid-project reflection. In 6-10 lines, addressed to the group ("you"), write a formative report: what stands out about their approach, where is there still doubt or a gap, and what concrete next step is most obvious. No greeting, no closing.
+
+Project: ${project?.title || '(unnamed)'}
+Reflection:
+${reflection}`
+        : `Je bent een "critical friend" voor een groep VU-studenten epi/biostat. Hieronder schrijft een groep een tussentijdse reflectie op hun project. Schrijf in 6-10 regels, in het Nederlands, gericht aan de groep ("jullie"), een formatief verslag: wat valt op aan jullie aanpak, waar zit nog twijfel of een gat, en welke concrete vervolgstap ligt voor de hand. Geen aanhef, geen afsluitende groet.
 
 Project: ${project?.title || '(naamloos)'}
 Reflectie:
@@ -7024,6 +7057,8 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId } = req.params;
   const requestId = req.body?.requestId || null;
+  const lang = req.body?.lang || 'nl';
+  const enMode = lang === 'en';
   try {
     const { data: group } = await supabaseAdmin
       .from('project_groups').select('id, project_id, name').eq('id', groupId).maybeSingle();
@@ -7108,9 +7143,37 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
         `[Rubric/criteria: ${d.filename}]\n${(d.content_text || '').slice(0, 8000)}`
       ).join('\n\n').slice(0, 30000);
 
-      const prompt = `${evalPersona.system_prompt || 'Je bent een formatieve beoordelaar voor een groep VU-studenten epi/biostat.'}
+      const langInstruction = enMode
+        ? 'IMPORTANT: Respond entirely in English.'
+        : 'BELANGRIJK: Antwoord volledig in het Nederlands.';
+      const defaultPersonaPrompt = enMode
+        ? 'You are a formative assessor for a group of VU students (epi/biostat).'
+        : 'Je bent een formatieve beoordelaar voor een groep VU-studenten epi/biostat.';
+      const prompt = `${evalPersona.system_prompt || defaultPersonaPrompt}
 
-Je krijgt hieronder de leerdoelen/rubric (alléén voor jou — de studenten zien deze niet), het projectmateriaal, en alle gesprekken die de groep met de andere persona's heeft gevoerd. Geef een formatieve beoordeling per leerdoel/criterium. Spreek de studenten aan met "jullie".
+${langInstruction}
+
+${enMode
+  ? `Below you will find the learning objectives/rubric (for your eyes only — students cannot see this), the project material, and all conversations the group has had with the other personas. Provide a formative assessment per learning objective/criterion. Address the students as "you" (plural).
+
+Project: ${project?.title || '(unnamed)'}
+Research question: ${project?.research_question || '(none)'}
+Learning objectives: ${project?.goals || '(none)'}
+
+Hidden rubric/criteria:
+${rubricBlock || '(no rubric file linked; use the learning objectives above)'}
+
+Project material:
+${projectDocsBlock || '(none)'}
+
+Group conversations:
+${conversationsBlock || '(no conversations found)'}
+
+Write your assessment as markdown with per criterion:
+- **<criterion name>** (strong / sufficient / needs attention): 2–3 sentences of feedback with a concrete example from the conversations.
+
+End with a short heading "Next steps" with 2-3 suggestions. Do NOT quote exact rubric text and do not spoil the criteria.`
+  : `Je krijgt hieronder de leerdoelen/rubric (alléén voor jou — de studenten zien deze niet), het projectmateriaal, en alle gesprekken die de groep met de andere persona's heeft gevoerd. Geef een formatieve beoordeling per leerdoel/criterium. Spreek de studenten aan met "jullie".
 
 Project: ${project?.title || '(naamloos)'}
 Onderzoeksvraag: ${project?.research_question || '(geen)'}
@@ -7128,7 +7191,7 @@ ${conversationsBlock || '(geen gesprekken gevonden)'}
 Schrijf je beoordeling als markdown met per criterium:
 - **<naam criterium>** (sterk / voldoende / aandacht nodig): 2–3 zinnen feedback met concreet voorbeeld uit de gesprekken.
 
-Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exacte rubric-tekst letterlijk en spoiler de criteria niet.`;
+Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exacte rubric-tekst letterlijk en spoiler de criteria niet.`}`;
 
       const gr = await fetch(GROQ_API_URL, {
         method: 'POST',

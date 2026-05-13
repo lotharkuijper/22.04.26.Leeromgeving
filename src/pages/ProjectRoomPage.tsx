@@ -437,6 +437,7 @@ export function ProjectRoomPage() {
         const r = await fetch(`/api/projects/groups/${groupId}/checkpoint-preview`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ lang }),
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Preview ophalen mislukt');
@@ -471,7 +472,7 @@ export function ProjectRoomPage() {
       );
       if (!checkpointRequestId) setCheckpointRequestId(requestId);
 
-      const body: Record<string, unknown> = { kind: showCheckpointModal, requestId };
+      const body: Record<string, unknown> = { kind: showCheckpointModal, requestId, lang };
       if (showCheckpointModal === 'final') {
         body.reflection = reflection.trim();
       } else {
@@ -530,7 +531,7 @@ export function ProjectRoomPage() {
       const r = await fetch(`/api/projects/groups/${groupId}/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ requestId }),
+        body: JSON.stringify({ requestId, lang }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Assessment failed' : 'Beoordeling mislukt'));

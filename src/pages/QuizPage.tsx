@@ -1004,7 +1004,7 @@ export function QuizPage() {
                   <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
                     <h3 className="text-base font-semibold text-red-900 mb-1">
-                      Quiz kon niet gegenereerd worden
+                      {lang === 'en' ? 'Quiz could not be generated' : 'Quiz kon niet gegenereerd worden'}
                     </h3>
                     <p className="text-red-800 text-sm mb-2" data-testid="text-quiz-error-title">
                       {feedbackError.title}
@@ -1012,7 +1012,7 @@ export function QuizPage() {
                     {feedbackError.detail && (
                       <details className="mb-3 group" data-testid="details-quiz-error">
                         <summary className="text-sm text-red-700 cursor-pointer select-none hover:underline">
-                          Technische details
+                          {lang === 'en' ? 'Technical details' : 'Technische details'}
                         </summary>
                         <p
                           className="mt-2 text-xs text-red-700 bg-red-100/60 border border-red-200 rounded-md px-3 py-2 whitespace-pre-wrap font-mono"
@@ -1024,11 +1024,17 @@ export function QuizPage() {
                     )}
                     {contextStats && contextStats.total > 0 && (
                       <p className="text-xs text-red-700 mb-3" data-testid="text-quiz-context-stats-error">
-                        {contextStats.used < contextStats.total
-                          ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
-                          : contextStats.charTrimmed
-                            ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
-                            : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`}
+                        {lang === 'en'
+                          ? contextStats.used < contextStats.total
+                            ? `${contextStats.used} of ${contextStats.total} found passages were sent (the rest was skipped to keep the prompt within the limit).`
+                            : contextStats.charTrimmed
+                              ? `All ${contextStats.total} found passages were sent, but one passage was trimmed to keep the prompt within the limit.`
+                              : `All ${contextStats.total} found passages were available for the language model.`
+                          : contextStats.used < contextStats.total
+                            ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
+                            : contextStats.charTrimmed
+                              ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
+                              : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`}
                       </p>
                     )}
                     <button
