@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import {
   PlayCircle, RefreshCw, ArrowRight, FolderOpen, BookOpen, Loader2,
@@ -26,6 +27,7 @@ interface OverviewCourse {
 }
 
 export function ProjectsPage() {
+  const { t, lang } = useLanguage();
   const { profile, session } = useAuth();
   const navigate = useNavigate();
   const [overview, setOverview] = useState<OverviewCourse[]>([]);
@@ -129,18 +131,18 @@ export function ProjectsPage() {
   };
 
   if (loading) {
-    return <div className="p-12 text-center text-gray-500"><Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" /> Laden…</div>;
+    return <div className="p-12 text-center text-gray-500"><Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" /> {t('common.loading')}</div>;
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-1">Projecten</h1>
-          <p className="text-gray-600">Werk in groepen aan een onderzoeksproject. Je kunt opnieuw beginnen of doorgaan met je vorige werk.</p>
+          <h1 className="text-3xl font-bold text-gray-900 mb-1">{t('projects.title')}</h1>
+          <p className="text-gray-600">{lang === 'en' ? 'Work in groups on a research project. You can start over or continue with your previous work.' : 'Werk in groepen aan een onderzoeksproject. Je kunt opnieuw beginnen of doorgaan met je vorige werk.'}</p>
         </div>
         <button onClick={() => setJoinDialog(true)} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg text-sm font-medium" data-testid="button-open-join">
-          <Users className="w-4 h-4" /> Aansluiten met invite-code
+          <Users className="w-4 h-4" /> {t('projects.joinWithCode')}
         </button>
       </div>
 
@@ -251,7 +253,7 @@ export function ProjectsPage() {
             <div className="flex gap-2 justify-end">
               <button onClick={() => setRestartConfirm(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-restart-cancel">Annuleren — ga toch verder</button>
               <button onClick={() => restart(restartConfirm)} disabled={busyProjectId === restartConfirm.id} className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-40" data-testid="button-restart-confirm">
-                {busyProjectId === restartConfirm.id ? 'Bezig…' : 'Ja, opnieuw beginnen'}
+                {busyProjectId === restartConfirm.id ? t('common.loading') : t('projects.restart')}
               </button>
             </div>
           </div>
@@ -271,9 +273,9 @@ export function ProjectsPage() {
               data-testid="input-invite-code"
             />
             <div className="flex gap-2 justify-end mt-4">
-              <button onClick={() => { setJoinDialog(false); setInviteCode(''); }} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">Annuleren</button>
+              <button onClick={() => { setJoinDialog(false); setInviteCode(''); }} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">{t('projects.cancel')}</button>
               <button onClick={joinByCode} disabled={!inviteCode.trim()} className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40" data-testid="button-confirm-join">
-                Aansluiten
+                {t('projects.join')}
               </button>
             </div>
           </div>

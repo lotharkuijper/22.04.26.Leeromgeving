@@ -123,8 +123,10 @@ export async function searchRelevantChunksWithStats(
   // Nederlandse vaktermen (bv. "cohort") geeft text-embedding-3-small zonder
   // verrijking lage similarity-scores; door synoniemen + de definition mee te
   // geven scoren we meetbaar hoger zonder de drempel te verlagen.
+  const _storedLang = localStorage.getItem('lair-vu-lang');
+  const _ragLang = (_storedLang === 'nl' || _storedLang === 'en') ? _storedLang : 'nl';
   const embedQuery = expansion?.enabled
-    ? expandQuery(query, { definition: expansion.definition, keyPoints: expansion.keyPoints })
+    ? expandQuery(query, { definition: expansion.definition, keyPoints: expansion.keyPoints }, _ragLang)
     : query;
   if (expansion?.enabled && embedQuery !== query) {
     console.log(`[RAG] Query expanded for embedding: "${query}" -> "${embedQuery.slice(0, 120)}${embedQuery.length > 120 ? '…' : ''}"`);

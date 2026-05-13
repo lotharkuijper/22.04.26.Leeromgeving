@@ -88,7 +88,7 @@ const RAG_EXTRACTION_DEFAULTS = {
 //   null / undefined  → geen folderfilter (alle chunks)
 //   []                → expliciet geen toegang (geen resultaten)
 //   [id, id, ...]     → alleen chunks uit deze folders
-async function searchChunksServerSide(queryText, threshold, matchCount, allowedFolderIds, expansion) {
+async function searchChunksServerSide(queryText, threshold, matchCount, allowedFolderIds, expansion, lang = 'nl') {
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey || !supabaseAdmin) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery: queryText };
 
@@ -101,7 +101,7 @@ async function searchChunksServerSide(queryText, threshold, matchCount, allowedF
   // definitie, key_points). Dit geeft het embedding-model meer signaal voor
   // korte Nederlandse vaktermen waar text-embedding-3-small anders laag scoort.
   const embedQuery = (expansion && expansion.enabled)
-    ? expandQuery(queryText, { definition: expansion.definition, keyPoints: expansion.keyPoints })
+    ? expandQuery(queryText, { definition: expansion.definition, keyPoints: expansion.keyPoints }, lang)
     : queryText;
 
   try {
@@ -242,6 +242,8 @@ app.post('/api/chat', async (req, res) => {
     if (systemPromptOverride) {
       const langSuffixSkip = lang === 'en' ? LANG_INSTRUCTION_EN : '';
       finalMessages = [{ role: 'system', content: `${systemPromptOverride}${langSuffixSkip}` }, ...userMessages];
+    } else if (lang === 'en') {
+      finalMessages = [{ role: 'system', content: LANG_INSTRUCTION_EN.trim() }, ...userMessages];
     } else {
       finalMessages = userMessages;
     }
@@ -4984,7 +4986,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
-  const { groupId, personaId, message } = req.body || {};
+  const { groupId, personaId, message, lang = 'nl' } = req.body || {};
   if (!groupId || !personaId || !message) {
     return res.status(400).json({ error: 'groupId, personaId, message vereist' });
   }
@@ -5165,7 +5167,9 @@ app.post('/api/projects/persona-chat', async (req, res) => {
     const ragBlock = context ? `\n\nContext uit cursusmateriaal:\n${context}` : '';
     const docBlock = uploadedContext ? `\n\nGeüploade documenten van de groep:\n${uploadedContext}` : '';
     const projectDocBlock = projectDocContext ? `\n\nProjectmateriaal van de docent:\n${projectDocContext}` : '';
-    const systemContent = `${persona.system_prompt}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}`;
+    const LANG_INSTR_EN = '\n\nIMPORTANT: Always respond in English. Use English for all your answers, feedback, and explanations.';
+    const langSuffix = lang === 'en' ? LANG_INSTR_EN : '';
+    const systemContent = `${persona.system_prompt}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}${langSuffix}`;
 
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });

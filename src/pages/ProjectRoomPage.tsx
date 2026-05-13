@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
@@ -105,6 +106,7 @@ interface ClosedConversation {
 const QUICK_REACTIONS = ['👍', '❤️', '🤔', '✅'];
 
 export function ProjectRoomPage() {
+  const { t, lang } = useLanguage();
   const { projectId, groupId } = useParams<{ projectId: string; groupId: string }>();
   const { profile, session, isAdmin, isDocent } = useAuth();
   const navigate = useNavigate();
@@ -379,7 +381,7 @@ export function ProjectRoomPage() {
       const r = await fetch('/api/projects/persona-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ groupId, personaId: activePersonaId, message: text }),
+        body: JSON.stringify({ groupId, personaId: activePersonaId, message: text, lang }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Persona-chat mislukt');

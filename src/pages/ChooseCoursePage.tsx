@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useLanguage } from "../i18n";
 import { useAuth } from "../contexts/AuthContext";
 import { useActiveCourse } from "../contexts/ActiveCourseContext";
 import { supabase } from "../lib/supabase";
 
 export default function ChooseCoursePage() {
+  const { t, lang } = useLanguage();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const { setActiveCourse, loading: activeLoading } = useActiveCourse();
@@ -45,22 +47,22 @@ export default function ChooseCoursePage() {
   };
 
   if (authLoading || loading || activeLoading) {
-    return <div style={{ padding: "2rem" }}>Bezig met laden…</div>;
+    return <div style={{ padding: "2rem" }}>{t('common.loading')}</div>;
   }
 
   if (courses.length === 0) {
     return (
       <div style={{ padding: "2rem" }}>
-        Er zijn op dit moment geen actieve cursussen beschikbaar. Neem contact op met je docent.
+        {t('chooseCourse.noCourses')}
       </div>
     );
   }
 
   return (
     <div style={{ padding: "2rem", maxWidth: "600px", margin: "0 auto" }}>
-      <h1 style={{ marginBottom: "1rem" }}>Kies een cursus</h1>
+      <h1 style={{ marginBottom: "1rem" }}>{t('chooseCourse.title')}</h1>
       <p style={{ marginBottom: "2rem", opacity: 0.8 }}>
-        Selecteer de cursus waarmee je wilt werken.
+        {t('chooseCourse.subtitle')}
       </p>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>

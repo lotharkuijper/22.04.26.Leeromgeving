@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
@@ -124,6 +125,7 @@ function topicsLabelOf(row: QuizAttemptRow): string {
 }
 
 export function QuizPage() {
+  const { t, lang } = useLanguage();
   const { profile } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
 
@@ -329,7 +331,7 @@ export function QuizPage() {
   const handleStartQuiz = async () => {
     setSetupValidationError(null);
     if (selectedTopicIds.size === 0) {
-      setSetupValidationError('Kies minstens één onderwerp.');
+      setSetupValidationError(lang === 'en' ? 'Choose at least one topic.' : 'Kies minstens één onderwerp.');
       return;
     }
 
@@ -395,7 +397,7 @@ export function QuizPage() {
         mixCounts = result.counts;
       } catch (llmErr) {
         console.error('[QUIZ] Mixed quiz generation failed:', llmErr);
-        setFeedbackError(llmErrorToDutch(llmErr));
+        setFeedbackError(llmErrorToDutch(llmErr, lang));
         return;
       }
       if (generated.length === 0) {
@@ -487,7 +489,7 @@ export function QuizPage() {
       setShowExplanation(true);
     } catch (err) {
       console.error('[QUIZ] evaluation failed:', err);
-      setEvalError(llmErrorToDutch(err));
+      setEvalError(llmErrorToDutch(err, lang));
     } finally {
       setEvaluating(false);
     }
@@ -653,10 +655,11 @@ export function QuizPage() {
       <div className="max-w-5xl mx-auto space-y-6">
         <NoticeBanner notice={pageNotice} onDismiss={clearPageNotice} />
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('quiz.title')}</h1>
           <p className="text-gray-600">
-            Kies één of meerdere onderwerpen en een vraagtype. De leerassistent genereert daar een quiz over,
-            beoordeelt jouw open antwoorden met feedback + feed forward, en zet de afgeronde quiz onderaan deze pagina.
+            {lang === 'en'
+              ? 'Choose one or more topics and a question type. The learning assistant generates a quiz, evaluates your open answers with feedback + feed forward, and lists completed quizzes below.'
+              : 'Kies één of meerdere onderwerpen en een vraagtype. De leerassistent genereert daar een quiz over, beoordeelt jouw open antwoorden met feedback + feed forward, en zet de afgeronde quiz onderaan deze pagina.'}
           </p>
         </div>
 
@@ -968,7 +971,7 @@ export function QuizPage() {
               ) : (
                 <>
                   <Play className="w-5 h-5" />
-                  Quiz genereren en starten
+                  {lang === 'en' ? 'Generate and start quiz' : 'Quiz genereren en starten'}
                 </>
               )}
             </button>

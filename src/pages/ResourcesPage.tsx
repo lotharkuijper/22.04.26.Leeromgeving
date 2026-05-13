@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLanguage } from '../i18n';
 import { Download, Search, FileText, BookOpen, FolderOpen } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { STORAGE_CONFIG } from '../config/storage.config';
@@ -34,6 +35,7 @@ function toResource(doc: any): Resource {
 }
 
 export function ResourcesPage() {
+  const { t, lang } = useLanguage();
   const [otherDocs, setOtherDocs] = useState<Resource[]>([]);
   const [ragFiles, setRagFiles] = useState<Resource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -150,7 +152,7 @@ export function ResourcesPage() {
 
   const EmptyState = ({ search }: { search: boolean }) => (
     <p className="text-sm text-gray-400 text-center py-8">
-      {search ? 'Geen resultaten gevonden voor je zoekopdracht.' : 'Geen bestanden beschikbaar.'}
+      {search ? t('common.noResults') : t('resources.noFiles')}
     </p>
   );
 
@@ -159,9 +161,9 @@ export function ResourcesPage() {
       {/* Paginaheader */}
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Bronnen</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('resources.title')}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Beschikbare bestanden voor {activeCourse?.name ?? 'deze cursus'}
+            {lang === 'en' ? `Available files for ${activeCourse?.name ?? 'this course'}` : `Beschikbare bestanden voor ${activeCourse?.name ?? 'deze cursus'}`}
           </p>
         </div>
         <div className="relative w-60">
@@ -170,7 +172,7 @@ export function ResourcesPage() {
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Zoeken..."
+            placeholder={t('common.search') + '...'}
             className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             data-testid="resources-search"
           />
@@ -181,7 +183,7 @@ export function ResourcesPage() {
       <section className="bg-white border border-gray-200 rounded-xl p-5">
         <div className="flex items-center gap-2 mb-1">
           <BookOpen className="w-5 h-5 text-blue-600 flex-shrink-0" />
-          <h2 className="text-base font-semibold text-gray-900">Cursusmateriaal</h2>
+          <h2 className="text-base font-semibold text-gray-900">{t('resources.courseFiles')}</h2>
           <span className="ml-auto text-xs text-gray-400 font-medium">
             {filteredRag.length} bestand{filteredRag.length !== 1 ? 'en' : ''}
           </span>
@@ -199,7 +201,7 @@ export function ResourcesPage() {
       <section className="bg-white border border-gray-200 rounded-xl p-5">
         <div className="flex items-center gap-2 mb-1">
           <FileText className="w-5 h-5 text-purple-600 flex-shrink-0" />
-          <h2 className="text-base font-semibold text-gray-900">Overige documenten</h2>
+          <h2 className="text-base font-semibold text-gray-900">{t('resources.otherFiles')}</h2>
           <span className="ml-auto text-xs text-gray-400 font-medium">
             {filteredOther.length} bestand{filteredOther.length !== 1 ? 'en' : ''}
           </span>
