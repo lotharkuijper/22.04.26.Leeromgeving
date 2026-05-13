@@ -230,14 +230,18 @@ app.post('/api/chat', async (req, res) => {
     skipSystemPrompt = false,
     ragStrictMode = false,
     systemPromptOverride,
+    lang = 'nl',
   } = req.body;
+
+  const LANG_INSTRUCTION_EN = '\n\nIMPORTANT: Always respond in English. Use English for all your answers, feedback, and explanations, regardless of the language of the question or course material.';
 
   const userMessages = Array.isArray(messages) ? messages.filter(m => m.role !== 'system') : [];
 
   let finalMessages;
   if (skipSystemPrompt) {
     if (systemPromptOverride) {
-      finalMessages = [{ role: 'system', content: systemPromptOverride }, ...userMessages];
+      const langSuffixSkip = lang === 'en' ? LANG_INSTRUCTION_EN : '';
+      finalMessages = [{ role: 'system', content: `${systemPromptOverride}${langSuffixSkip}` }, ...userMessages];
     } else {
       finalMessages = userMessages;
     }
@@ -266,17 +270,18 @@ app.post('/api/chat', async (req, res) => {
         console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
       }
     }
+    const langSuffix = lang === 'en' ? LANG_INSTRUCTION_EN : '';
     let systemContent;
     if (ragStrictMode) {
       if (context) {
-        systemContent = `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${RAG_STRICT_INSTRUCTION}`;
+        systemContent = `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${RAG_STRICT_INSTRUCTION}${langSuffix}`;
       } else {
-        systemContent = `${systemPromptContent}${RAG_STRICT_INSTRUCTION}\n\nEr zijn geen relevante cursusteksten gevonden voor deze vraag. Informeer de student hierover.`;
+        systemContent = `${systemPromptContent}${RAG_STRICT_INSTRUCTION}\n\nEr zijn geen relevante cursusteksten gevonden voor deze vraag. Informeer de student hierover.${langSuffix}`;
       }
     } else {
       systemContent = context
-        ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}`
-        : systemPromptContent;
+        ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${langSuffix}`
+        : `${systemPromptContent}${langSuffix}`;
     }
     finalMessages = [{ role: 'system', content: systemContent }, ...userMessages];
   }
@@ -329,7 +334,7 @@ app.post('/api/chat/archive', async (req, res) => {
     return res.status(401).json({ error: 'Authorization header vereist' });
   }
 
-  const { conversationId, generateSummary = false } = req.body;
+  const { conversationId, generateSummary = false, lang = 'nl' } = req.body;
   if (!conversationId) {
     return res.status(400).json({ error: 'conversationId is vereist' });
   }
@@ -381,16 +386,38 @@ app.post('/api/chat/archive', async (req, res) => {
           }
         }
 
+        const userLabel = lang === 'en' ? 'You' : 'Jij';
+        const tutorLabel = lang === 'en' ? 'Tutor' : 'Tutor';
         const chatText = msgs
           .filter(m => m.role !== 'system')
-          .map(m => `${m.role === 'user' ? 'Jij' : 'Tutor'}: ${m.content}`)
+          .map(m => `${m.role === 'user' ? userLabel : tutorLabel}: ${m.content}`)
           .join('\n\n');
 
         const sourcesText = ragSources.size > 0
-          ? `\n\nGebruikte cursusbronnen in dit gesprek: ${[...ragSources].join(', ')}`
+          ? (lang === 'en'
+              ? `\n\nCourse sources used in this conversation: ${[...ragSources].join(', ')}`
+              : `\n\nGebruikte cursusbronnen in dit gesprek: ${[...ragSources].join(', ')}`)
           : '';
 
-        const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Analyseer het volgende studiegesprek en schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
+        const summaryPrompt = lang === 'en'
+          ? `You are a "critical friend" for a student epidemiology/biostatistics at VU Amsterdam. Analyse the following study conversation and write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
+
+Addressing rule (follow STRICTLY):
+- Address the student directly using "you" / "your".
+- NEVER use formulations like "the student", "this student", "the student has" or other third-person references to the student. Write as if giving feedback one-on-one.
+
+Your report contains:
+1. A reasoned formative judgement of what you have demonstrated and learned
+2. Concrete strengths and areas for improvement in your contribution (honest but constructive)
+3. A specific suggestion for further deepening, preferably with reference to available course sources${sourcesText}
+
+Conversation title: "${conversation.title}"
+
+Conversation (lines marked with "You:" are the student you are addressing):
+${chatText}
+
+Write the report directly without salutation. Be concrete, honest and motivating.`
+          : `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Analyseer het volgende studiegesprek en schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -429,7 +456,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                   .from('learning_journal_entries')
                   .insert({
                     user_id: user.id,
-                    title: `Chatreflectie: ${conversation.title}`,
+                    title: lang === 'en' ? `Chat reflection: ${conversation.title}` : `Chatreflectie: ${conversation.title}`,
                     content: summaryContent,
                     activity_type: 'chat_reflection',
                   })
@@ -2622,7 +2649,7 @@ app.post('/api/explain/archive', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { explanationId, generateSummary = true } = req.body;
+  const { explanationId, generateSummary = true, lang = 'nl' } = req.body;
   if (!explanationId) return res.status(400).json({ error: 'explanationId is vereist' });
 
   try {
@@ -2653,7 +2680,29 @@ app.post('/api/explain/archive', async (req, res) => {
       const keyPoints = Array.isArray(row.concepts?.key_points) ? row.concepts.key_points : [];
       const feedbackText = row.feedback?.content || (typeof row.feedback === 'string' ? row.feedback : '(geen feedback)');
 
-      const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft het begrip "${conceptName}" in eigen woorden uitgelegd en feedback ontvangen van de leerassistent. Schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
+      const summaryPrompt = lang === 'en'
+        ? `You are a "critical friend" for a student epidemiology/biostatistics at VU Amsterdam. A student has explained the concept "${conceptName}" in their own words and received feedback from the learning assistant. Write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
+
+Addressing rule (follow STRICTLY):
+- Address the student directly using "you" / "your".
+- NEVER use formulations like "the student", "this student", "the student has" or other third-person references. Write as if giving feedback one-on-one.
+
+Your report contains:
+1. A reasoned formative judgement of what you have demonstrated and learned about this concept
+2. Concrete strengths and areas for improvement in your explanation (honest but constructive)
+3. A specific suggestion for further deepening or a next step
+
+Concept: "${conceptName}"
+Official definition: ${conceptDef || '(not provided)'}${keyPoints.length > 0 ? `\nKey points: ${keyPoints.join('; ')}` : ''}
+
+Your explanation:
+${row.explanation_text}
+
+Feedback from the learning assistant:
+${feedbackText}
+
+Write the report directly without salutation. Be concrete, honest and motivating.`
+        : `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft het begrip "${conceptName}" in eigen woorden uitgelegd en feedback ontvangen van de leerassistent. Schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -2696,7 +2745,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                 .from('learning_journal_entries')
                 .insert({
                   user_id: user.id,
-                  title: `Uitleg-reflectie: ${conceptName}`,
+                  title: lang === 'en' ? `Explanation reflection: ${conceptName}` : `Uitleg-reflectie: ${conceptName}`,
                   content: summaryContent,
                   activity_type: 'explanation_reflection',
                 })

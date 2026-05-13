@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { GraduationCap, Mail, Lock, LogIn } from 'lucide-react';
+import { useLanguage } from '../i18n';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -10,6 +11,7 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { signIn, signUp } = useAuth();
+  const { t, lang, setLang } = useLanguage();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,12 +21,12 @@ export function LoginPage() {
     try {
       if (isSignUp) {
         if (!fullName.trim()) {
-          setError('Naam is verplicht');
+          setError(t('login.err.nameRequired'));
           setLoading(false);
           return;
         }
         if (password.length < 6) {
-          setError('Wachtwoord moet minimaal 6 tekens bevatten');
+          setError(t('login.err.passwordTooShort'));
           setLoading(false);
           return;
         }
@@ -34,15 +36,14 @@ export function LoginPage() {
       }
     } catch (err: any) {
       console.error('Auth error:', err);
-      const errorMessage = err.message || 'Er is een fout opgetreden';
+      const errorMessage = err.message || t('login.err.generic');
 
-      // Provide more helpful error messages
       if (errorMessage.includes('Invalid login credentials')) {
-        setError('Ongeldige inloggegevens. Controleer je email en wachtwoord.');
+        setError(t('login.err.invalidCredentials'));
       } else if (errorMessage.includes('User already registered')) {
-        setError('Dit email adres is al geregistreerd. Probeer in te loggen.');
+        setError(t('login.err.alreadyRegistered'));
       } else if (errorMessage.includes('Email not confirmed')) {
-        setError('Email nog niet bevestigd. Check je inbox.');
+        setError(t('login.err.emailNotConfirmed'));
       } else {
         setError(errorMessage);
       }
@@ -61,15 +62,25 @@ export function LoginPage() {
               LAIR-VU
             </h1>
             <p className="text-gray-600 text-center">
-              {isSignUp ? 'Maak een nieuw account aan' : 'Log in op je account'}
+              {isSignUp ? t('login.signUpSubtitle') : t('login.signInSubtitle')}
             </p>
+            {/* Language toggle on login page */}
+            <button
+              data-testid="button-lang-toggle-login"
+              onClick={() => setLang(lang === 'nl' ? 'en' : 'nl')}
+              className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
+            >
+              <span>{lang === 'nl' ? '🇳🇱 NL' : '🇬🇧 EN'}</span>
+              <span>→</span>
+              <span>{lang === 'nl' ? '🇬🇧 EN' : '🇳🇱 NL'}</span>
+            </button>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             {isSignUp && (
               <div>
                 <label htmlFor="fullName" className="block text-sm font-semibold text-gray-700 mb-2">
-                  Volledige naam
+                  {t('login.fullName')}
                 </label>
                 <input
                   id="fullName"
@@ -77,7 +88,7 @@ export function LoginPage() {
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
-                  placeholder="Jan de Vries"
+                  placeholder={t('login.fullNamePlaceholder')}
                   required={isSignUp}
                 />
               </div>
@@ -85,7 +96,7 @@ export function LoginPage() {
 
             <div>
               <label htmlFor="email" className="block text-sm font-semibold text-gray-700 mb-2">
-                E-mailadres
+                {t('login.email')}
               </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -95,7 +106,7 @@ export function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full pl-11 pr-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
-                  placeholder="jouw@email.nl"
+                  placeholder={t('login.emailPlaceholder')}
                   required
                 />
               </div>
@@ -103,7 +114,7 @@ export function LoginPage() {
 
             <div>
               <label htmlFor="password" className="block text-sm font-semibold text-gray-700 mb-2">
-                Wachtwoord
+                {t('login.password')}
               </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -136,7 +147,7 @@ export function LoginPage() {
               ) : (
                 <>
                   <LogIn className="w-5 h-5" />
-                  {isSignUp ? 'Account aanmaken' : 'Inloggen'}
+                  {isSignUp ? t('login.signUpBtn') : t('login.loginBtn')}
                 </>
               )}
             </button>
@@ -150,15 +161,14 @@ export function LoginPage() {
               }}
               className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
             >
-              {isSignUp ? 'Al een account? Log in' : 'Nog geen account? Registreer nu'}
+              {isSignUp ? t('login.switchToSignIn') : t('login.switchToSignUp')}
             </button>
           </div>
 
           {isSignUp && (
             <div className="mt-6 pt-6 border-t border-gray-200">
               <p className="text-xs text-gray-500 text-center leading-relaxed">
-                De <strong>eerste gebruiker</strong> wordt automatisch <strong>admin</strong>.
-                Alle andere registraties worden aangemeld als <strong>student</strong>.
+                {t('login.firstUserNote')}
               </p>
             </div>
           )}

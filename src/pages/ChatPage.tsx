@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
+import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import { sendChatMessage, llmErrorToDutch, type Message } from '../services/llm.service';
 import { searchRelevantChunksWithStats, buildContextWithCap, type DocumentChunk } from '../services/rag.service';
@@ -46,6 +47,7 @@ const RAG_DEFAULTS: RagSettings = {
 export function ChatPage() {
   const { profile, signOut } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
+  const { t, lang } = useLanguage();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -213,7 +215,7 @@ export function ChatPage() {
       const res = await fetch('/api/chat/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
-        body: JSON.stringify({ conversationId, generateSummary }),
+        body: JSON.stringify({ conversationId, generateSummary, lang }),
       });
 
       if (!res.ok) {
@@ -313,7 +315,7 @@ export function ChatPage() {
         );
       } catch (llmErr) {
         console.error('[CHAT] LLM call failed:', llmErr);
-        setFeedbackError(llmErrorToDutch(llmErr));
+        setFeedbackError(llmErrorToDutch(llmErr, lang));
         setPendingRetry({ history, isFirstMessage });
         return;
       }
@@ -411,9 +413,9 @@ export function ChatPage() {
         <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
           <div className="text-center max-w-md mx-auto px-4">
             <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-gray-900 mb-2">Profiel kon niet worden geladen</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">{t('chat.profileLoadFailed')}</h2>
             <p className="text-gray-600 mb-6">
-              Er is iets misgegaan bij het laden van je profiel. Dit kan komen door een verbindingsprobleem of een technisch probleem.
+              {t('chat.profileLoadFailedDetail')}
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <button
@@ -421,14 +423,14 @@ export function ChatPage() {
                 className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg"
               >
                 <RefreshCw className="w-5 h-5" />
-                Vernieuw pagina
+                {t('chat.refreshPage')}
               </button>
               <button
                 onClick={() => signOut()}
                 className="flex items-center justify-center gap-2 px-6 py-3 bg-gray-200 text-gray-700 font-semibold rounded-xl hover:bg-gray-300 transition-all"
               >
                 <LogOut className="w-5 h-5" />
-                Uitloggen
+                {t('nav.logout')}
               </button>
             </div>
           </div>
@@ -440,8 +442,8 @@ export function ChatPage() {
       <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 font-medium">Je profiel wordt geladen...</p>
-          <p className="text-sm text-gray-500 mt-2">Een moment geduld</p>
+          <p className="text-gray-600 font-medium">{t('chat.profileLoading')}</p>
+          <p className="text-sm text-gray-500 mt-2">{t('chat.profileLoadingWait')}</p>
         </div>
       </div>
     );
@@ -462,7 +464,7 @@ export function ChatPage() {
           className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg mb-4 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Plus className="w-5 h-5" />
-          Nieuwe Chat
+          {t('chat.newChat')}
         </button>
 
         <div className="flex-1 overflow-y-auto space-y-2">
@@ -503,8 +505,8 @@ export function ChatPage() {
           <div className="flex-1 flex items-center justify-center text-gray-500">
             <div className="text-center">
               <MessageSquare className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-              <p className="text-lg font-semibold mb-2">Geen conversatie geselecteerd</p>
-              <p className="text-sm">Start een nieuwe chat om te beginnen</p>
+              <p className="text-lg font-semibold mb-2">{t('chat.noConversationSelected')}</p>
+              <p className="text-sm">{t('chat.startNewToBegin')}</p>
             </div>
           </div>
         ) : (
@@ -512,8 +514,8 @@ export function ChatPage() {
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {messages.length === 0 && (
                 <div className="text-center text-gray-500 mt-8">
-                  <p className="text-lg font-semibold mb-2">Start een gesprek</p>
-                  <p className="text-sm">Stel een vraag over epidemiologie of biostatistiek</p>
+                  <p className="text-lg font-semibold mb-2">{t('chat.startConversation')}</p>
+                  <p className="text-sm">{t('chat.askQuestion')}</p>
                 </div>
               )}
 
@@ -583,7 +585,7 @@ export function ChatPage() {
                     <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
                       <h3 className="text-base font-semibold text-red-900 mb-1">
-                        Antwoord kon niet gegenereerd worden
+                        {t('chat.errorGenerating')}
                       </h3>
                       <p className="text-red-800 text-sm mb-2" data-testid="text-chat-error-title">
                         {feedbackError.title}
@@ -591,7 +593,7 @@ export function ChatPage() {
                       {feedbackError.detail && (
                         <details className="mb-3 group" data-testid="details-chat-error">
                           <summary className="text-sm text-red-700 cursor-pointer select-none hover:underline">
-                            Technische details
+                            {t('chat.technicalDetails')}
                           </summary>
                           <p
                             className="mt-2 text-xs text-red-700 bg-red-100/60 border border-red-200 rounded-md px-3 py-2 whitespace-pre-wrap font-mono"
@@ -620,7 +622,7 @@ export function ChatPage() {
                         data-testid="button-chat-retry"
                       >
                         <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                        Probeer opnieuw
+                        {t('chat.retry')}
                       </button>
                     </div>
                   </div>
@@ -653,7 +655,7 @@ export function ChatPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && !loading && handleSendMessage()}
-                  placeholder="Stel een vraag..."
+                  placeholder={t('chat.inputPlaceholder')}
                   className="flex-1 px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none"
                   disabled={loading}
                 />
@@ -678,7 +680,7 @@ export function ChatPage() {
             <div className="p-2 bg-green-100 rounded-xl">
               <BookText className="w-5 h-5 text-green-700" />
             </div>
-            <h2 className="text-lg font-semibold text-gray-900">Verplaats naar leerdagboek</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{t('chat.moveToJournal')}</h2>
             <button
               onClick={() => !archiving && setArchiveDialog(null)}
               className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
@@ -689,10 +691,10 @@ export function ChatPage() {
           </div>
 
           <p className="text-sm text-gray-600 mb-2">
-            Je staat op het punt het gesprek <strong>"{archiveDialog.title}"</strong> af te sluiten.
+            {t('chat.archiveClosingText').replace('{title}', archiveDialog.title)}
           </p>
           <p className="text-sm text-gray-600 mb-6">
-            Wil je dat de leerassistent een formatieve samenvatting van dit gesprek opslaat in je leerdagboek? Die samenvatting kun je later bekijken om op te reflecteren.
+            {t('chat.archiveAskSummary')}
           </p>
 
           <div className="flex flex-col gap-3">
@@ -703,7 +705,7 @@ export function ChatPage() {
               className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
-              Samenvatting opslaan en gesprek afsluiten
+              {t('chat.archiveWithSummary')}
             </button>
 
             <button
@@ -712,7 +714,7 @@ export function ChatPage() {
               disabled={archiving}
               className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Alleen afsluiten (geen dagboekvermelding)
+              {t('chat.archiveWithoutSummary')}
             </button>
 
             <button
@@ -721,7 +723,7 @@ export function ChatPage() {
               disabled={archiving}
               className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
             >
-              Annuleren
+              {t('chat.cancel')}
             </button>
           </div>
         </div>

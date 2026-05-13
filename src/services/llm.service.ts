@@ -21,53 +21,84 @@ export class LLMError extends Error {
   }
 }
 
-export function llmErrorToDutch(err: unknown): { title: string; detail?: string } {
+type LlmErrLang = 'nl' | 'en';
+
+export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title: string; detail?: string } {
+  const nl = lang !== 'en';
   if (err instanceof LLMError) {
     const code = err.code ?? '';
     const raw = (err.rawMessage || err.message || '').toLowerCase();
     if (code === 'context_length_exceeded' || raw.includes('context') && raw.includes('length')) {
       return {
-        title: 'De prompt is te lang geworden voor het taalmodel.',
-        detail: 'Probeer de RAG-drempel iets hoger te zetten of het aantal passages (match_count) te verlagen, zodat er minder cursusmateriaal wordt meegestuurd.',
+        title: nl
+          ? 'De prompt is te lang geworden voor het taalmodel.'
+          : 'The prompt has become too long for the language model.',
+        detail: nl
+          ? 'Probeer de RAG-drempel iets hoger te zetten of het aantal passages (match_count) te verlagen, zodat er minder cursusmateriaal wordt meegestuurd.'
+          : 'Try raising the RAG threshold or lowering the number of passages (match_count) to send less course material.',
       };
     }
     if (code === 'rate_limit_exceeded' || err.status === 429 || raw.includes('rate limit')) {
       return {
-        title: 'Het taalmodel staat tijdelijk onder druk (rate limit).',
-        detail: 'Wacht een halve minuut en probeer het opnieuw.',
+        title: nl
+          ? 'Het taalmodel staat tijdelijk onder druk (rate limit).'
+          : 'The language model is temporarily under pressure (rate limit).',
+        detail: nl
+          ? 'Wacht een halve minuut en probeer het opnieuw.'
+          : 'Wait half a minute and try again.',
       };
     }
     if (err.status === 503) {
       return {
-        title: 'De chatbot is niet (volledig) geconfigureerd.',
-        detail: err.rawMessage || 'Controleer of de GROQ_API_KEY beschikbaar is.',
+        title: nl
+          ? 'De chatbot is niet (volledig) geconfigureerd.'
+          : 'The chatbot is not (fully) configured.',
+        detail: err.rawMessage || (nl ? 'Controleer of de GROQ_API_KEY beschikbaar is.' : 'Check whether the GROQ_API_KEY is available.'),
       };
     }
     if (err.status >= 500) {
       return {
-        title: 'Het taalmodel reageert niet (serverfout).',
+        title: nl
+          ? 'Het taalmodel reageert niet (serverfout).'
+          : 'The language model is not responding (server error).',
         detail: err.rawMessage || `HTTP ${err.status}`,
       };
     }
     if (code === 'invalid_request_error' || (err.status >= 400 && err.status < 500)) {
       return {
-        title: 'Het taalmodel weigerde het verzoek.',
+        title: nl
+          ? 'Het taalmodel weigerde het verzoek.'
+          : 'The language model rejected the request.',
         detail: err.rawMessage || `HTTP ${err.status}`,
       };
     }
-    return { title: 'Er ging iets mis bij het taalmodel.', detail: err.rawMessage };
+    return {
+      title: nl ? 'Er ging iets mis bij het taalmodel.' : 'Something went wrong with the language model.',
+      detail: err.rawMessage,
+    };
   }
   if (err instanceof Error) {
-    return { title: 'Er ging iets mis bij het taalmodel.', detail: err.message };
+    return {
+      title: nl ? 'Er ging iets mis bij het taalmodel.' : 'Something went wrong with the language model.',
+      detail: err.message,
+    };
   }
-  return { title: 'Er ging iets mis bij het taalmodel.' };
+  return { title: nl ? 'Er ging iets mis bij het taalmodel.' : 'Something went wrong with the language model.' };
+}
+
+function _getLang(): 'nl' | 'en' {
+  try {
+    const v = localStorage.getItem('lair-vu-lang');
+    if (v === 'nl' || v === 'en') return v;
+  } catch {}
+  return 'nl';
 }
 
 async function callChatAPI(body: object): Promise<any> {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ lang: _getLang(), ...body }),
   });
 
   if (!response.ok) {
@@ -275,10 +306,14 @@ export interface AnswerEvaluation {
   score: number; // 0–100
 }
 
-const difficultyLabel = (d: 'easy' | 'medium' | 'hard') =>
-  d === 'easy' ? 'makkelijke' : d === 'medium' ? 'gemiddelde' : 'moeilijke';
+const difficultyLabel = (d: 'easy' | 'medium' | 'hard', lang: 'nl' | 'en' = 'nl') =>
+  lang === 'en'
+    ? (d === 'easy' ? 'easy' : d === 'medium' ? 'medium' : 'hard')
+    : (d === 'easy' ? 'makkelijke' : d === 'medium' ? 'gemiddelde' : 'moeilijke');
 
-const SECOND_PERSON_RULE = `Aanspraakvorm (volg STRIKT): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT "de student", "deze student" of "de student heeft" — schrijf alsof je het één-op-één tegen de student zegt.`;
+const SECOND_PERSON_RULE_NL = `Aanspraakvorm (volg STRIKT): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT "de student", "deze student" of "de student heeft" — schrijf alsof je het één-op-één tegen de student zegt.`;
+const SECOND_PERSON_RULE_EN = `Addressing rule (follow STRICTLY): address the student directly using "you" / "your". NEVER use "the student", "this student" or "the student has" — write as if giving feedback one-on-one.`;
+const getSecondPersonRule = () => _getLang() === 'en' ? SECOND_PERSON_RULE_EN : SECOND_PERSON_RULE_NL;
 
 function buildContextSection(ragContext?: string, ragStrictMode?: boolean): string {
   if (ragContext) {
@@ -393,23 +428,44 @@ export async function generateQuiz(
   ragStrictMode?: boolean,
   systemPromptOverride?: string,
 ): Promise<QuizQuestion[]> {
+  const lang = _getLang();
   const contextSection = buildContextSection(ragContext, ragStrictMode);
-  const topicsLabel = topics.length === 1 ? `het onderwerp "${topics[0]}"` : `de onderwerpen ${topics.map(t => `"${t}"`).join(', ')}`;
-  const diff = difficultyLabel(difficulty);
+  const topicsLabel = lang === 'en'
+    ? (topics.length === 1 ? `the topic "${topics[0]}"` : `the topics ${topics.map(t => `"${t}"`).join(', ')}`)
+    : (topics.length === 1 ? `het onderwerp "${topics[0]}"` : `de onderwerpen ${topics.map(t => `"${t}"`).join(', ')}`);
+  const diff = difficultyLabel(difficulty, lang);
 
   let promptCore: string;
   let exampleJson: string;
   let maxTokens = 2048;
 
   if (questionType === 'mcq') {
-    promptCore = `Genereer ${numQuestions} ${diff} meerkeuzevragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
+    promptCore = lang === 'en'
+      ? `Generate ${numQuestions} ${diff} multiple-choice questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
+
+For each question:
+- Write a clear, specific question.
+- Provide exactly 4 answer options (A, B, C, D).
+- Indicate which answer is correct (0, 1, 2 or 3).
+- Provide a brief explanation of why this answer is correct. Write the explanation in second person ("you"/"your") addressing the student.`
+      : `Genereer ${numQuestions} ${diff} meerkeuzevragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
 
 Voor elke vraag:
 - Maak een duidelijke, specifieke vraag.
 - Geef exact 4 antwoordopties (A, B, C, D).
 - Geef aan welk antwoord correct is (0, 1, 2 of 3).
 - Geef een korte uitleg waarom dit antwoord correct is. Schrijf de uitleg in tweede persoon ("je"/"jij") gericht aan de student.`;
-    exampleJson = `[
+    exampleJson = lang === 'en'
+      ? `[
+  {
+    "type": "mcq",
+    "question": "The question here",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "correctAnswer": 0,
+    "explanation": "Explanation of why this is correct, directed at you"
+  }
+]`
+      : `[
   {
     "type": "mcq",
     "question": "De vraag hier",
@@ -419,13 +475,29 @@ Voor elke vraag:
   }
 ]`;
   } else if (questionType === 'open') {
-    promptCore = `Genereer ${numQuestions} ${diff} open vragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
+    promptCore = lang === 'en'
+      ? `Generate ${numQuestions} ${diff} open questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
+
+For each question:
+- Ask an open question (not multiple choice) that the student can answer in 3–8 sentences.
+- Provide a "modelAnswer": an ideal answer of approximately 4–8 sentences containing the key points.
+- Provide a "rubric": brief assessment criteria (3–5 bullets, in one string with newlines) with which an evaluator can later score the student answer.`
+      : `Genereer ${numQuestions} ${diff} open vragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
 
 Voor elke vraag:
 - Stel een open vraag (geen meerkeuze) waarop de student in 3–8 zinnen een inhoudelijk antwoord kan geven.
 - Geef een "modelAnswer": een ideaal antwoord van ongeveer 4–8 zinnen dat de kernpunten bevat.
 - Geef een "rubric": korte beoordelingscriteria (3–5 bullets, in één string met newlines) waarmee een beoordelaar later het studentantwoord kan scoren.`;
-    exampleJson = `[
+    exampleJson = lang === 'en'
+      ? `[
+  {
+    "type": "open",
+    "question": "The open question here",
+    "modelAnswer": "A worked-out example answer of a few sentences.",
+    "rubric": "- Mentions definition X\\n- References mechanism Y\\n- Provides an example"
+  }
+]`
+      : `[
   {
     "type": "open",
     "question": "De open vraag hier",
@@ -434,14 +506,32 @@ Voor elke vraag:
   }
 ]`;
   } else {
-    promptCore = `Genereer ${numQuestions} ${diff} casusvragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
+    promptCore = lang === 'en'
+      ? `Generate ${numQuestions} ${diff} case study questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
+
+For each case:
+- Write a short, realistic problem sketch ("context") of 3–6 sentences describing a research or practical situation relevant to ${topicsLabel}.
+- Then ask one clear question ("question") that forces the student to approach the problem analytically.
+- Provide a "modelAnswer": an ideal answer of approximately 5–8 sentences.
+- Provide a "rubric": brief assessment criteria (3–5 bullets, in one string with newlines).`
+      : `Genereer ${numQuestions} ${diff} casusvragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
 
 Voor elke casus:
 - Schrijf eerst een korte, realistische probleemschets ("context") van 3–6 zinnen waarin een onderzoeks- of praktijksituatie wordt geschetst die past bij ${topicsLabel}.
 - Stel daarna één duidelijke vraag ("question") die de student dwingt het probleem analytisch te benaderen.
 - Geef een "modelAnswer": een ideaal antwoord van ongeveer 5–8 zinnen.
 - Geef een "rubric": korte beoordelingscriteria (3–5 bullets, in één string met newlines).`;
-    exampleJson = `[
+    exampleJson = lang === 'en'
+      ? `[
+  {
+    "type": "casus",
+    "context": "Short case description of a few sentences.",
+    "question": "The question for this case",
+    "modelAnswer": "A worked-out example answer of a few sentences.",
+    "rubric": "- Identifies the study type\\n- Names possible confounders\\n- Gives a correct conclusion"
+  }
+]`
+      : `[
   {
     "type": "casus",
     "context": "Korte casusbeschrijving van enkele zinnen.",
@@ -455,12 +545,11 @@ Voor elke casus:
 
   const quizPrompt = `${promptCore}
 
-${SECOND_PERSON_RULE}
+${getSecondPersonRule()}
 
-Formatteer je antwoord als een JSON array met deze structuur:
-${exampleJson}
-
-BELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst, geen markdown-codeblok.`;
+${lang === 'en'
+    ? `Format your answer as a JSON array with this structure:\n${exampleJson}\n\nIMPORTANT: Return ONLY the JSON array, no extra text, no markdown code block.`
+    : `Formatteer je antwoord als een JSON array met deze structuur:\n${exampleJson}\n\nBELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst, geen markdown-codeblok.`}`;
 
   try {
     const data = await callChatAPI({
@@ -511,7 +600,7 @@ ${rubric}
 Antwoord van jou (de student):
 ${studentAnswer}
 
-${SECOND_PERSON_RULE}
+${getSecondPersonRule()}
 
 Schrijf een formatieve beoordeling met EXACT drie velden:
 1. "feedback": 3–6 zinnen die concreet benoemen wat goed gaat en wat ontbreekt of onjuist is in jouw antwoord.

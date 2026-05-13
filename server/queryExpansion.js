@@ -1,11 +1,10 @@
-// Statische uitbreidingen voor korte Nederlandse vaktermen.
+// Statische uitbreidingen voor korte Nederlandse en Engelse vaktermen.
 // Doel: een korte zoekterm zoals "cohort" omzetten naar een rijkere zoekstring
-// ("cohort groep onderzoekspopulatie deelnemers patiënten") zodat het
-// embedding-model meer signaal krijgt om het juiste cursusmateriaal te vinden.
+// zodat het embedding-model meer signaal krijgt om het juiste cursusmateriaal te vinden.
 //
 // De map bevat lowercase keys; matching is case-insensitive en spatiegevoelig.
 // Houd termen kort en specifiek voor epidemiologie/biostatistiek.
-export const QUERY_SYNONYMS = {
+export const QUERY_SYNONYMS_NL = {
   // Epidemiologie — onderzoeksdesigns
   'cohort': 'groep onderzoekspopulatie deelnemers patiënten klas jaargang',
   'cohortonderzoek': 'cohort prospectief onderzoek follow-up vergelijkende studie blootstelling',
@@ -90,21 +89,106 @@ export const QUERY_SYNONYMS = {
   'multiple testing': 'meervoudig toetsen bonferroni fdr correctie',
 };
 
+// English synonym map — maps English epidemiology/biostatistics terms to related terms.
+export const QUERY_SYNONYMS_EN = {
+  // Epidemiology — study designs
+  'cohort': 'group study population participants patients follow-up',
+  'cohort study': 'prospective longitudinal follow-up exposure outcome',
+  'case-control': 'case control retrospective comparison cases controls odds',
+  'cross-sectional': 'prevalence survey snapshot population moment',
+  'randomized controlled trial': 'rct randomization experimental intervention control',
+  'rct': 'randomized controlled trial randomization experimental intervention',
+  'ecological study': 'aggregate population-level correlation group data',
+  'case report': 'case description patient clinical report',
+
+  // Epidemiology — measures
+  'incidence': 'new cases risk occurrence disease time period rate',
+  'incidence rate': 'incidence density person-years new cases time',
+  'prevalence': 'existing cases proportion population moment',
+  'relative risk': 'rr risk ratio comparison exposed unexposed',
+  'odds ratio': 'or odds case-control association',
+  'attributable risk': 'risk difference exposure causal absolute',
+  'number needed to treat': 'nnt treatment effect intervention',
+
+  // Epidemiology — bias and causality
+  'confounding': 'confounder bias third variable common cause',
+  'confounder': 'confounding variable common cause spurious',
+  'effect modification': 'interaction subgroup heterogeneity',
+  'mediation': 'mediator indirect effect mechanism pathway',
+  'selection bias': 'selection distortion participation response',
+  'information bias': 'measurement error misclassification',
+  'dag': 'directed acyclic graph causal diagram path',
+
+  // Diagnostics and screening
+  'sensitivity': 'true positive rate test property detection',
+  'specificity': 'true negative rate test property exclusion',
+  'positive predictive value': 'ppv prediction positive test',
+  'negative predictive value': 'npv prediction negative test',
+  'screening': 'detection early test population',
+  'surveillance': 'monitoring tracking disease system',
+
+  // Biostatistics — descriptive
+  'mean': 'average central tendency measure statistics',
+  'median': 'middle value central tendency percentile',
+  'mode': 'most frequent value central tendency',
+  'standard deviation': 'sd spread variability dispersion',
+  'variance': 'spread squared deviation dispersion',
+  'quartile': 'percentile interquartile spread',
+  'interquartile range': 'iqr spread quartile',
+
+  // Biostatistics — distributions
+  'normal distribution': 'gaussian bell curve distribution',
+  'binomial distribution': 'binomial success probability count',
+  'poisson distribution': 'poisson rare events count',
+
+  // Biostatistics — tests and intervals
+  'confidence interval': 'ci uncertainty range estimate',
+  'p-value': 'significance hypothesis test result',
+  'null hypothesis': 'h0 no effect statistical test',
+  'alternative hypothesis': 'h1 effect difference',
+  't-test': 't-test means comparison groups',
+  'chi-square test': 'chi-square categorical association',
+  'anova': 'analysis of variance multiple groups comparison',
+
+  // Biostatistics — models and survival
+  'regression analysis': 'regression model association variables prediction',
+  'linear regression': 'regression linear model continuous outcome',
+  'logistic regression': 'logistic regression binary outcome odds',
+  'multilevel model': 'hierarchical model nested data random effect',
+  'kaplan-meier': 'survival curve censoring follow-up',
+  'log-rank test': 'survival groups comparison censoring',
+  'hazard ratio': 'hr risk time survival',
+  'cox regression': 'proportional hazards survival regression',
+
+  // Biostatistics — study design and errors
+  'sample size': 'n participants calculation power',
+  'power': 'statistical power detection sample size',
+  'type i error': 'false positive alpha significance',
+  'type ii error': 'false negative beta missed effect',
+  'effect size': 'cohen d standardized difference',
+  'multiple testing': 'bonferroni fdr correction',
+};
+
+// Backwards compat: keep old export name pointing to Dutch map
+export const QUERY_SYNONYMS = QUERY_SYNONYMS_NL;
+
 // Bouwt een verrijkte zoekstring rond `term`. De originele term blijft als
 // belangrijkste signaal bovenaan; daarna voegen we (in deze volgorde) toe:
-//   1. Statische synoniemen uit QUERY_SYNONYMS
+//   1. Statische synoniemen uit de taalspecifieke synonymenmap
 //   2. key_points van het concept (gefilterd op metadata-tags zoals "[RAG-…]")
 //   3. De eerste ~200 tekens van de definition
 // Resultaat is gededupliceerd op woordniveau zodat het embedding-model
 // niet onnodig op herhaalde tokens hoeft te focussen.
-export function expandQuery(term, options) {
+export function expandQuery(term, options, lang) {
   const opts = options || {};
+  const useLang = lang === 'en' ? 'en' : 'nl';
+  const synonymMap = useLang === 'en' ? QUERY_SYNONYMS_EN : QUERY_SYNONYMS_NL;
   const baseTerm = String(term || '').trim();
   if (!baseTerm) return '';
 
   const parts = [baseTerm];
   const key = baseTerm.toLowerCase();
-  if (QUERY_SYNONYMS[key]) parts.push(QUERY_SYNONYMS[key]);
+  if (synonymMap[key]) parts.push(synonymMap[key]);
 
   if (Array.isArray(opts.keyPoints)) {
     const filtered = opts.keyPoints
@@ -119,8 +203,6 @@ export function expandQuery(term, options) {
     parts.push(def);
   }
 
-  // Woordniveau-deduplicatie (case-insensitive) terwijl de eerste verschijning
-  // (en daarmee de positie van de originele term) behouden blijft.
   const seen = new Set();
   const tokens = [];
   for (const part of parts) {

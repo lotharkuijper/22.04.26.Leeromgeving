@@ -5,6 +5,7 @@ import { CourseAccessProvider } from './contexts/CourseAccessContext';
 import { ActiveCourseProvider } from './contexts/ActiveCourseContext';
 import { Layout } from './components/Layout';
 import { LoadingSpinner } from './components/LoadingSpinner';
+import { LanguageProvider } from './i18n';
 import ChooseCoursePage from "./pages/ChooseCoursePage";
 import ShareStatsTopicsPage from "./pages/ShareStatsTopicsPage";
 import ShareStatsQuizPage from "./pages/ShareStatsQuizPage";
@@ -186,15 +187,17 @@ function AppRoutes() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <CourseAccessProvider>
-          <ActiveCourseProvider>
-            <AppRoutes />
-          </ActiveCourseProvider>
-        </CourseAccessProvider>
-      </AuthProvider>
-    </BrowserRouter>
+    <LanguageProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <CourseAccessProvider>
+            <ActiveCourseProvider>
+              <AppRoutes />
+            </ActiveCourseProvider>
+          </CourseAccessProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </LanguageProvider>
   );
 }
 

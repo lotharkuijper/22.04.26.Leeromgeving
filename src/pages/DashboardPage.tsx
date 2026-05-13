@@ -10,6 +10,7 @@ import {
   Clock
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useLanguage } from '../i18n';
 
 interface StatsCardProps {
   title: string;
@@ -40,6 +41,7 @@ function StatsCard({ title, value, icon: Icon, color, linkTo }: StatsCardProps) 
 
 export function DashboardPage() {
   const { profile, isDocent, isAdmin } = useAuth();
+  const { t } = useLanguage();
   const [stats, setStats] = useState({
     totalConversations: 0,
     totalExplanations: 0,
@@ -47,16 +49,14 @@ export function DashboardPage() {
     projectSessions: 0,
     recentActivity: [] as any[]
   });
-const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
 
-useEffect(() => {
-  fetchStats();
-}, [profile?.id]);
-
+  useEffect(() => {
+    fetchStats();
+  }, [profile?.id]);
 
   const fetchStats = async () => {
     if (!profile) {
-      console.log('[DASHBOARD] No profile available, setting empty stats');
       setStats({
         totalConversations: 0,
         totalExplanations: 0,
@@ -102,37 +102,37 @@ useEffect(() => {
     <div className="space-y-8">
       <div>
         <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          Welkom terug, {profile?.full_name || 'daar'}!
+          {t('dashboard.welcomeBack', { name: profile?.full_name || '...' })}
         </h1>
         <p className="text-gray-600">
-          Hier is een overzicht van je voortgang in de epidemiologie leeromgeving.
+          {t('dashboard.subtitle')}
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatsCard
-          title="Actieve Chats"
+          title={t('dashboard.activeChats')}
           value={stats.totalConversations}
           icon={MessageSquare}
           color="from-green-500 to-emerald-600"
           linkTo="/chat"
         />
         <StatsCard
-          title="Begrippen Uitgelegd"
+          title={t('dashboard.conceptsExplained')}
           value={stats.totalExplanations}
           icon={BookOpen}
           color="from-blue-500 to-blue-600"
           linkTo="/explain"
         />
         <StatsCard
-          title="Quiz Pogingen"
+          title={t('dashboard.quizAttempts')}
           value={stats.quizAttempts}
           icon={FileQuestion}
           color="from-cyan-500 to-cyan-600"
           linkTo="/quiz"
         />
         <StatsCard
-          title="Project Sessies"
+          title={t('dashboard.projectSessions')}
           value={stats.projectSessions}
           icon={BarChart3}
           color="from-orange-500 to-orange-600"
@@ -144,12 +144,12 @@ useEffect(() => {
         <div className="bg-white rounded-2xl p-6 border border-gray-200">
           <div className="flex items-center gap-3 mb-4">
             <TrendingUp className="w-6 h-6 text-blue-600" />
-            <h2 className="text-xl font-bold text-gray-900">Je Voortgang</h2>
+            <h2 className="text-xl font-bold text-gray-900">{t('dashboard.yourProgress')}</h2>
           </div>
           <div className="space-y-4">
             <div>
               <div className="flex justify-between text-sm mb-2">
-                <span className="text-gray-600">Actieve Chat Sessies</span>
+                <span className="text-gray-600">{t('dashboard.activeChatSessions')}</span>
                 <span className="font-semibold text-gray-900">{stats.totalConversations}</span>
               </div>
               <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -161,7 +161,7 @@ useEffect(() => {
             </div>
             <div>
               <div className="flex justify-between text-sm mb-2">
-                <span className="text-gray-600">Begrippen Beheerst</span>
+                <span className="text-gray-600">{t('dashboard.conceptsMastered')}</span>
                 <span className="font-semibold text-gray-900">{stats.totalExplanations}</span>
               </div>
               <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -173,8 +173,8 @@ useEffect(() => {
             </div>
             <div>
               <div className="flex justify-between text-sm mb-2">
-                <span className="text-gray-600">Quiz Score</span>
-                <span className="font-semibold text-gray-900">{stats.quizAttempts} pogingen</span>
+                <span className="text-gray-600">{t('dashboard.quizScore')}</span>
+                <span className="font-semibold text-gray-900">{stats.quizAttempts} {t('dashboard.quizAttemptsSuffix')}</span>
               </div>
               <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                 <div
@@ -189,7 +189,7 @@ useEffect(() => {
         <div className="bg-white rounded-2xl p-6 border border-gray-200">
           <div className="flex items-center gap-3 mb-4">
             <Clock className="w-6 h-6 text-orange-600" />
-            <h2 className="text-xl font-bold text-gray-900">Snelle Acties</h2>
+            <h2 className="text-xl font-bold text-gray-900">{t('dashboard.quickActions')}</h2>
           </div>
           <div className="space-y-3">
             <Link
@@ -199,8 +199,8 @@ useEffect(() => {
               <div className="flex items-center gap-3">
                 <MessageSquare className="w-5 h-5 text-green-600" />
                 <div>
-                  <p className="font-semibold text-gray-900 group-hover:text-green-700">Start een Chat</p>
-                  <p className="text-sm text-gray-600">Stel vragen aan de AI-assistent</p>
+                  <p className="font-semibold text-gray-900 group-hover:text-green-700">{t('dashboard.startChat')}</p>
+                  <p className="text-sm text-gray-600">{t('dashboard.startChatSub')}</p>
                 </div>
               </div>
             </Link>
@@ -211,8 +211,8 @@ useEffect(() => {
               <div className="flex items-center gap-3">
                 <BookOpen className="w-5 h-5 text-blue-600" />
                 <div>
-                  <p className="font-semibold text-gray-900 group-hover:text-blue-700">Leg een Begrip Uit</p>
-                  <p className="text-sm text-gray-600">Oefen je kennis met feedback</p>
+                  <p className="font-semibold text-gray-900 group-hover:text-blue-700">{t('dashboard.explainConcept')}</p>
+                  <p className="text-sm text-gray-600">{t('dashboard.explainConceptSub')}</p>
                 </div>
               </div>
             </Link>
@@ -223,8 +223,8 @@ useEffect(() => {
               <div className="flex items-center gap-3">
                 <FileQuestion className="w-5 h-5 text-cyan-600" />
                 <div>
-                  <p className="font-semibold text-gray-900 group-hover:text-cyan-700">Maak een Quiz</p>
-                  <p className="text-sm text-gray-600">Test je kennis</p>
+                  <p className="font-semibold text-gray-900 group-hover:text-cyan-700">{t('dashboard.makeQuiz')}</p>
+                  <p className="text-sm text-gray-600">{t('dashboard.makeQuizSub')}</p>
                 </div>
               </div>
             </Link>
@@ -235,8 +235,8 @@ useEffect(() => {
               <div className="flex items-center gap-3">
                 <BarChart3 className="w-5 h-5 text-orange-600" />
                 <div>
-                  <p className="font-semibold text-gray-900 group-hover:text-orange-700">Start een Project</p>
-                  <p className="text-sm text-gray-600">Analyseer echte data</p>
+                  <p className="font-semibold text-gray-900 group-hover:text-orange-700">{t('dashboard.startProject')}</p>
+                  <p className="text-sm text-gray-600">{t('dashboard.startProjectSub')}</p>
                 </div>
               </div>
             </Link>
@@ -246,15 +246,17 @@ useEffect(() => {
 
       {(isDocent || isAdmin) && (
         <div className="bg-gradient-to-br from-slate-600 to-slate-700 rounded-2xl p-6 text-white">
-          <h2 className="text-xl font-bold mb-2">Beheer Toegang</h2>
+          <h2 className="text-xl font-bold mb-2">{t('dashboard.adminAccess')}</h2>
           <p className="text-slate-200 mb-4">
-            Als {isAdmin ? 'administrator' : 'docent'} heb je toegang tot extra functies zoals het uploaden van documenten en het beheren van content.
+            {t('dashboard.adminAccessDesc', {
+              role: isAdmin ? t('dashboard.role.administrator') : t('dashboard.role.docent')
+            })}
           </p>
           <Link
             to="/admin"
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-white text-slate-700 font-semibold rounded-lg hover:bg-slate-100 transition-colors"
           >
-            Ga naar Beheer
+            {t('dashboard.goToAdmin')}
           </Link>
         </div>
       )}

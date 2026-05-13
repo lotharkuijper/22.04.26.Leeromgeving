@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import {
   BookText,
@@ -120,6 +121,7 @@ function classifyActivity(activityType: string): GroupKey {
 
 export function FeedbackPage() {
   const { profile } = useAuth();
+  const { t, lang } = useLanguage();
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
@@ -335,7 +337,7 @@ export function FeedbackPage() {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return new Intl.DateTimeFormat('nl-NL', {
+    return new Intl.DateTimeFormat(lang === 'en' ? 'en-GB' : 'nl-NL', {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
@@ -344,13 +346,35 @@ export function FeedbackPage() {
     }).format(date);
   };
 
+  const groupLabel = (key: GroupKey): string => {
+    const map: Record<GroupKey, string> = {
+      chat: t('feedback.groupChat'),
+      explain: t('feedback.groupExplain'),
+      quiz: t('feedback.groupQuiz'),
+      project: t('feedback.groupProject'),
+      other: t('feedback.groupOther'),
+    };
+    return map[key];
+  };
+
+  const groupEmptyHint = (key: GroupKey): string => {
+    const map: Record<GroupKey, string> = {
+      chat: t('feedback.emptyChat'),
+      explain: t('feedback.emptyExplain'),
+      quiz: t('feedback.emptyQuiz'),
+      project: t('feedback.emptyProject'),
+      other: t('feedback.emptyOther'),
+    };
+    return map[key];
+  };
+
   return (
     <div className="space-y-6" data-testid="page-leerdagboek">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Leer Dagboek</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('feedback.title')}</h1>
           <p className="text-gray-600">
-            Houd bij wat je hebt geleerd en reflecteer op je leeractiviteiten
+            {lang === 'en' ? 'Track what you have learned and reflect on your learning activities.' : 'Houd bij wat je hebt geleerd en reflecteer op je leeractiviteiten.'}
           </p>
         </div>
         <button
@@ -359,19 +383,19 @@ export function FeedbackPage() {
           className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg flex items-center gap-2"
         >
           <Plus className="w-5 h-5" />
-          Nieuwe Notitie
+          {t('feedback.newEntry')}
         </button>
       </div>
 
       {showForm && (
         <div className="bg-white rounded-2xl border border-gray-200 p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4">
-            {editingEntry ? 'Bewerk Notitie' : 'Nieuwe Notitie'}
+            {editingEntry ? t('feedback.edit') + ' ' + t('feedback.entryTitle') : t('feedback.newEntry')}
           </h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="title" className="block text-sm font-semibold text-gray-700 mb-2">
-                Titel
+                {t('feedback.entryTitle')}
               </label>
               <input
                 id="title"
@@ -380,14 +404,14 @@ export function FeedbackPage() {
                 onChange={(e) => setTitle(e.target.value)}
                 data-testid="input-title"
                 className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none"
-                placeholder="Bijvoorbeeld: Geleerd over logistische regressie"
+                placeholder={lang === 'en' ? 'E.g.: Learned about logistic regression' : 'Bijvoorbeeld: Geleerd over logistische regressie'}
                 required
               />
             </div>
 
             <div>
               <label htmlFor="activityType" className="block text-sm font-semibold text-gray-700 mb-2">
-                Vak in je leerdagboek
+                {lang === 'en' ? 'Section in your learning journal' : 'Vak in je leerdagboek'}
               </label>
               <select
                 id="activityType"
@@ -398,18 +422,18 @@ export function FeedbackPage() {
               >
                 {GROUPS.map(g => (
                   <option key={g.key} value={g.activityType} data-testid={`option-${g.key}`}>
-                    {g.label}
+                    {groupLabel(g.key)}
                   </option>
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                Je notitie verschijnt in het bijbehorende vakje. Kies "Overig" voor losse reflecties.
+                {lang === 'en' ? 'Your note appears in the corresponding section. Choose "Other" for loose reflections.' : 'Je notitie verschijnt in het bijbehorende vakje. Kies "Overig" voor losse reflecties.'}
               </p>
             </div>
 
             <div>
               <label htmlFor="content" className="block text-sm font-semibold text-gray-700 mb-2">
-                Beschrijving
+                {t('feedback.entryContent')}
               </label>
               <textarea
                 id="content"
@@ -418,7 +442,7 @@ export function FeedbackPage() {
                 data-testid="textarea-content"
                 rows={6}
                 className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none resize-none"
-                placeholder="Wat heb je geleerd? Waar ben je mee bezig geweest? Wat zijn je inzichten?"
+                placeholder={lang === 'en' ? 'What did you learn? What have you been working on? What are your insights?' : 'Wat heb je geleerd? Waar ben je mee bezig geweest? Wat zijn je inzichten?'}
                 required
               />
             </div>
@@ -430,7 +454,7 @@ export function FeedbackPage() {
                 data-testid="btn-submit-entry"
                 className="px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg disabled:opacity-50"
               >
-                {loading ? 'Opslaan...' : editingEntry ? 'Bijwerken' : 'Opslaan'}
+                {loading ? (lang === 'en' ? 'Saving...' : 'Opslaan...') : editingEntry ? (lang === 'en' ? 'Update' : 'Bijwerken') : t('feedback.save')}
               </button>
               <button
                 type="button"
@@ -438,7 +462,7 @@ export function FeedbackPage() {
                 data-testid="btn-cancel-entry"
                 className="px-6 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all"
               >
-                Annuleren
+                {t('feedback.cancel')}
               </button>
             </div>
           </form>
@@ -479,13 +503,13 @@ export function FeedbackPage() {
                       <ChevronRight className={`w-5 h-5 ${group.color}`} />
                     )}
                     <Icon className={`w-5 h-5 ${group.color}`} />
-                    <h2 className={`text-lg font-bold ${group.color}`}>{group.label}</h2>
+                    <h2 className={`text-lg font-bold ${group.color}`}>{groupLabel(group.key)}</h2>
                   </div>
                   <span
                     className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${group.badgeBg} ${group.badgeText}`}
                     data-testid={`count-${group.key}`}
                   >
-                    {items.length} {items.length === 1 ? 'samenvatting' : 'samenvattingen'}
+                    {items.length} {lang === 'en' ? (items.length === 1 ? 'note' : 'notes') : (items.length === 1 ? 'samenvatting' : 'samenvattingen')}
                   </span>
                 </button>
 
@@ -493,7 +517,7 @@ export function FeedbackPage() {
                   <div className="border-t border-gray-100 divide-y divide-gray-100">
                     {items.length === 0 ? (
                       <p className="px-6 py-5 text-sm text-gray-500" data-testid={`empty-${group.key}`}>
-                        {group.emptyHint}
+                        {groupEmptyHint(group.key)}
                       </p>
                     ) : (
                       items.map(entry => {
