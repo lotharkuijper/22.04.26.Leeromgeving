@@ -2808,14 +2808,14 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
 // 3-vragen meerkeuzequiz krijgt een compacte notitie van ~6 regels, een rijke
 // 8-vragen open quiz krijgt een notitie tot ~18 regels met meer per-vraag-
 // reflectie. De notitie spreekt de student altijd in de tweede persoon aan.
-function buildQuizSummaryParams({ topics, difficulty, questionType, questions, answers, scorePercentage }) {
+function buildQuizSummaryParams({ topics, difficulty, questionType, questions, answers, scorePercentage, lang = 'nl' }) {
   const safeTopics = Array.isArray(topics) && topics.length > 0 ? topics : ['(geen onderwerp opgegeven)'];
   const topicsLabel = safeTopics.join(', ');
   const qType = questionType === 'open' || questionType === 'casus' ? questionType : 'mcq';
-  const typeLabel = qType === 'mcq' ? 'meerkeuzevragen'
-    : qType === 'open' ? 'open vragen'
-    : 'casusvragen';
-  const safeDifficulty = difficulty || 'gemiddeld';
+  const typeLabel = lang === 'en'
+    ? (qType === 'mcq' ? 'multiple choice questions' : qType === 'open' ? 'open questions' : 'case questions')
+    : (qType === 'mcq' ? 'meerkeuzevragen' : qType === 'open' ? 'open vragen' : 'casusvragen');
+  const safeDifficulty = difficulty || (lang === 'en' ? 'medium' : 'gemiddeld');
   const qList = Array.isArray(questions) ? questions : [];
   const aList = Array.isArray(answers) ? answers : [];
   const totalQuestions = qList.length;
@@ -2845,28 +2845,48 @@ function buildQuizSummaryParams({ topics, difficulty, questionType, questions, a
     const qText = q?.question || `(vraag ${i + 1})`;
     if (qType === 'mcq') {
       const opts = Array.isArray(q?.options) ? q.options : [];
-      const sel = typeof a.selectedIndex === 'number' ? opts[a.selectedIndex] : '(niet beantwoord)';
-      const correct = typeof q?.correctAnswer === 'number' ? opts[q.correctAnswer] : '(onbekend)';
-      const status = a.isCorrect ? 'goed' : 'fout';
-      return `Vraag ${i + 1}: ${qText}\n  - Jouw antwoord: ${sel} (${status})\n  - Correct: ${correct}`;
+      const noAns = lang === 'en' ? '(not answered)' : '(niet beantwoord)';
+      const noCorrect = lang === 'en' ? '(unknown)' : '(onbekend)';
+      const sel = typeof a.selectedIndex === 'number' ? opts[a.selectedIndex] : noAns;
+      const correct = typeof q?.correctAnswer === 'number' ? opts[q.correctAnswer] : noCorrect;
+      const status = lang === 'en' ? (a.isCorrect ? 'correct' : 'incorrect') : (a.isCorrect ? 'goed' : 'fout');
+      const qLabel = lang === 'en' ? 'Question' : 'Vraag';
+      const ansLabel = lang === 'en' ? 'Your answer' : 'Jouw antwoord';
+      const corrLabel = lang === 'en' ? 'Correct' : 'Correct';
+      return `${qLabel} ${i + 1}: ${qText}\n  - ${ansLabel}: ${sel} (${status})\n  - ${corrLabel}: ${correct}`;
     }
-    const ans = (a.text || '').trim() || '(geen antwoord)';
+    const noAnsOpen = lang === 'en' ? '(no answer)' : '(geen antwoord)';
+    const noScore = lang === 'en' ? '(no score)' : '(geen score)';
+    const ans = (a.text || '').trim() || noAnsOpen;
     const ev = a.evaluation || {};
     const fb = (ev.feedback || '').trim();
     const ff = (ev.feedforward || '').trim();
-    const sc = ev.score != null ? `${ev.score}/100` : '(geen score)';
-    const ctx = qType === 'casus' && q?.context ? `\n  - Casus: ${q.context}` : '';
-    return `Vraag ${i + 1}: ${qText}${ctx}\n  - Jouw antwoord: ${ans}\n  - Score: ${sc}\n  - Feedback: ${fb}\n  - Feed forward: ${ff}`;
+    const sc = ev.score != null ? `${ev.score}/100` : noScore;
+    const ctx = qType === 'casus' && q?.context
+      ? (lang === 'en' ? `\n  - Case: ${q.context}` : `\n  - Casus: ${q.context}`)
+      : '';
+    const qLabel = lang === 'en' ? 'Question' : 'Vraag';
+    const ansLabel = lang === 'en' ? 'Your answer' : 'Jouw antwoord';
+    const scoreLabel = lang === 'en' ? 'Score' : 'Score';
+    const fbLabel = lang === 'en' ? 'Feedback' : 'Feedback';
+    const ffLabel = lang === 'en' ? 'Feed forward' : 'Feed forward';
+    return `${qLabel} ${i + 1}: ${qText}${ctx}\n  - ${ansLabel}: ${ans}\n  - ${scoreLabel}: ${sc}\n  - ${fbLabel}: ${fb}\n  - ${ffLabel}: ${ff}`;
   }).join('\n\n');
 
   // Type-specifieke focusinstructie.
-  const focusInstruction = qType === 'mcq'
-    ? 'Focus op patronen: welke begrippen of denkstappen gingen goed, welke vroegen om correctie. Verwijs waar relevant naar specifieke vraagnummers.'
-    : qType === 'open'
-      ? 'Focus op de kwaliteit van je redenering: hoe expliciet maakte je je aannames, hoe nauwkeurig was je formulering, hoe goed onderbouw je conclusies? Wees concreet per vraag waar dat helpt.'
-      : 'Focus op je klinisch-methodisch redeneren in de casus: hoe goed verbond je theorie met het scenario, welke methodische keuzes onderbouwde je, welke nuances liet je liggen? Wees concreet per casus waar dat helpt.';
+  const focusInstruction = lang === 'en'
+    ? (qType === 'mcq'
+      ? 'Focus on patterns: which concepts or reasoning steps went well, which needed correction. Reference specific question numbers where relevant.'
+      : qType === 'open'
+        ? 'Focus on the quality of your reasoning: how explicitly did you state your assumptions, how precise was your wording, how well did you support your conclusions? Be specific per question where helpful.'
+        : 'Focus on your clinical-methodological reasoning in the case: how well did you connect theory to the scenario, which methodological choices did you justify, which nuances did you overlook? Be specific per case where helpful.')
+    : (qType === 'mcq'
+      ? 'Focus op patronen: welke begrippen of denkstappen gingen goed, welke vroegen om correctie. Verwijs waar relevant naar specifieke vraagnummers.'
+      : qType === 'open'
+        ? 'Focus op de kwaliteit van je redenering: hoe expliciet maakte je je aannames, hoe nauwkeurig was je formulering, hoe goed onderbouw je conclusies? Wees concreet per vraag waar dat helpt.'
+        : 'Focus op je klinisch-methodisch redeneren in de casus: hoe goed verbond je theorie met het scenario, welke methodische keuzes onderbouwde je, welke nuances liet je liggen? Wees concreet per casus waar dat helpt.');
 
-  const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft zojuist een AI-gegenereerde quiz afgerond. Schrijf een formatief reflectieverslag van ${minLines} tot ${maxLines} regels in het Nederlands, gericht aan de student zelf.
+  const summaryPromptNL = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft zojuist een AI-gegenereerde quiz afgerond. Schrijf een formatief reflectieverslag van ${minLines} tot ${maxLines} regels in het Nederlands, gericht aan de student zelf.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -2896,6 +2916,36 @@ ${detailLines || '(geen details beschikbaar)'}
 
 Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees concreet, eerlijk en motiverend; vermijd vaagheden en clichés.`;
 
+  const summaryPromptEN = `You are a "critical friend" for an epidemiology/biostatistics student at VU Amsterdam. The student has just completed an AI-generated quiz. Write a formative reflection report of ${minLines} to ${maxLines} lines in English, addressed directly to the student.
+
+Address the student directly using "you/your" throughout. NEVER refer to "the student" in the third person.
+
+Your report contains — in this order, with these (bold) headings on separate lines:
+**What you demonstrated**
+- Concrete strengths based on your answers and the feedback provided.
+
+**Areas for attention**
+- Where things went less well and why; reference specific question numbers where relevant.
+
+**What you can do with this**
+- One or two concrete next steps — what will you review, practise, or apply to improve further, and for what is your current level already sufficient?
+
+Type-specific focus: ${focusInstruction}
+${perQuestionLine}
+
+Quiz context:
+- Topic(s): ${topicsLabel}
+- Question type: ${typeLabel}
+- Difficulty: ${safeDifficulty}
+- Number of questions: ${totalQuestions}${scorePct != null ? `\n- Total score: ${scorePct}%` : ''}
+
+Quiz detail (per question):
+${detailLines || '(no details available)'}
+
+Write the report directly, without a greeting or closing. Be concrete, honest and motivating; avoid vague generalities and clichés.`;
+
+  const summaryPrompt = lang === 'en' ? summaryPromptEN : summaryPromptNL;
+
   return {
     summaryPrompt,
     topicsLabel,
@@ -2903,12 +2953,13 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
     typeLabel,
     minLines,
     maxLines,
+    lang,
   };
 }
 
 // Roept Groq aan met de gegeven prompt en schrijft de notitie weg in
 // learning_journal_entries. Returnt {journalEntryId, summaryFailed, errorReason}.
-async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qType, maxLines }) {
+async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qType, maxLines, lang = 'nl' }) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     console.warn('[quiz/summary] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
@@ -2946,12 +2997,15 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
   }
 
   const titleTopics = topicsLabel.length > 80 ? `${topicsLabel.slice(0, 77)}...` : topicsLabel;
-  const typePrefix = qType === 'mcq' ? 'Meerkeuzequiz' : qType === 'open' ? 'Open quiz' : 'Casusquiz';
+  const typePrefix = lang === 'en'
+    ? (qType === 'mcq' ? 'MCQ quiz' : qType === 'open' ? 'Open quiz' : 'Case quiz')
+    : (qType === 'mcq' ? 'Meerkeuzequiz' : qType === 'open' ? 'Open quiz' : 'Casusquiz');
+  const reflectionLabel = lang === 'en' ? 'reflection' : 'reflectie';
   const { data: entry, error: journalError } = await supabaseAdmin
     .from('learning_journal_entries')
     .insert({
       user_id: user.id,
-      title: `${typePrefix}-reflectie: ${titleTopics}`,
+      title: `${typePrefix}-${reflectionLabel}: ${titleTopics}`,
       content: summaryContent,
       activity_type: 'quiz_reflection',
     })
@@ -2975,7 +3029,7 @@ app.post('/api/quiz/save-summary', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { topics, difficulty, questionType, questions, answers, scorePercentage } = req.body || {};
+  const { topics, difficulty, questionType, questions, answers, scorePercentage, lang = 'nl' } = req.body || {};
   if (!Array.isArray(questions) || questions.length === 0) {
     return res.status(400).json({ error: 'questions is vereist en mag niet leeg zijn' });
   }
@@ -3019,8 +3073,8 @@ app.post('/api/quiz/save-summary', async (req, res) => {
     const { data: { user }, error: userError } = await callerClient.auth.getUser();
     if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
 
-    const params = buildQuizSummaryParams({ topics, difficulty, questionType, questions, answers, scorePercentage });
-    const result = await generateAndSaveQuizSummary({ user, ...params });
+    const params = buildQuizSummaryParams({ topics, difficulty, questionType, questions, answers, scorePercentage, lang });
+    const result = await generateAndSaveQuizSummary({ user, lang, ...params });
 
     if (result.summaryFailed) {
       return res.status(502).json({
@@ -3046,7 +3100,7 @@ app.post('/api/quiz/archive', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { attemptId, generateSummary = true } = req.body;
+  const { attemptId, generateSummary = true, lang = 'nl' } = req.body;
   if (!attemptId) return res.status(400).json({ error: 'attemptId is vereist' });
 
   try {
@@ -3078,8 +3132,9 @@ app.post('/api/quiz/archive', async (req, res) => {
         questions: row.questions_data,
         answers: row.answers,
         scorePercentage: row.score_percentage,
+        lang,
       });
-      const result = await generateAndSaveQuizSummary({ user, ...params });
+      const result = await generateAndSaveQuizSummary({ user, lang, ...params });
       journalEntryId = result.journalEntryId;
       summaryFailed = result.summaryFailed;
     }
@@ -5099,7 +5154,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       }
       const { matched } = await searchChunksServerSide(
         message, cfg.similarity_threshold, cfg.match_count, folderIds,
-        { enabled: cfg.query_expansion_enabled }
+        { enabled: cfg.query_expansion_enabled }, lang
       );
       if (matched && matched.length > 0) {
         context = matched.map((c, i) => `[Bron ${i + 1}] ${c.content}`).join('\n\n');

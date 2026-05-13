@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
@@ -44,6 +45,7 @@ const RAG_DEFAULTS: RagSettings = {
 };
 
 export function ExplainPage() {
+  const { t, lang } = useLanguage();
   const { profile, signOut } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
   const [concepts, setConcepts] = useState<Concept[]>([]);
@@ -351,7 +353,7 @@ export function ExplainPage() {
         );
       } catch (llmErr) {
         console.error('[EXPLAIN] LLM evaluation failed:', llmErr);
-        setFeedbackError(llmErrorToDutch(llmErr));
+        setFeedbackError(llmErrorToDutch(llmErr, lang));
         // Bewust géén /api/explain/save aanroepen: we willen geen "fout-feedback"
         // versies in de geschiedenis vervuilen.
         return;
@@ -432,8 +434,8 @@ export function ExplainPage() {
         <div className="flex items-center justify-center min-h-[400px]">
           <div className="text-center">
             <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-gray-600 font-medium">Je profiel wordt geladen...</p>
-            <p className="text-sm text-gray-500 mt-2">Een moment geduld</p>
+            <p className="text-gray-600 font-medium">{lang === 'en' ? 'Loading your profile...' : 'Je profiel wordt geladen...'}</p>
+            <p className="text-sm text-gray-500 mt-2">{lang === 'en' ? 'Please wait a moment' : 'Een moment geduld'}</p>
           </div>
         </div>
       </div>
@@ -444,9 +446,9 @@ export function ExplainPage() {
     <div className="max-w-6xl mx-auto space-y-6">
       <NoticeBanner notice={pageNotice} onDismiss={clearPageNotice} />
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Ik Leg Uit</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">{lang === 'en' ? 'I Explain' : 'Ik Leg Uit'}</h1>
         <p className="text-gray-600">
-          Kies een begrip en leg het uit in je eigen woorden. Je krijgt gedetailleerde feedback!
+          {lang === 'en' ? 'Choose a concept and explain it in your own words. You will receive detailed feedback!' : 'Kies een begrip en leg het uit in je eigen woorden. Je krijgt gedetailleerde feedback!'}
         </p>
       </div>
 
@@ -460,7 +462,7 @@ export function ExplainPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
                 type="text"
-                placeholder="Zoek begrip..."
+                placeholder={lang === 'en' ? 'Search concept...' : 'Zoek begrip...'}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
@@ -476,7 +478,7 @@ export function ExplainPage() {
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                Alle
+                {lang === 'en' ? 'All' : 'Alle'}
               </button>
               <button
                 onClick={() => setCategoryFilter('epidemiologie')}
@@ -486,7 +488,7 @@ export function ExplainPage() {
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                Epidemiologie
+                {lang === 'en' ? 'Epidemiology' : 'Epidemiologie'}
               </button>
               <button
                 onClick={() => setCategoryFilter('biostatistiek')}
@@ -496,7 +498,7 @@ export function ExplainPage() {
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                Biostatistiek
+                {lang === 'en' ? 'Biostatistics' : 'Biostatistiek'}
               </button>
             </div>
           </div>
@@ -557,7 +559,7 @@ export function ExplainPage() {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
               <History className="w-5 h-5 text-blue-600" />
-              Eerder uitgelegd
+              {lang === 'en' ? 'Previously explained' : 'Eerder uitgelegd'}
             </h2>
             {history.length > 0 && (
               <span className="text-xs text-gray-500" data-testid="text-history-count">{history.length}</span>
@@ -575,7 +577,7 @@ export function ExplainPage() {
             )}
             {!historyLoading && history.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-4">
-                Nog geen uitleg gegeven. Begin met een begrip uit de lijst.
+                {lang === 'en' ? 'No explanations yet. Start with a concept from the list.' : 'Nog geen uitleg gegeven. Begin met een begrip uit de lijst.'}
               </p>
             )}
             {!historyLoading && history.map((item) => {
@@ -708,7 +710,7 @@ export function ExplainPage() {
                     ) : (
                       <>
                         <Send className="w-5 h-5" />
-                        Verstuur voor feedback
+                        {lang === 'en' ? 'Submit for feedback' : 'Verstuur voor feedback'}
                       </>
                     )}
                   </button>
@@ -724,7 +726,7 @@ export function ExplainPage() {
                     <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
                       <h3 className="text-lg font-semibold text-red-900 mb-1">
-                        Feedback kon niet gegenereerd worden
+                        {lang === 'en' ? 'Feedback could not be generated' : 'Feedback kon niet gegenereerd worden'}
                       </h3>
                       <p className="text-red-800 mb-2" data-testid="text-feedback-error-title">
                         {feedbackError.title}
@@ -743,7 +745,9 @@ export function ExplainPage() {
                         </details>
                       )}
                       <p className="text-xs text-red-700 mb-4">
-                        Je uitleg is <strong>niet</strong> opgeslagen in je geschiedenis. Pas eventueel je uitleg aan en probeer het opnieuw.
+                        {lang === 'en'
+                          ? <>Your explanation was <strong>not</strong> saved. You can adjust it and try again.</>
+                          : <>Je uitleg is <strong>niet</strong> opgeslagen in je geschiedenis. Pas eventueel je uitleg aan en probeer het opnieuw.</>}
                       </p>
                       <button
                         onClick={handleSubmitExplanation}
@@ -752,7 +756,7 @@ export function ExplainPage() {
                         data-testid="button-retry-feedback"
                       >
                         <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                        Probeer opnieuw
+                        {lang === 'en' ? 'Try again' : 'Probeer opnieuw'}
                       </button>
                     </div>
                   </div>

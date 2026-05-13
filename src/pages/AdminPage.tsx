@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -153,6 +154,7 @@ function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deleting
 }
 
 export function AdminPage() {
+  const { t, lang } = useLanguage();
   const { profile, isAdmin, isDocent, session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
   const navigate = useNavigate();
@@ -793,24 +795,24 @@ export function AdminPage() {
   );
 
 const tabs = [
-  { id: 'users' as TabType, label: 'Gebruikers', icon: Users, show: isAdmin },
-  { id: 'documents' as TabType, label: 'Documenten', icon: FolderTree, show: true },
+  { id: 'users' as TabType, label: lang === 'en' ? 'Users' : 'Gebruikers', icon: Users, show: isAdmin },
+  { id: 'documents' as TabType, label: lang === 'en' ? 'Documents' : 'Documenten', icon: FolderTree, show: true },
   { id: 'rag_beheer' as TabType, label: 'RAG Beheer', icon: RefreshCw, show: true },
-  { id: 'concepts' as TabType, label: 'Begrippen', icon: BookOpen, show: true },
+  { id: 'concepts' as TabType, label: lang === 'en' ? 'Concepts' : 'Begrippen', icon: BookOpen, show: true },
   { id: 'quiz_validation' as TabType, label: 'Quiz Validatie', icon: ClipboardCheck, show: true },
   { id: 'sharestats_import' as TabType, label: 'ShareStats Import', icon: Download, show: true },
   { id: 'quiz_sources' as TabType, label: 'Quiz-bronnen', icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'prompts' as TabType, label: 'Chatbot Prompts', icon: MessageSquareText, show: isAdmin || isDocent },
-  { id: 'rag_settings' as TabType, label: 'RAG Instellingen', icon: SlidersHorizontal, show: isAdmin || isDocent },
+  { id: 'rag_settings' as TabType, label: lang === 'en' ? 'RAG Settings' : 'RAG Instellingen', icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'projects_admin' as TabType, label: 'Projecten', icon: FolderTree, show: isAdmin || isDocent },
   { id: 'personas' as TabType, label: "Persona's", icon: MessageSquareText, show: isAdmin || isDocent },
-  { id: 'settings' as TabType, label: 'Instellingen', icon: Settings, show: isAdmin },
+  { id: 'settings' as TabType, label: lang === 'en' ? 'Settings' : 'Instellingen', icon: Settings, show: isAdmin },
 ].filter(tab => tab.show);
 
 const tabGroups = [
-  { label: 'Cursusinhoud', ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
-  { label: 'Leeromgeving', ids: ['prompts', 'quiz_validation', 'quiz_sources', 'projects_admin', 'personas'] },
-  { label: 'Systeem', ids: ['users', 'sharestats_import', 'settings'] },
+  { label: lang === 'en' ? 'Course content' : 'Cursusinhoud', ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
+  { label: lang === 'en' ? 'Learning environment' : 'Leeromgeving', ids: ['prompts', 'quiz_validation', 'quiz_sources', 'projects_admin', 'personas'] },
+  { label: lang === 'en' ? 'System' : 'Systeem', ids: ['users', 'sharestats_import', 'settings'] },
 ].map(g => ({ label: g.label, items: tabs.filter(t => g.ids.includes(t.id)) }))
  .filter(g => g.items.length > 0);
 
@@ -820,9 +822,9 @@ const tabGroups = [
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
           <Settings className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Geen Toegang</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{lang === 'en' ? 'No Access' : 'Geen Toegang'}</h1>
           <p className="text-gray-600">
-            Je hebt geen toegang tot het beheerderspaneel. Neem contact op met de administrator.
+            {lang === 'en' ? 'You do not have access to the admin panel. Please contact the administrator.' : 'Je hebt geen toegang tot het beheerderspaneel. Neem contact op met de administrator.'}
           </p>
         </div>
       </div>
@@ -833,9 +835,11 @@ const tabGroups = [
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Beheer Dashboard</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{lang === 'en' ? 'Admin Dashboard' : 'Beheer Dashboard'}</h1>
           <p className="text-gray-600">
-            {isAdmin ? 'Beheer gebruikers, documenten en systeeminstellingen' : 'Beheer documenten en cursusmateriaal'}
+            {lang === 'en'
+              ? (isAdmin ? 'Manage users, documents and system settings' : 'Manage documents and course material')
+              : (isAdmin ? 'Beheer gebruikers, documenten en systeeminstellingen' : 'Beheer documenten en cursusmateriaal')}
           </p>
           <div className="mt-4">
   <Link
