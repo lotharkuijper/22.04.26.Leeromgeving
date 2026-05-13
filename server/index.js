@@ -5300,6 +5300,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId, threadId } = req.params;
+  const lang = (req.body && req.body.lang) || _getLang();
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -5330,13 +5331,14 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
       .join('\n').slice(0, 12000);
 
     const msgCount = allMsgs.filter(m => m.role === 'user').length;
-    const topicsInstruction = msgCount <= 3
-      ? '2-3 korte onderwerpen'
-      : msgCount <= 8
-        ? '3-5 onderwerpen'
-        : '5-8 onderwerpen';
+    const topicsInstruction = lang === 'en'
+      ? (msgCount <= 3 ? '2-3 short topics' : msgCount <= 8 ? '3-5 topics' : '5-8 topics')
+      : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
 
-    const prompt = `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\nSchrijf in het Nederlands. Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
+    const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
+    const prompt = lang === 'en'
+      ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
+      : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
 
     let topics = [];
     let agreements = [];
@@ -5382,6 +5384,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId, threadId } = req.params;
+  const lang = (req.body && req.body.lang) || _getLang();
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -5410,8 +5413,13 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
         .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
         .join('\n').slice(0, 12000);
       const msgCount = allMsgs.filter(m => m.role === 'user').length;
-      const topicsInstruction = msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen';
-      const prompt = `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\nSchrijf in het Nederlands. Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
+      const topicsInstruction = lang === 'en'
+        ? (msgCount <= 3 ? '2-3 short topics' : msgCount <= 8 ? '3-5 topics' : '5-8 topics')
+        : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
+      const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
+      const prompt = lang === 'en'
+        ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
+        : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
 
       try {
         const groqResp = await fetch(GROQ_API_URL, {
@@ -6029,7 +6037,9 @@ ${reflection}`;
           let summaryText = '';
           if (apiKey2) {
             try {
-              const sumPrompt = `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
+              const sumPrompt = lang === 'en'
+                ? `Summarise the following conversation with "${personaName}" in EXACTLY 4 short lines. Address the student as "you". Line 1: core question. Line 2: key insight. Line 3: open point or misconception. Line 4: next step. No bullet points, no heading, only four sentences on separate lines.\n\nConversation:\n${transcript}`
+                : `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
               const sr = await fetch(GROQ_API_URL, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${apiKey2}`, 'Content-Type': 'application/json' },

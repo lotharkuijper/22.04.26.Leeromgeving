@@ -586,7 +586,8 @@ export function ProjectRoomPage() {
     try {
       const r = await fetch(`/api/projects/groups/${groupId}/threads/${activeThreadId}/close-preview`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lang }),
       });
       const contentType = r.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
@@ -609,7 +610,8 @@ export function ProjectRoomPage() {
     try {
       const r = await fetch(`/api/projects/groups/${groupId}/threads/${activeThreadId}/close`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lang }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Close failed' : 'Afsluiten mislukt'));
