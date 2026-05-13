@@ -90,20 +90,41 @@ const RAG_DEFAULTS: RagSettings = {
   project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
 };
 
-const QUESTION_TYPE_META: Record<QuestionType, { label: string; subtitle: string; icon: typeof ListChecks }> = {
-  mcq:   { label: 'Meerkeuze',   subtitle: '4 opties, directe feedback', icon: ListChecks },
-  open:  { label: 'Open vraag',  subtitle: 'Vrije tekst, AI-beoordeling met percentagescore', icon: PenLine },
-  casus: { label: 'Casus',       subtitle: 'Probleemschets + open antwoord, AI-beoordeling', icon: ClipboardList },
-};
+function getQuestionTypeMeta(lang: string): Record<QuestionType, { label: string; subtitle: string; icon: typeof ListChecks }> {
+  if (lang === 'en') {
+    return {
+      mcq:   { label: 'Multiple choice', subtitle: '4 options, direct feedback', icon: ListChecks },
+      open:  { label: 'Open question',   subtitle: 'Free text, AI evaluation with percentage score', icon: PenLine },
+      casus: { label: 'Case',            subtitle: 'Problem sketch + open answer, AI evaluation', icon: ClipboardList },
+    };
+  }
+  return {
+    mcq:   { label: 'Meerkeuze',   subtitle: '4 opties, directe feedback', icon: ListChecks },
+    open:  { label: 'Open vraag',  subtitle: 'Vrije tekst, AI-beoordeling met percentagescore', icon: PenLine },
+    casus: { label: 'Casus',       subtitle: 'Probleemschets + open antwoord, AI-beoordeling', icon: ClipboardList },
+  };
+}
 
-function difficultyDutch(d: string | null | undefined): string {
+function difficultyLabel(d: string | null | undefined, lang: string): string {
+  if (lang === 'en') {
+    if (d === 'easy') return 'Easy';
+    if (d === 'medium') return 'Medium';
+    if (d === 'hard') return 'Hard';
+    return d || '';
+  }
   if (d === 'easy') return 'Makkelijk';
   if (d === 'medium') return 'Gemiddeld';
   if (d === 'hard') return 'Moeilijk';
   return d || '';
 }
 
-function questionTypeDutch(t: string | null | undefined): string {
+function questionTypeLabel(t: string | null | undefined, lang: string): string {
+  if (lang === 'en') {
+    if (t === 'mcq') return 'Multiple choice';
+    if (t === 'open') return 'Open question';
+    if (t === 'casus') return 'Case';
+    return t || '';
+  }
   if (t === 'mcq') return 'Meerkeuze';
   if (t === 'open') return 'Open vraag';
   if (t === 'casus') return 'Casus';
@@ -126,6 +147,7 @@ function topicsLabelOf(row: QuizAttemptRow): string {
 
 export function QuizPage() {
   const { t, lang } = useLanguage();
+  const QUESTION_TYPE_META = getQuestionTypeMeta(lang);
   const { profile } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
 
@@ -882,7 +904,7 @@ export function QuizPage() {
                     }`}
                     data-testid={`button-difficulty-${level}`}
                   >
-                    {difficultyDutch(level)}
+                    {difficultyLabel(level, lang)}
                   </button>
                 ))}
               </div>
@@ -891,7 +913,7 @@ export function QuizPage() {
             {/* NUM QUESTIONS */}
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Aantal vragen: {numQuestions}
+                {lang === 'en' ? `Number of questions: ${numQuestions}` : `Aantal vragen: ${numQuestions}`}
               </label>
               <input
                 type="range"
@@ -1054,6 +1076,7 @@ export function QuizPage() {
           <ArchiveDialog
             label={archiveDialog.label}
             archiving={archiving}
+            lang={lang}
             onClose={() => !archiving && setArchiveDialog(null)}
             onConfirm={(withSummary) => handleArchive(archiveDialog.id, withSummary)}
           />
@@ -1074,14 +1097,16 @@ export function QuizPage() {
             <Play className="w-8 h-8 text-white" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-1">Quiz klaar!</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">{lang === 'en' ? 'Quiz ready!' : 'Quiz klaar!'}</h1>
             <p className="text-gray-600">
-              {questions.length} {QUESTION_TYPE_META[questionType].label.toLowerCase()}-vragen over <strong>{topicsText}</strong> — {difficultyDutch(difficulty)} niveau
+              {lang === 'en'
+                ? <>{questions.length} {QUESTION_TYPE_META[questionType].label.toLowerCase()} questions about <strong>{topicsText}</strong> — {difficultyLabel(difficulty, lang)} level</>
+                : <>{questions.length} {QUESTION_TYPE_META[questionType].label.toLowerCase()}-vragen over <strong>{topicsText}</strong> — {difficultyLabel(difficulty, lang)} niveau</>}
             </p>
           </div>
           {ragSources.length > 0 && (
             <div className="text-left bg-purple-50 border border-purple-200 rounded-xl p-4">
-              <SourceList sources={ragSources} label="Gebaseerd op cursusmateriaal" />
+              <SourceList sources={ragSources} label={lang === 'en' ? 'Based on course material' : 'Gebaseerd op cursusmateriaal'} />
             </div>
           )}
           {contextStats && contextStats.total > 0 && (contextStats.used < contextStats.total || contextStats.charTrimmed) && (
@@ -1089,9 +1114,13 @@ export function QuizPage() {
               className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-left"
               data-testid="text-quiz-context-stats"
             >
-              {contextStats.used < contextStats.total
-                ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst).`
-                : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
+              {lang === 'en'
+                ? contextStats.used < contextStats.total
+                  ? `Note: ${contextStats.used} of ${contextStats.total} found passages were sent to the language model (highest-scoring first).`
+                  : `Note: all ${contextStats.total} found passages were sent, but the content of one passage was trimmed to keep the prompt within the limit.`
+                : contextStats.used < contextStats.total
+                  ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst).`
+                  : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
             </p>
           )}
           {ragStats && (
@@ -1135,12 +1164,14 @@ export function QuizPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">{selectedTopics.map(t => t.name).join(', ')}</h1>
             <p className="text-gray-600 text-sm">
-              {QUESTION_TYPE_META[questionType].label} — {difficultyDutch(difficulty)} niveau
+              {QUESTION_TYPE_META[questionType].label} — {difficultyLabel(difficulty, lang)} {lang === 'en' ? 'level' : 'niveau'}
             </p>
             {ragSources.length > 0 && (
               <p className="text-xs text-purple-700 mt-1 flex items-center gap-1">
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500" />
-                Gebaseerd op {ragSources.length} bron{ragSources.length !== 1 ? 'nen' : ''} uit cursusmateriaal
+                {lang === 'en'
+                  ? `Based on ${ragSources.length} source${ragSources.length !== 1 ? 's' : ''} from course material`
+                  : `Gebaseerd op ${ragSources.length} bron${ragSources.length !== 1 ? 'nen' : ''} uit cursusmateriaal`}
               </p>
             )}
             {ragStats && (
@@ -1161,7 +1192,7 @@ export function QuizPage() {
               {currentQuestion + 1} / {questions.length}
             </div>
             <div className="text-sm text-gray-600">
-              {answers.filter(a => (a.type === 'mcq' && a.selectedIndex !== -1) || (a.type !== 'mcq' && a.evaluation)).length} beantwoord
+              {answers.filter(a => (a.type === 'mcq' && a.selectedIndex !== -1) || (a.type !== 'mcq' && a.evaluation)).length} {lang === 'en' ? 'answered' : 'beantwoord'}
             </div>
           </div>
         </div>
@@ -1594,7 +1625,7 @@ function ResultsList({
       {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</p>}
 
       {!loading && !error && attempts.length === 0 && (
-        <p className="text-sm text-gray-500">Je hebt nog geen quizzes afgerond. Start hierboven je eerste quiz.</p>
+        <p className="text-sm text-gray-500">{lang === 'en' ? 'You haven\'t completed any quizzes yet. Start your first quiz above.' : 'Je hebt nog geen quizzes afgerond. Start hierboven je eerste quiz.'}</p>
       )}
 
       {!loading && !error && attempts.length > 0 && (
@@ -1620,11 +1651,11 @@ function ResultsList({
                       <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
                         <Calendar className="w-3 h-3" /> {formatDateTime(row.created_at)}
                         <span>•</span>
-                        <span>{questionTypeDutch(row.question_type)}</span>
+                        <span>{questionTypeLabel(row.question_type, lang)}</span>
                         <span>•</span>
-                        <span>{difficultyDutch(row.difficulty)}</span>
+                        <span>{difficultyLabel(row.difficulty, lang)}</span>
                         <span>•</span>
-                        <span>{row.total_questions || 0} vragen</span>
+                        <span>{row.total_questions || 0} {lang === 'en' ? 'questions' : 'vragen'}</span>
                       </div>
                     </div>
                     {expanded ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
@@ -1632,7 +1663,7 @@ function ResultsList({
                   <button
                     onClick={() => onAskDelete(row)}
                     className="p-2 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50"
-                    title="Verwijder en eventueel notitie in leerdagboek opslaan"
+                    title={lang === 'en' ? 'Delete and optionally save note to learning journal' : 'Verwijder en eventueel notitie in leerdagboek opslaan'}
                     data-testid={`button-delete-attempt-${row.id}`}
                   >
                     <Trash2 className="w-4 h-4" />
@@ -1650,7 +1681,7 @@ function ResultsList({
                       />
                     ))}
                     {(!row.questions_data || row.questions_data.length === 0) && (
-                      <p className="text-sm text-gray-500">Geen detailgegevens beschikbaar voor deze quiz.</p>
+                      <p className="text-sm text-gray-500">{lang === 'en' ? 'No detail data available for this quiz.' : 'Geen detailgegevens beschikbaar voor deze quiz.'}</p>
                     )}
                   </div>
                 )}
@@ -1664,10 +1695,11 @@ function ResultsList({
 }
 
 function ArchiveDialog({
-  label, archiving, onClose, onConfirm,
+  label, archiving, lang, onClose, onConfirm,
 }: {
   label: string;
   archiving: boolean;
+  lang: string;
   onClose: () => void;
   onConfirm: (withSummary: boolean) => void;
 }) {
@@ -1678,7 +1710,7 @@ function ArchiveDialog({
           <div className="p-2 bg-green-100 rounded-xl">
             <BookText className="w-5 h-5 text-green-700" />
           </div>
-          <h2 className="text-lg font-semibold text-gray-900">Verplaats naar leerdagboek</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{lang === 'en' ? 'Move to learning journal' : 'Verplaats naar leerdagboek'}</h2>
           <button
             onClick={onClose}
             className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
@@ -1690,11 +1722,14 @@ function ArchiveDialog({
         </div>
 
         <p className="text-sm text-gray-600 mb-2">
-          Je staat op het punt de quiz <strong>"{label}"</strong> te verwijderen.
+          {lang === 'en'
+            ? <span>You are about to delete the quiz <strong>"{label}"</strong>.</span>
+            : <span>Je staat op het punt de quiz <strong>"{label}"</strong> te verwijderen.</span>}
         </p>
         <p className="text-sm text-gray-600 mb-6">
-          Wil je dat de leerassistent eerst een formatieve samenvatting van deze quiz opslaat in je leerdagboek?
-          Die samenvatting bevat jouw resultaten, feedback en feed forward, en kun je later teruglezen om op te reflecteren.
+          {lang === 'en'
+            ? 'Would you like the learning assistant to first save a formative summary of this quiz to your learning journal? That summary includes your results, feedback and feed forward, which you can revisit later for reflection.'
+            : 'Wil je dat de leerassistent eerst een formatieve samenvatting van deze quiz opslaat in je leerdagboek? Die samenvatting bevat jouw resultaten, feedback en feed forward, en kun je later teruglezen om op te reflecteren.'}
         </p>
 
         <div className="flex flex-col gap-3">
@@ -1705,7 +1740,7 @@ function ArchiveDialog({
             className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
-            Samenvatting opslaan en quiz verwijderen
+            {lang === 'en' ? 'Save summary and delete quiz' : 'Samenvatting opslaan en quiz verwijderen'}
           </button>
 
           <button
@@ -1714,7 +1749,7 @@ function ArchiveDialog({
             disabled={archiving}
             className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Alleen verwijderen (geen dagboekvermelding)
+            {lang === 'en' ? 'Delete only (no journal entry)' : 'Alleen verwijderen (geen dagboekvermelding)'}
           </button>
 
           <button

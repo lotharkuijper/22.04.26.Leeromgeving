@@ -454,7 +454,7 @@ export function AdminPage() {
           setCoursesWithOverrides(prev => new Set([...prev, ragSelectedCourseId]));
         }
       } else {
-        setRagSettingsMsg({ type: 'error', text: data.error || 'Opslaan mislukt.' });
+        setRagSettingsMsg({ type: 'error', text: data.error || (lang === 'en' ? 'Save failed.' : 'Opslaan mislukt.') });
       }
     } catch (err: any) {
       setRagSettingsMsg({ type: 'error', text: err.message });
@@ -888,7 +888,7 @@ const tabGroups = [
               setAutoBackfillBannerDismissed(true);
             }}
             className="text-amber-500 hover:text-amber-700 transition-colors flex-shrink-0"
-            title="Sluiten"
+            title={lang === 'en' ? 'Close' : 'Sluiten'}
             data-testid="button-dismiss-backfill-banner"
           >
             <XCircle className="w-4 h-4" />
@@ -954,9 +954,9 @@ const tabGroups = [
               )}
               {roleConfirm && (
                 <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm">
-                  <span className="text-amber-800">Rol wijzigen naar <strong>{roleConfirm.newRole}</strong>?</span>
-                  <button onClick={confirmRoleChange} className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-medium">Bevestigen</button>
-                  <button onClick={() => setRoleConfirm(null)} className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium">Annuleren</button>
+                  <span className="text-amber-800">{lang === 'en' ? <>Change role to <strong>{roleConfirm.newRole}</strong>?</> : <>Rol wijzigen naar <strong>{roleConfirm.newRole}</strong>?</>}</span>
+                  <button onClick={confirmRoleChange} className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-medium">{lang === 'en' ? 'Confirm' : 'Bevestigen'}</button>
+                  <button onClick={() => setRoleConfirm(null)} className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium">{lang === 'en' ? 'Cancel' : 'Annuleren'}</button>
                 </div>
               )}
               <div className="flex items-center gap-4">
@@ -964,7 +964,7 @@ const tabGroups = [
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="text"
-                    placeholder="Zoek gebruikers op naam of email..."
+                    placeholder={lang === 'en' ? 'Search users by name or email...' : 'Zoek gebruikers op naam of email...'}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
@@ -976,10 +976,10 @@ const tabGroups = [
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-gray-200">
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Naam</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{lang === 'en' ? 'Name' : 'Naam'}</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">Email</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Rol</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Acties</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{lang === 'en' ? 'Role' : 'Rol'}</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{lang === 'en' ? 'Actions' : 'Acties'}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1007,7 +1007,7 @@ const tabGroups = [
                                   disabled={loading}
                                   className="px-3 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors disabled:opacity-50"
                                 >
-                                  → Docent
+                                  {lang === 'en' ? '→ Lecturer' : '→ Docent'}
                                 </button>
                               )}
                               {user.role !== 'student' && (
@@ -1016,7 +1016,7 @@ const tabGroups = [
                                   disabled={loading}
                                   className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors disabled:opacity-50"
                                 >
-                                  → Student
+                                  {lang === 'en' ? '→ Student' : '→ Student'}
                                 </button>
                               )}
                             </div>
@@ -1047,11 +1047,11 @@ const tabGroups = [
         <div className="flex items-start gap-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
           <span>
-            <strong>Documenten gewijzigd</strong> — overweeg de begrippenlijst te hergenereren.{' '}
+            <strong>{lang === 'en' ? 'Documents changed' : 'Documenten gewijzigd'}</strong> — {lang === 'en' ? 'consider regenerating the concept list.' : 'overweeg de begrippenlijst te hergenereren.'}{' '}
             {conceptsMeta.lastDocumentChange && (
               <span className="text-amber-700">
-                Laatste documentwijziging:{' '}
-                {new Date(conceptsMeta.lastDocumentChange).toLocaleString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                {lang === 'en' ? 'Last document change:' : 'Laatste documentwijziging:'}{' '}
+                {new Date(conceptsMeta.lastDocumentChange).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
           </span>
@@ -1065,12 +1065,12 @@ const tabGroups = [
           {regeneratingConcepts ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Bezig…
+              {lang === 'en' ? 'Working…' : 'Bezig…'}
             </>
           ) : (
             <>
               <RefreshCw className="w-3.5 h-3.5" />
-              Hergenereer nu
+              {lang === 'en' ? 'Regenerate now' : 'Hergenereer nu'}
             </>
           )}
         </button>
@@ -1129,12 +1129,12 @@ const tabGroups = [
                       {regeneratingConcepts ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          Bezig…
+                          {lang === 'en' ? 'Working…' : 'Bezig…'}
                         </>
                       ) : (
                         <>
                           <RefreshCw className="w-4 h-4" />
-                          Hergenereer begrippenlijst
+                          {lang === 'en' ? 'Regenerate concept list' : 'Hergenereer begrippenlijst'}
                         </>
                       )}
                     </button>
@@ -1159,11 +1159,11 @@ const tabGroups = [
                   <div className="flex items-start gap-2 text-sm text-amber-800">
                     <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
                     <span>
-                      <strong>Documenten gewijzigd</strong> — overweeg de begrippenlijst te hergenereren.{' '}
+                      <strong>{lang === 'en' ? 'Documents changed' : 'Documenten gewijzigd'}</strong> — {lang === 'en' ? 'consider regenerating the concept list.' : 'overweeg de begrippenlijst te hergenereren.'}{' '}
                       {conceptsMeta.lastDocumentChange && (
                         <span className="text-amber-700">
-                          Laatste documentwijziging:{' '}
-                          {new Date(conceptsMeta.lastDocumentChange).toLocaleString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          {lang === 'en' ? 'Last document change:' : 'Laatste documentwijziging:'}{' '}
+                          {new Date(conceptsMeta.lastDocumentChange).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </span>
                       )}
                     </span>
@@ -1177,12 +1177,12 @@ const tabGroups = [
                     {regeneratingConcepts ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Bezig…
+                        {lang === 'en' ? 'Working…' : 'Bezig…'}
                       </>
                     ) : (
                       <>
                         <RefreshCw className="w-3.5 h-3.5" />
-                        Hergenereer nu
+                        {lang === 'en' ? 'Regenerate now' : 'Hergenereer nu'}
                       </>
                     )}
                   </button>
@@ -1257,13 +1257,13 @@ const tabGroups = [
                       className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 text-sm"
                       data-testid="button-save-concept"
                     >
-                      {addConceptLoading ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Opslaan'}
+                      {addConceptLoading ? <Loader2 className="w-4 h-4 animate-spin inline" /> : (lang === 'en' ? 'Save' : 'Opslaan')}
                     </button>
                     <button
                       onClick={() => { setAddConceptForm(false); setAddConceptError(null); }}
                       className="px-4 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all text-sm"
                     >
-                      Annuleren
+                      {lang === 'en' ? 'Cancel' : 'Annuleren'}
                     </button>
                   </div>
                 </div>
@@ -1275,7 +1275,7 @@ const tabGroups = [
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-sm text-gray-700">
-                  <strong>Tip:</strong> Gebruik de "RAG Beheer" tab om begrippen automatisch te extracteren uit cursusmateriaal.
+                  <strong>Tip:</strong> {lang === 'en' ? 'Use the "RAG Management" tab to automatically extract concepts from course material.' : 'Gebruik de "RAG Beheer" tab om begrippen automatisch te extracteren uit cursusmateriaal.'}
                 </p>
               </div>
 
@@ -1320,13 +1320,13 @@ const tabGroups = [
                             data-testid="button-confirm-bulk-delete"
                           >
                             {bulkDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                            Ja, verwijder
+                            {lang === 'en' ? 'Yes, delete' : 'Ja, verwijder'}
                           </button>
                           <button
                             onClick={() => setBulkDeleteConfirm(false)}
                             className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
                           >
-                            Annuleren
+                            {lang === 'en' ? 'Cancel' : 'Annuleren'}
                           </button>
                         </div>
                       ) : (
@@ -1337,7 +1337,7 @@ const tabGroups = [
                           data-testid="button-bulk-delete"
                         >
                           <Trash2 className="w-3 h-3" />
-                          Verwijder geselecteerde ({selectedConceptIds.size})
+                          {lang === 'en' ? `Delete selected (${selectedConceptIds.size})` : `Verwijder geselecteerde (${selectedConceptIds.size})`}
                         </button>
                       )
                     )}
@@ -1496,14 +1496,14 @@ const tabGroups = [
                       className="px-6 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-sm disabled:opacity-50"
                       data-testid="button-save-prompt"
                     >
-                      {loading ? 'Opslaan...' : 'Opslaan'}
+                      {loading ? (lang === 'en' ? 'Saving...' : 'Opslaan...') : (lang === 'en' ? 'Save' : 'Opslaan')}
                     </button>
                     <button
                       onClick={() => { setEditingPrompt(null); setPromptContent(''); setEditingPromptName(''); }}
                       className="px-6 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all"
                       data-testid="button-cancel-prompt"
                     >
-                      Annuleren
+                      {lang === 'en' ? 'Cancel' : 'Annuleren'}
                     </button>
                   </div>
                 </div>
@@ -1626,14 +1626,14 @@ const tabGroups = [
                             className="px-4 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
                             data-testid="button-create-project-prompt"
                           >
-                            {loading ? 'Aanmaken...' : 'Aanmaken'}
+                            {loading ? (lang === 'en' ? 'Creating...' : 'Aanmaken...') : (lang === 'en' ? 'Create' : 'Aanmaken')}
                           </button>
                           <button
                             onClick={() => { setShowNewProjectForm(false); setNewProjectName(''); setNewProjectContent(''); }}
                             className="px-4 py-1.5 text-sm bg-white text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                             data-testid="button-cancel-new-project"
                           >
-                            Annuleren
+                            {lang === 'en' ? 'Cancel' : 'Annuleren'}
                           </button>
                         </div>
                       </div>
@@ -1780,12 +1780,12 @@ const tabGroups = [
                   <div>
                     <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-purple-600" />
-                      Begrippenextractie
+                      {lang === 'en' ? 'Concept extraction' : 'Begrippenextractie'}
                     </h3>
                     <p className="text-xs text-gray-600 mt-1 max-w-2xl">
-                      Wanneer de AI de begrippenlijst hergenereert, wordt elk kandidaat-begrip
-                      gecontroleerd tegen het cursusmateriaal. Begrippen zonder voldoende bewijs
-                      worden afgewezen. Strikter = minder maar relevantere begrippen.
+                      {lang === 'en'
+                        ? 'When the AI regenerates the concept list, each candidate concept is verified against the course material. Concepts without sufficient evidence are rejected. Stricter = fewer but more relevant concepts.'
+                        : 'Wanneer de AI de begrippenlijst hergenereert, wordt elk kandidaat-begrip gecontroleerd tegen het cursusmateriaal. Begrippen zonder voldoende bewijs worden afgewezen. Strikter = minder maar relevantere begrippen.'}
                     </p>
                   </div>
                 </div>
@@ -1793,11 +1793,12 @@ const tabGroups = [
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Verificatie-drempel (<span className="font-mono">{ragSettingsState.extraction.similarity_threshold.toFixed(2)}</span>)
+                      {lang === 'en' ? 'Verification threshold' : 'Verificatie-drempel'} (<span className="font-mono">{ragSettingsState.extraction.similarity_threshold.toFixed(2)}</span>)
                     </label>
                     <p className="text-xs text-gray-500 mb-2">
-                      Minimale overeenkomst per kandidaat-begrip. Tip: bij text-embedding-3-small
-                      scoren goede matches typisch tussen 0.45 en 0.65.
+                      {lang === 'en'
+                        ? 'Minimum similarity per candidate concept. Tip: with text-embedding-3-small, good matches typically score between 0.45 and 0.65.'
+                        : 'Minimale overeenkomst per kandidaat-begrip. Tip: bij text-embedding-3-small scoren goede matches typisch tussen 0.45 en 0.65.'}
                     </p>
                     <input
                       type="range"
@@ -1914,13 +1915,11 @@ const tabGroups = [
 
                     {mod === 'explain' && (
                       <div className="border-t border-gray-200 pt-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Zoekquery verrijken</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Enrich search query' : 'Zoekquery verrijken'}</label>
                         <p className="text-xs text-gray-500 mb-3 max-w-2xl">
-                          Vult korte begripsnamen aan met Nederlandse synoniemen, key_points en de definition
-                          voordat het embedding-model wordt aangeroepen. Verhelpt dat text-embedding-3-small voor
-                          losse vaktermen (zoals &ldquo;cohort&rdquo;) anders lage similarity-scores oplevert.
-                          Alleen actief voor &ldquo;Begrippen uitleggen&rdquo;; chat/quiz/project gebruiken eigen
-                          context-rijke queries en hebben deze verrijking niet nodig.
+                          {lang === 'en'
+                            ? 'Expands short concept names with synonyms, key_points and the definition before the embedding model is called. Prevents text-embedding-3-small from returning low similarity scores for isolated terms (e.g. "cohort"). Only active for "Explain concepts"; chat/quiz/project use their own context-rich queries and do not need this enrichment.'
+                            : 'Vult korte begripsnamen aan met Nederlandse synoniemen, key_points en de definition voordat het embedding-model wordt aangeroepen. Verhelpt dat text-embedding-3-small voor losse vaktermen (zoals \u201ccohort\u201d) anders lage similarity-scores oplevert. Alleen actief voor \u201cBegrippen uitleggen\u201d; chat/quiz/project gebruiken eigen context-rijke queries en hebben deze verrijking niet nodig.'}
                         </p>
                         <button
                           onClick={() => updateRagModule(mod, 'query_expansion_enabled', !s.query_expansion_enabled)}
@@ -1944,7 +1943,7 @@ const tabGroups = [
                   data-testid="button-save-rag-settings"
                 >
                   {ragSettingsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  {ragSettingsSaving ? 'Opslaan...' : 'Opslaan'}
+                  {ragSettingsSaving ? (lang === 'en' ? 'Saving...' : 'Opslaan...') : (lang === 'en' ? 'Save' : 'Opslaan')}
                 </button>
                 <button
                   onClick={loadRagSettingsAdmin}
@@ -1953,7 +1952,7 @@ const tabGroups = [
                   data-testid="button-reset-rag-settings"
                 >
                   <RefreshCw className="w-4 h-4" />
-                  Herladen
+                  {lang === 'en' ? 'Reload' : 'Herladen'}
                 </button>
               </div>
 
