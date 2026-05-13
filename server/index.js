@@ -5209,8 +5209,9 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
       .eq('thread_id', threadId)
       .order('created_at', { ascending: true });
     const allMsgs = msgs || [];
+    // Te weinig berichten: lege neerslag teruggeven zodat afsluiten altijd werkt.
     if (allMsgs.length < 2) {
-      return res.status(400).json({ error: 'Het gesprek is te kort om samen te vatten (minimaal 2 berichten).' });
+      return res.json({ topics: [], agreements: [] });
     }
 
     const apiKey = process.env.GROQ_API_KEY;
@@ -5291,10 +5292,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
       .eq('thread_id', threadId)
       .order('created_at', { ascending: true });
     const allMsgs = msgs || [];
-    if (allMsgs.length < 2) {
-      return res.status(400).json({ error: 'Het gesprek is te kort om samen te vatten (minimaal 2 berichten).' });
-    }
-
+    // Te weinig berichten: sla de LLM-samenvatting over; sla direct op met lege neerslag.
     let topics = [];
     let agreements = [];
 

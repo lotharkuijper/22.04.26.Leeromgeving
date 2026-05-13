@@ -570,6 +570,10 @@ export function ProjectRoomPage() {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
+      const contentType = r.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(`Server-fout (${r.status}): onverwachte response. Probeer het opnieuw.`);
+      }
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Preview ophalen mislukt');
       setClosePreviewData({ topics: d.topics || [], agreements: d.agreements || [] });
@@ -811,7 +815,7 @@ export function ProjectRoomPage() {
                 </button>
                 <button
                   onClick={openCloseModal}
-                  disabled={personaMessages.length < 2 || !activeThreadId || personaLoading || isFinalized}
+                  disabled={!activeThreadId || personaLoading || isFinalized}
                   className="px-4 py-2 border border-gray-200 text-gray-400 hover:bg-red-50 hover:border-red-200 hover:text-red-500 rounded-lg disabled:opacity-30 transition-colors"
                   title="Gesprek afsluiten en neerslag opslaan"
                   data-testid="button-close-conversation"
