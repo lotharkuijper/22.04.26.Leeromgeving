@@ -117,13 +117,13 @@ export function ConceptReviewPanel() {
       <NoticeBanner notice={notice} onDismiss={clearNotice} />
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <h3 className="font-semibold text-gray-900 mb-3">Begrippen Extractie</h3>
+        <h3 className="font-semibold text-gray-900 mb-3">{lang === 'en' ? 'Concept Extraction' : 'Begrippen Extractie'}</h3>
 
         <div className="space-y-3">
           <div className="flex items-end gap-3">
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Document selecteren
+                {lang === 'en' ? 'Select document' : 'Document selecteren'}
               </label>
               <select
                 value={selectedDocument || ''}
@@ -132,7 +132,7 @@ export function ConceptReviewPanel() {
                 disabled={extracting}
                 data-testid="select-extract-document"
               >
-                <option value="">Kies een document...</option>
+                <option value="">{lang === 'en' ? 'Choose a document...' : 'Kies een document...'}</option>
                 {documents.map((doc) => (
                   <option key={doc.id} value={doc.id}>
                     {doc.title} ({doc.total_chunks} chunks)
@@ -147,7 +147,7 @@ export function ConceptReviewPanel() {
               data-testid="button-extract-document"
             >
               <FileText className="w-4 h-4" />
-              Extracteer
+              {lang === 'en' ? 'Extract' : 'Extracteer'}
             </button>
           </div>
 
@@ -157,7 +157,7 @@ export function ConceptReviewPanel() {
             className="w-full px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="button-extract-all"
           >
-            Extracteer Begrippen uit Alle Documenten
+            {lang === 'en' ? 'Extract Concepts from All Documents' : 'Extracteer Begrippen uit Alle Documenten'}
           </button>
         </div>
 
@@ -175,7 +175,7 @@ export function ConceptReviewPanel() {
             </div>
             {extractionProgress.conceptsFound !== undefined && (
               <p className="text-sm text-gray-600 mt-2">
-                {extractionProgress.conceptsFound} begrippen gevonden
+                {lang === 'en' ? `${extractionProgress.conceptsFound} concepts found` : `${extractionProgress.conceptsFound} begrippen gevonden`}
               </p>
             )}
           </div>
@@ -184,7 +184,7 @@ export function ConceptReviewPanel() {
 
       <div>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
-          Te Reviewen Begrippen ({concepts.length})
+          {lang === 'en' ? `Concepts to Review (${concepts.length})` : `Te Reviewen Begrippen (${concepts.length})`}
         </h3>
 
         {loading && (
@@ -196,7 +196,7 @@ export function ConceptReviewPanel() {
         {!loading && concepts.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             <Eye className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-            <p>Geen begrippen te reviewen</p>
+            <p>{lang === 'en' ? 'No concepts to review' : 'Geen begrippen te reviewen'}</p>
           </div>
         )}
 
@@ -223,7 +223,7 @@ export function ConceptReviewPanel() {
 
                   {concept.key_points && concept.key_points.length > 0 && (
                     <div className="mt-2">
-                      <p className="text-xs font-medium text-gray-700 mb-1">Kernpunten:</p>
+                      <p className="text-xs font-medium text-gray-700 mb-1">{lang === 'en' ? 'Key points:' : 'Kernpunten:'}</p>
                       <ul className="list-disc list-inside space-y-1">
                         {concept.key_points.map((point: string, idx: number) => (
                           <li key={idx} className="text-xs text-gray-600">{point}</li>
@@ -234,7 +234,7 @@ export function ConceptReviewPanel() {
 
                   {concept.examples && concept.examples.length > 0 && (
                     <div className="mt-2">
-                      <p className="text-xs font-medium text-gray-700 mb-1">Voorbeelden:</p>
+                      <p className="text-xs font-medium text-gray-700 mb-1">{lang === 'en' ? 'Examples:' : 'Voorbeelden:'}</p>
                       <ul className="list-disc list-inside space-y-1">
                         {concept.examples.map((example: string, idx: number) => (
                           <li key={idx} className="text-xs text-gray-600">{example}</li>
@@ -244,7 +244,7 @@ export function ConceptReviewPanel() {
                   )}
 
                   <p className="text-xs text-gray-500 mt-2">
-                    Geëxtraheerd: {new Date(concept.extracted_at).toLocaleString('nl-NL')}
+                    {lang === 'en' ? 'Extracted' : 'Geëxtraheerd'}: {new Date(concept.extracted_at).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL')}
                   </p>
                 </div>
 
@@ -252,7 +252,7 @@ export function ConceptReviewPanel() {
                   <button
                     onClick={() => handleApprove(concept.id)}
                     className="p-2 text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors"
-                    title="Goedkeuren"
+                    title={lang === 'en' ? 'Approve' : 'Goedkeuren'}
                     data-testid={`button-approve-concept-${concept.id}`}
                   >
                     <CheckCircle className="w-5 h-5" />
@@ -260,7 +260,7 @@ export function ConceptReviewPanel() {
                   <button
                     onClick={() => handleReject(concept.id)}
                     className="p-2 text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
-                    title="Afwijzen"
+                    title={lang === 'en' ? 'Reject' : 'Afwijzen'}
                     data-testid={`button-reject-concept-${concept.id}`}
                   >
                     <XCircle className="w-5 h-5" />
@@ -274,9 +274,9 @@ export function ConceptReviewPanel() {
 
       <ConfirmDialog
         open={confirmExtractAll}
-        title="Begrippen extraheren uit alle documenten?"
-        description="Begrippen-extractie uit alle documenten kan lang duren. Wil je doorgaan?"
-        confirmLabel="Doorgaan"
+        title={lang === 'en' ? 'Extract concepts from all documents?' : 'Begrippen extraheren uit alle documenten?'}
+        description={lang === 'en' ? 'Extracting concepts from all documents may take a while. Do you want to continue?' : 'Begrippen-extractie uit alle documenten kan lang duren. Wil je doorgaan?'}
+        confirmLabel={lang === 'en' ? 'Continue' : 'Doorgaan'}
         onConfirm={() => { void runExtractFromAll(); }}
         onCancel={() => setConfirmExtractAll(false)}
       />

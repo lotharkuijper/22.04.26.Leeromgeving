@@ -76,12 +76,12 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
     e.preventDefault();
 
     if (files.length === 0 || !user) {
-      setError('Selecteer minstens één bestand');
+      setError(lang === 'en' ? 'Select at least one file' : 'Selecteer minstens één bestand');
       return;
     }
 
     if (!folderId) {
-      setError('Geen folder geselecteerd. Kies een folder om documenten te uploaden.');
+      setError(lang === 'en' ? 'No folder selected. Choose a folder to upload documents to.' : 'Geen folder geselecteerd. Kies een folder om documenten te uploaden.');
       return;
     }
 
@@ -125,7 +125,7 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
           <div className="space-y-4">
             <div>
               <div className="text-sm text-gray-600 mb-2">
-                Bestand {currentFileProgress.fileIndex + 1} van {currentFileProgress.totalFiles}
+                {lang === 'en' ? `File ${currentFileProgress.fileIndex + 1} of ${currentFileProgress.totalFiles}` : `Bestand ${currentFileProgress.fileIndex + 1} van ${currentFileProgress.totalFiles}`}
               </div>
               <div className="font-medium mb-1">{currentFileProgress.fileName}</div>
               <div className="flex justify-between text-sm mb-2">
@@ -142,8 +142,9 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
 
             {currentFileProgress.progress.totalChunks && (
               <div className="text-sm text-gray-600">
-                {currentFileProgress.progress.currentChunk} van {currentFileProgress.progress.totalChunks} chunks
-                verwerkt
+                {lang === 'en'
+                  ? `${currentFileProgress.progress.currentChunk} of ${currentFileProgress.progress.totalChunks} chunks processed`
+                  : `${currentFileProgress.progress.currentChunk} van ${currentFileProgress.progress.totalChunks} chunks verwerkt`}
               </div>
             )}
 
@@ -162,7 +163,7 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-6 border-b sticky top-0 bg-white">
-          <h2 className="text-xl font-semibold">Document(en) Uploaden</h2>
+          <h2 className="text-xl font-semibold">{lang === 'en' ? 'Upload Document(s)' : 'Document(en) Uploaden'}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <X className="w-5 h-5" />
           </button>
@@ -190,10 +191,10 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
             <div className="space-y-2">
               <Upload className="w-12 h-12 text-gray-400 mx-auto" />
               <p className="text-gray-600">
-                Sleep bestanden hierheen of klik om te selecteren
+                {lang === 'en' ? 'Drag files here or click to select' : 'Sleep bestanden hierheen of klik om te selecteren'}
               </p>
-              <p className="text-sm text-gray-500">PDF of DOCX, max 20MB per bestand</p>
-              <p className="text-sm font-medium text-blue-600">Meerdere bestanden toegestaan</p>
+              <p className="text-sm text-gray-500">{lang === 'en' ? 'PDF or DOCX, max 20MB per file' : 'PDF of DOCX, max 20MB per bestand'}</p>
+              <p className="text-sm font-medium text-blue-600">{lang === 'en' ? 'Multiple files allowed' : 'Meerdere bestanden toegestaan'}</p>
             </div>
           </div>
 
@@ -232,7 +233,7 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
               onClick={onClose}
               className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
             >
-              Annuleren
+              {lang === 'en' ? 'Cancel' : 'Annuleren'}
             </button>
             <button
               type="submit"
