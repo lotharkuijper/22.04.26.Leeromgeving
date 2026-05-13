@@ -5300,7 +5300,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId, threadId } = req.params;
-  const lang = (req.body && req.body.lang) || _getLang();
+  const lang = req.body?.lang === 'en' ? 'en' : 'nl';
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -5384,7 +5384,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId, threadId } = req.params;
-  const lang = (req.body && req.body.lang) || _getLang();
+  const lang = req.body?.lang === 'en' ? 'en' : 'nl';
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
