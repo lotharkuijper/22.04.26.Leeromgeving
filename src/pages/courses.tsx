@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient"; // laat me weten als dit pad anders is
+import { supabase } from "@/lib/supabaseClient";
+import { useLanguage } from "../i18n";
 
 type Course = {
   id: string;
@@ -10,6 +11,7 @@ type Course = {
 };
 
 export default function CoursesAdminPage() {
+  const { lang } = useLanguage();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -53,13 +55,13 @@ export default function CoursesAdminPage() {
   return (
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 24, fontWeight: "bold", marginBottom: 16 }}>
-        Cursusbeheer
+        {lang === 'en' ? 'Course management' : 'Cursusbeheer'}
       </h1>
 
-      {loading && <div>Bezig met laden…</div>}
+      {loading && <div>{lang === 'en' ? 'Loading…' : 'Bezig met laden…'}</div>}
 
       {!loading && courses.length === 0 && (
-        <div>Geen cursussen gevonden.</div>
+        <div>{lang === 'en' ? 'No courses found.' : 'Geen cursussen gevonden.'}</div>
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -81,7 +83,7 @@ export default function CoursesAdminPage() {
                 Slug: {course.slug}
               </div>
               <div style={{ fontSize: 12, color: "#aaa" }}>
-                Laatst bijgewerkt: {course.updated_at ?? "—"}
+                {lang === 'en' ? 'Last updated' : 'Laatst bijgewerkt'}: {course.updated_at ?? "—"}
               </div>
             </div>
 
@@ -91,7 +93,7 @@ export default function CoursesAdminPage() {
                 checked={course.active}
                 onChange={() => toggleActive(course)}
               />
-              Actief
+              {lang === 'en' ? 'Active' : 'Actief'}
             </label>
           </div>
         ))}

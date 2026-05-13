@@ -476,7 +476,7 @@ export function AdminPage() {
       const data = await res.json();
       if (res.ok) {
         setCoursesWithOverrides(prev => { const next = new Set(prev); next.delete(courseId); return next; });
-        setRagSettingsMsg({ type: 'success', text: 'Cursus-override verwijderd. Globale standaard wordt nu gebruikt.' });
+        setRagSettingsMsg({ type: 'success', text: lang === 'en' ? 'Course override removed. Global default is now used.' : 'Cursus-override verwijderd. Globale standaard wordt nu gebruikt.' });
         loadRagSettingsAdmin();
       } else {
         setRagSettingsMsg({ type: 'error', text: data.error || (lang === 'en' ? 'Delete failed.' : 'Verwijderen mislukt.') });
@@ -554,7 +554,7 @@ export function AdminPage() {
       console.error('Error updating role:', error);
       setRoleMsg({ type: 'error', text: (lang === 'en' ? 'Error changing role: ' : 'Fout bij wijzigen van rol: ') + error.message });
     } else {
-      setRoleMsg({ type: 'success', text: 'Rol succesvol gewijzigd.' });
+      setRoleMsg({ type: 'success', text: lang === 'en' ? 'Role changed successfully.' : 'Rol succesvol gewijzigd.' });
       loadUsers();
     }
     setLoading(false);
@@ -686,7 +686,7 @@ export function AdminPage() {
     );
     const failed = results.filter(r => r.status === 'rejected').length;
     if (failed > 0) {
-      setBulkDeleteError(`${failed} van de ${ids.length} begrippen konden niet worden verwijderd.`);
+      setBulkDeleteError(lang === 'en' ? `${failed} of ${ids.length} concepts could not be deleted.` : `${failed} van de ${ids.length} begrippen konden niet worden verwijderd.`);
     }
     setSelectedConceptIds(new Set());
     setBulkDeleting(false);
@@ -716,7 +716,7 @@ export function AdminPage() {
       console.error('Error updating prompt:', error);
       setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error saving: ' : 'Fout bij opslaan: ') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: 'Prompt succesvol bijgewerkt.' });
+      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Prompt updated successfully.' : 'Prompt succesvol bijgewerkt.' });
       setEditingPrompt(null);
       setPromptContent('');
       setEditingPromptName('');
@@ -740,7 +740,7 @@ export function AdminPage() {
     if (error) {
       setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error creating: ' : 'Fout bij aanmaken: ') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: 'Agent prompt aangemaakt.' });
+      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Agent prompt created.' : 'Agent prompt aangemaakt.' });
       setNewProjectName('');
       setNewProjectContent('');
       setShowNewProjectForm(false);
@@ -758,7 +758,7 @@ export function AdminPage() {
     if (error) {
       setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error deleting: ' : 'Fout bij verwijderen: ') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: 'Prompt verwijderd.' });
+      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Prompt deleted.' : 'Prompt verwijderd.' });
       setConfirmDeletePromptId(null);
       loadPrompts();
     }
@@ -784,7 +784,7 @@ export function AdminPage() {
       console.error('Error activating prompt:', error);
       setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error activating: ' : 'Fout bij activeren: ') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: 'Prompt geactiveerd.' });
+      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Prompt activated.' : 'Prompt geactiveerd.' });
       loadPrompts();
     }
     setLoading(false);

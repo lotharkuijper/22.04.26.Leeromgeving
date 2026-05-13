@@ -3,6 +3,7 @@ import { X, Upload, FileText, Loader2, Trash2 } from 'lucide-react';
 import { validateDocumentFile } from '../services/document-processor.service';
 import { uploadMultipleDocuments, MultiFileProgress } from '../services/document-upload.service';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../i18n';
 
 interface DocumentUploadModalProps {
   onClose: () => void;
@@ -12,6 +13,7 @@ interface DocumentUploadModalProps {
 
 export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: DocumentUploadModalProps) {
   const { user } = useAuth();
+  const { lang } = useLanguage();
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -102,14 +104,14 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
       );
 
       if (results.failed.length > 0) {
-        setError(`${results.successful.length} succesvol, ${results.failed.length} mislukt`);
+        setError(lang === 'en' ? `${results.successful.length} succeeded, ${results.failed.length} failed` : `${results.successful.length} succesvol, ${results.failed.length} mislukt`);
         setIsUploading(false);
       } else {
         onSuccess();
         onClose();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload mislukt');
+      setError(err instanceof Error ? err.message : (lang === 'en' ? 'Upload failed' : 'Upload mislukt'));
       setIsUploading(false);
     }
   };
@@ -118,7 +120,7 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
         <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-          <h2 className="text-xl font-semibold mb-4">Documenten Verwerken</h2>
+          <h2 className="text-xl font-semibold mb-4">{lang === 'en' ? 'Processing Documents' : 'Documenten Verwerken'}</h2>
 
           <div className="space-y-4">
             <div>

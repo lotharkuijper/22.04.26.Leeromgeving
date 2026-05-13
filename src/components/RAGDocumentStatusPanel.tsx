@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { retryFailedDocument, UploadProgress } from '../services/document-upload.service';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../i18n';
 
 interface DocumentWithChunkCount {
   id: string;
@@ -22,6 +23,7 @@ type FilterMode = 'all' | 'failed';
 export function RAGDocumentStatusPanel() {
   const { activeCourseId, activeCourseRagFolderIds, activeCourse } = useActiveCourse();
   const { session } = useAuth();
+  const { lang } = useLanguage();
   const [documents, setDocuments] = useState<DocumentWithChunkCount[]>([]);
   const [loading, setLoading] = useState(false);
   const [retryingDocId, setRetryingDocId] = useState<string | null>(null);
@@ -106,8 +108,8 @@ export function RAGDocumentStatusPanel() {
     } catch (error) {
       console.error('[RAG PANEL] Retry failed:', error);
       alert(
-        'Fout bij opnieuw verwerken: ' +
-          (error instanceof Error ? error.message : 'Onbekende fout')
+        (lang === 'en' ? 'Error reprocessing: ' : 'Fout bij opnieuw verwerken: ') +
+          (error instanceof Error ? error.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'))
       );
     } finally {
       setRetryingDocId(null);
@@ -125,8 +127,9 @@ export function RAGDocumentStatusPanel() {
     if (failedDocs.length === 0) return;
 
     if (
-      !confirm(
-        `${failedDocs.length} document(en) opnieuw verwerken? Dit kan enkele minuten duren.`
+      !confirm(lang === 'en'
+        ? `Reprocess ${failedDocs.length} document(s)? This may take a few minutes.`
+        : `${failedDocs.length} document(en) opnieuw verwerken? Dit kan enkele minuten duren.`
       )
     ) {
       return;
@@ -252,11 +255,12 @@ export function RAGDocumentStatusPanel() {
           <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5 flex-shrink-0" />
           <div className="flex-1">
             <p className="font-medium text-gray-900 text-sm">
-              {failedCount} document(en) zonder chunks
+              {lang === 'en' ? `${failedCount} document(s) without chunks` : `${failedCount} document(en) zonder chunks`}
             </p>
             <p className="text-sm text-gray-700 mt-0.5">
-              Documenten die zijn mislukt of geen chunks hebben kunnen niet worden gebruikt voor RAG.
-              Verwerk ze opnieuw zodat de inhoudsindex up-to-date is.
+              {lang === 'en'
+                ? 'Documents that failed or have no chunks cannot be used for RAG. Reprocess them to keep the content index up to date.'
+                : 'Documenten die zijn mislukt of geen chunks hebben kunnen niet worden gebruikt voor RAG. Verwerk ze opnieuw zodat de inhoudsindex up-to-date is.'}
             </p>
           </div>
           <button
@@ -264,7 +268,7 @@ export function RAGDocumentStatusPanel() {
             disabled={retryingDocId !== null}
             className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
           >
-            Verwerk opnieuw
+            {lang === 'en' ? 'Reprocess' : 'Verwerk opnieuw'}
           </button>
         </div>
       )}
@@ -371,7 +375,7 @@ export function RAGDocumentStatusPanel() {
                         className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
                         data-testid={`button-cancel-delete-doc-${doc.id}`}
                       >
-                        Annuleer
+                        {lang === 'en' ? 'Cancel' : 'Annuleer'}
                       </button>
                     </div>
                   ) : (
@@ -379,7 +383,7 @@ export function RAGDocumentStatusPanel() {
                       onClick={() => setDeleteConfirmId(doc.id)}
                       disabled={deletingDocId !== null || retryingDocId !== null}
                       className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                      title="Verwijderen"
+                      title={lang === 'en' ? 'Delete' : 'Verwijderen'}
                       data-testid={`button-delete-doc-${doc.id}`}
                     >
                       <Trash2 className="w-4 h-4" />

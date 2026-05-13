@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
+import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 
 interface Concept {
@@ -66,6 +67,7 @@ const PROMPT_LABELS: Record<string, string> = {
 export function QuizSourcesAdminPanel() {
   const { session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
+  const { lang } = useLanguage();
 
   const [loading, setLoading] = useState(false);
   const [savingMix, setSavingMix] = useState(false);
@@ -211,11 +213,11 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify(mix),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Opslaan mislukt');
+      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
       if (data.mix) setMix(data.mix);
-      showMsg('success', 'Bronnen-mix opgeslagen.');
+      showMsg('success', lang === 'en' ? 'Source mix saved.' : 'Bronnen-mix opgeslagen.');
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : 'Onbekende fout');
+      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
     }
     setSavingMix(false);
   }
@@ -230,10 +232,10 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify({ mappings }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Opslaan mislukt');
-      showMsg('success', `Koppelingen opgeslagen (${data.saved}).`);
+      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
+      showMsg('success', lang === 'en' ? `Mappings saved (${data.saved}).` : `Koppelingen opgeslagen (${data.saved}).`);
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : 'Onbekende fout');
+      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
     }
     setSavingMappings(false);
   }
@@ -248,10 +250,10 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify({ sources: ragSources.filter(s => s.folder_id) }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Opslaan mislukt');
-      showMsg('success', `RAG-koppelingen opgeslagen (${data.saved}).`);
+      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
+      showMsg('success', lang === 'en' ? `RAG links saved (${data.saved}).` : `RAG-koppelingen opgeslagen (${data.saved}).`);
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : 'Onbekende fout');
+      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
     }
     setSavingRag(false);
   }
@@ -265,10 +267,10 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify({ content: promptDrafts[name] || '', is_active: true }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Opslaan mislukt');
-      showMsg('success', `Prompt "${PROMPT_LABELS[name] || name}" opgeslagen.`);
+      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
+      showMsg('success', lang === 'en' ? `Prompt "${PROMPT_LABELS[name] || name}" saved.` : `Prompt "${PROMPT_LABELS[name] || name}" opgeslagen.`);
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : 'Onbekende fout');
+      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
     }
     setSavingPromptName(null);
   }
@@ -305,10 +307,10 @@ export function QuizSourcesAdminPanel() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Suggesties ophalen mislukt');
+      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Fetching suggestions failed' : 'Suggesties ophalen mislukt'));
       setSuggestionsByConcept(prev => ({ ...prev, [concept.id]: data.suggestions || [] }));
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : 'Onbekende fout bij suggesties');
+      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error fetching suggestions' : 'Onbekende fout bij suggesties'));
     }
     setSuggestingConceptId(null);
   }

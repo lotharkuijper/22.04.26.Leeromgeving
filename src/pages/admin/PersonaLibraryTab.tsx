@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
+import { useLanguage } from '../../i18n';
 import { supabase } from '../../lib/supabase';
 import { Bot, FolderOpen } from 'lucide-react';
 
@@ -17,6 +18,7 @@ interface CoursePersona {
 
 export function PersonaLibraryTab() {
   const { activeCourseId, activeCourse } = useActiveCourse();
+  const { lang } = useLanguage();
   const [personas, setPersonas] = useState<CoursePersona[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,11 +56,11 @@ export function PersonaLibraryTab() {
         </div>
         <div className="bg-blue-50 border border-blue-100 text-blue-800 px-3 py-2 rounded text-xs flex items-start gap-2 mb-3">
           <FolderOpen className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>De bibliotheek is een centrale verzameling. Wijzigingen aan een persona doe je in het project waar hij draait.</span>
+          <span>{lang === 'en' ? 'The library is a central collection. Edit a persona in the project where it runs.' : 'De bibliotheek is een centrale verzameling. Wijzigingen aan een persona doe je in het project waar hij draait.'}</span>
         </div>
         {error && <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm mb-3">{error}</div>}
         {personas.length === 0 ? (
-          <p className="text-sm text-gray-500">Nog geen persona's in deze bibliotheek.</p>
+          <p className="text-sm text-gray-500">{lang === 'en' ? 'No personas in this library yet.' : 'Nog geen persona\'s in deze bibliotheek.'}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {personas.map(p => (
@@ -67,9 +69,9 @@ export function PersonaLibraryTab() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-gray-900 flex items-center gap-2">
                     {p.name}
-                    {p.persona_type === 'evaluator' && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">beoordelaar</span>}
-                    {p.is_default && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">standaard</span>}
-                    {!p.rag_enabled && <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">RAG uit</span>}
+                    {p.persona_type === 'evaluator' && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">{lang === 'en' ? 'evaluator' : 'beoordelaar'}</span>}
+                    {p.is_default && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">{lang === 'en' ? 'default' : 'standaard'}</span>}
+                    {!p.rag_enabled && <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{lang === 'en' ? 'RAG off' : 'RAG uit'}</span>}
                   </div>
                   <p className="text-xs text-gray-500 line-clamp-2 mt-0.5">{p.system_prompt.slice(0, 200)}</p>
                 </div>

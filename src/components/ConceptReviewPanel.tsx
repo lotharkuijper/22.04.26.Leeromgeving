@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Eye, FileText, Loader2 } from 'lucide-react';
+import { useLanguage } from '../i18n';
 import {
   getExtractedConceptsForReview,
   approveExtractedConcept,
@@ -14,6 +15,7 @@ import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
 
 export function ConceptReviewPanel() {
   const { profile } = useAuth();
+  const { lang } = useLanguage();
   const [concepts, setConcepts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [extracting, setExtracting] = useState(false);
@@ -56,7 +58,7 @@ export function ConceptReviewPanel() {
       loadConcepts();
     } catch (error) {
       console.error('Error approving concept:', error);
-      setNotice({ kind: 'error', message: 'Goedkeuren mislukt. Probeer het opnieuw.' });
+      setNotice({ kind: 'error', message: lang === 'en' ? 'Approval failed. Please try again.' : 'Goedkeuren mislukt. Probeer het opnieuw.' });
     }
   };
 
@@ -67,7 +69,7 @@ export function ConceptReviewPanel() {
       loadConcepts();
     } catch (error) {
       console.error('Error rejecting concept:', error);
-      setNotice({ kind: 'error', message: 'Afwijzen mislukt. Probeer het opnieuw.' });
+      setNotice({ kind: 'error', message: lang === 'en' ? 'Rejection failed. Please try again.' : 'Afwijzen mislukt. Probeer het opnieuw.' });
     }
   };
 
@@ -78,10 +80,10 @@ export function ConceptReviewPanel() {
       await extractConceptsFromDocument(selectedDocument, profile.id, setExtractionProgress);
       loadConcepts();
       setSelectedDocument(null);
-      setNotice({ kind: 'success', message: 'Begrippen-extractie voltooid voor het geselecteerde document.' });
+      setNotice({ kind: 'success', message: lang === 'en' ? 'Concept extraction completed for the selected document.' : 'Begrippen-extractie voltooid voor het geselecteerde document.' });
     } catch (error) {
       console.error('Error extracting concepts:', error);
-      setNotice({ kind: 'error', message: 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
+      setNotice({ kind: 'error', message: lang === 'en' ? 'Concept extraction failed. Please try again later.' : 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
     }
     setExtracting(false);
     setExtractionProgress(null);
@@ -97,12 +99,14 @@ export function ConceptReviewPanel() {
       });
       setNotice({
         kind: 'success',
-        message: `${result.totalConcepts} begrippen geëxtraheerd uit ${result.processedDocuments} documenten.`,
+        message: lang === 'en'
+          ? `${result.totalConcepts} concepts extracted from ${result.processedDocuments} documents.`
+          : `${result.totalConcepts} begrippen geëxtraheerd uit ${result.processedDocuments} documenten.`,
       });
       loadConcepts();
     } catch (error) {
       console.error('Error extracting concepts:', error);
-      setNotice({ kind: 'error', message: 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
+      setNotice({ kind: 'error', message: lang === 'en' ? 'Concept extraction failed. Please try again later.' : 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
     }
     setExtracting(false);
     setExtractionProgress(null);

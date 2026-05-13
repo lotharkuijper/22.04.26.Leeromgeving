@@ -551,7 +551,7 @@ export function FeedbackPage() {
                                       className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${group.badgeBg} ${group.badgeText}`}
                                       data-testid={`type-label-${entry.id}`}
                                     >
-                                      {group.label}
+                                      {groupLabel(group.key)}
                                     </span>
                                   </div>
                                   <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">

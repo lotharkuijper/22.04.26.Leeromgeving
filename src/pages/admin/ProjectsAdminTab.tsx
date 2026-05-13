@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
+import { useLanguage } from '../../i18n';
 import { supabase } from '../../lib/supabase';
 import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, Download, Eye, EyeOff, Database, ShieldAlert } from 'lucide-react';
 
@@ -61,6 +62,7 @@ const PROJECT_DOC_ACCEPT = UPLOAD_ACCEPT + ',.omv,.omt,.sav,.jasp,.rdata,.rds,.s
 export function ProjectsAdminTab() {
   const { session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
+  const { lang } = useLanguage();
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [editing, setEditing] = useState<Partial<ProjectRow> | null>(null);
   const [rubricLines, setRubricLines] = useState('');
@@ -137,7 +139,7 @@ export function ProjectsAdminTab() {
   };
 
   const remove = async (id: string) => {
-    if (!confirm('Verwijder dit project? Groepen, chats en checkpoints worden ook verwijderd.')) return;
+    if (!confirm(lang === 'en' ? 'Delete this project? Groups, chats and checkpoints will also be deleted.' : 'Verwijder dit project? Groepen, chats en checkpoints worden ook verwijderd.')) return;
     const { error: e } = await supabase.from('projects').delete().eq('id', id);
     if (e) setError(e.message); else await load();
   };
@@ -157,17 +159,17 @@ export function ProjectsAdminTab() {
       <div className="bg-white rounded-2xl border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><FolderOpen className="w-5 h-5" /> Projecten</h2>
-            <p className="text-sm text-gray-500">{activeCourse ? `Cursus: ${activeCourse.name}` : 'Alle cursussen'}.</p>
+            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><FolderOpen className="w-5 h-5" />{lang === 'en' ? 'Projects' : 'Projecten'}</h2>
+            <p className="text-sm text-gray-500">{activeCourse ? `${lang === 'en' ? 'Course' : 'Cursus'}: ${activeCourse.name}` : (lang === 'en' ? 'All courses' : 'Alle cursussen')}.</p>
           </div>
           <button onClick={() => startEdit(null)} className="flex items-center gap-1.5 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700" data-testid="button-add-project">
-            <Plus className="w-4 h-4" /> Nieuw project
+            <Plus className="w-4 h-4" />{lang === 'en' ? 'New project' : 'Nieuw project'}
           </button>
         </div>
         {error && <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm mb-3">{error}</div>}
         {info && <div className="bg-green-50 border border-green-200 text-green-700 px-3 py-2 rounded text-sm mb-3">{info}</div>}
         {projects.length === 0 ? (
-          <p className="text-sm text-gray-500">Nog geen projecten in deze cursus.</p>
+          <p className="text-sm text-gray-500">{lang === 'en' ? 'No projects in this course yet.' : 'Nog geen projecten in deze cursus.'}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {projects.map(p => (
@@ -176,14 +178,17 @@ export function ProjectsAdminTab() {
                   <div className="font-medium text-gray-900">{p.title}</div>
                   <p className="text-xs text-gray-500 line-clamp-1">{p.research_question}</p>
                   <div className="text-[10px] text-gray-400 mt-1">
-                    groepsgrootte {p.min_group_size ?? 1}–{p.max_group_size ?? 5} · {Array.isArray(p.rubric_criteria) ? `${p.rubric_criteria.length} rubriekspunten` : 'geen rubriek'}
+                    {lang === 'en'
+                      ? `group size ${p.min_group_size ?? 1}–${p.max_group_size ?? 5} · ${Array.isArray(p.rubric_criteria) ? `${p.rubric_criteria.length} rubric points` : 'no rubric'}`
+                      : `groepsgrootte ${p.min_group_size ?? 1}–${p.max_group_size ?? 5} · ${Array.isArray(p.rubric_criteria) ? `${p.rubric_criteria.length} rubriekspunten` : 'geen rubriek'}`
+                    }
                   </div>
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => setDetailProject(p)} className="flex items-center gap-1 px-2 py-1 text-sm text-blue-700 hover:bg-blue-50 rounded" data-testid={`button-detail-project-${p.id}`}>
-                    <Settings className="w-4 h-4" /> Beheer
+                    <Settings className="w-4 h-4" />{lang === 'en' ? 'Manage' : 'Beheer'}
                   </button>
-                  <button onClick={() => startEdit(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-project-${p.id}`}>Bewerk</button>
+                  <button onClick={() => startEdit(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-project-${p.id}`}>{lang === 'en' ? 'Edit' : 'Bewerk'}</button>
                   <button onClick={() => remove(p.id)} className="p-2 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-project-${p.id}`}>
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -346,13 +351,13 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const removePersona = async (p: ProjectPersona) => {
-    if (!confirm(`Verwijder "${p.name}" uit dit project? Alle gesprekken met deze persona gaan verloren.`)) return;
+    if (!confirm(lang === 'en' ? `Delete "${p.name}" from this project? All conversations with this persona will be lost.` : `Verwijder "${p.name}" uit dit project? Alle gesprekken met deze persona gaan verloren.`)) return;
     const r = await fetch(`/api/projects/${project.id}/personas/${p.id}`, {
       method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      onError(d.error || 'Verwijderen mislukt'); return;
+      onError(d.error || (lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt')); return;
     }
     await loadPersonas();
   };
@@ -364,10 +369,10 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Kopiëren mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Copy failed' : 'Kopiëren mislukt'));
       onInfo(d.alreadyExists
-        ? `"${p.name}" stond al in de bibliotheek.`
-        : `"${p.name}" is gekopieerd naar de bibliotheek.`);
+        ? (lang === 'en' ? `"${p.name}" was already in the library.` : `"${p.name}" stond al in de bibliotheek.`)
+        : (lang === 'en' ? `"${p.name}" copied to the library.` : `"${p.name}" is gekopieerd naar de bibliotheek.`));
     } catch (e: any) {
       onError(e.message);
     } finally {
@@ -387,9 +392,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Upload mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Upload failed' : 'Upload mislukt'));
       setProjectDocs(prev => [d.document, ...prev]);
-      setLocalInfo(d.warning ? `"${file.name}" geüpload. Let op: ${d.warning}` : `"${file.name}" geüpload.`);
+      setLocalInfo(d.warning
+        ? (lang === 'en' ? `"${file.name}" uploaded. Note: ${d.warning}` : `"${file.name}" geüpload. Let op: ${d.warning}`)
+        : (lang === 'en' ? `"${file.name}" uploaded.` : `"${file.name}" geüpload.`));
     } catch (e: any) {
       setLocalError(e.message);
     } finally {
@@ -399,11 +406,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const deleteProjectDoc = async (doc: ProjectDoc) => {
-    if (!confirm(`Verwijder "${doc.filename}"?`)) return;
+    if (!confirm(lang === 'en' ? `Delete "${doc.filename}"?` : `Verwijder "${doc.filename}"?`)) return;
     const r = await fetch(`/api/projects/${project.id}/documents/${doc.id}`, {
       method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
     });
-    if (!r.ok) { onError('Verwijderen mislukt'); return; }
+    if (!r.ok) { onError(lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt'); return; }
     setProjectDocs(prev => prev.filter(d => d.id !== doc.id));
   };
 
@@ -417,12 +424,12 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     });
     if (!r.ok) {
       setProjectDocs(prev => prev.map(d => d.id === doc.id ? { ...d, is_visible_to_students: !next } : d));
-      onError('Zichtbaarheid wijzigen mislukt');
+      onError(lang === 'en' ? 'Visibility change failed' : 'Zichtbaarheid wijzigen mislukt');
     }
   };
 
   const uploadRubric = async (personaId: string, file: File) => {
-    if (file.size > 15_000_000) { onError('Bestand is groter dan 15 MB.'); return; }
+    if (file.size > 15_000_000) { onError(lang === 'en' ? 'File is larger than 15 MB.' : 'Bestand is groter dan 15 MB.'); return; }
     setUploadingRubric(personaId);
     try {
       // Verborgen rubrics zijn project/persona-scoped — geen groep nodig.
@@ -433,9 +440,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Rubric-upload mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Rubric upload failed' : 'Rubric-upload mislukt'));
       await loadRubricDocs(personaId);
-      onInfo(`Verborgen rubric "${file.name}" gekoppeld.`);
+      onInfo(lang === 'en' ? `Hidden rubric "${file.name}" linked.` : `Verborgen rubric "${file.name}" gekoppeld.`);
     } catch (e: any) {
       onError(e.message);
     } finally {
@@ -444,7 +451,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const deleteRubric = async (personaId: string, doc: RubricDoc) => {
-    if (!confirm(`Verwijder verborgen rubric "${doc.filename}"?`)) return;
+    if (!confirm(lang === 'en' ? `Delete hidden rubric "${doc.filename}"?` : `Verwijder verborgen rubric "${doc.filename}"?`)) return;
     // Direct supabase.delete is geblokkeerd door ppd_modify=false; gebruik
     // het server-endpoint dat de juiste autorisatie afhandelt.
     const r = await fetch(
@@ -453,7 +460,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     );
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      onError(d.error || 'Verwijderen mislukt');
+      onError(d.error || (lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt'));
       return;
     }
     await loadRubricDocs(personaId);
@@ -469,7 +476,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
             </button>
             <div>
               <h2 className="text-lg font-bold text-gray-900">{project.title}</h2>
-              <p className="text-xs text-gray-500">Beheer persona's, documenten en rubrics voor dit project.</p>
+              <p className="text-xs text-gray-500">{lang === 'en' ? 'Manage personas, documents and rubrics for this project.' : 'Beheer persona\'s, documenten en rubrics voor dit project.'}</p>
             </div>
           </div>
         </div>
@@ -495,11 +502,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="font-semibold text-gray-900 flex items-center gap-2"><FolderOpen className="w-4 h-4" /> Projectdocumenten</h3>
-            <p className="text-xs text-gray-500">Datasets, opdracht- en bronmateriaal. Tekstbestanden gebruiken alle persona's als context; binaire datasets (zoals Jamovi .omv) kunnen studenten alleen downloaden.</p>
+            <p className="text-xs text-gray-500">{lang === 'en' ? 'Datasets, assignment and source material. Text files are used as context by all personas; binary datasets (e.g. Jamovi .omv) can only be downloaded by students.' : 'Datasets, opdracht- en bronmateriaal. Tekstbestanden gebruiken alle persona\'s als context; binaire datasets (zoals Jamovi .omv) kunnen studenten alleen downloaden.'}</p>
           </div>
           <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer ${uploadingPDoc ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
             {uploadingPDoc ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
-            Upload bestand
+            {lang === 'en' ? 'Upload file' : 'Upload bestand'}
             <input
               ref={pdocFileRef}
               type="file" accept={PROJECT_DOC_ACCEPT} className="hidden"
@@ -510,7 +517,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
           </label>
         </div>
         {projectDocs.length === 0 ? (
-          <p className="text-xs text-gray-500">Nog geen projectdocumenten.</p>
+          <p className="text-xs text-gray-500">{lang === 'en' ? 'No project documents yet.' : 'Nog geen projectdocumenten.'}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {projectDocs.map(d => (
@@ -524,7 +531,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                 <button
                   onClick={() => toggleDocVisibility(d)}
                   className={`p-1 rounded ${d.is_visible_to_students ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-100'}`}
-                  title={d.is_visible_to_students ? 'Zichtbaar voor studenten — klik om te verbergen' : 'Verborgen voor studenten — klik om zichtbaar te maken'}
+                  title={d.is_visible_to_students
+                    ? (lang === 'en' ? 'Visible to students — click to hide' : 'Zichtbaar voor studenten — klik om te verbergen')
+                    : (lang === 'en' ? 'Hidden from students — click to show' : 'Verborgen voor studenten — klik om zichtbaar te maken')}
                   data-testid={`button-toggle-visibility-${d.id}`}
                 >
                   {d.is_visible_to_students ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
@@ -535,7 +544,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                       const r = await fetch(`/api/projects/${project.id}/documents/${d.id}/download`, {
                         headers: { Authorization: `Bearer ${token}` },
                       });
-                      if (!r.ok) { const j = await r.json().catch(() => ({})); setLocalError(j.error || 'Download mislukt'); return; }
+                      if (!r.ok) { const j = await r.json().catch(() => ({})); setLocalError(j.error || (lang === 'en' ? 'Download failed' : 'Download mislukt')); return; }
                       const blob = await r.blob();
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a'); a.href = url; a.download = d.filename;
@@ -562,15 +571,15 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       <div className="bg-white rounded-2xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="font-semibold text-gray-900">Persona's in dit project ({personas.length})</h3>
-            <p className="text-xs text-gray-500">Maak gespreksparters of beoordelaars. Beoordelaars verschijnen niet in de student-chat.</p>
+            <h3 className="font-semibold text-gray-900">{lang === 'en' ? `Personas in this project (${personas.length})` : `Persona's in dit project (${personas.length})`}</h3>
+            <p className="text-xs text-gray-500">{lang === 'en' ? 'Create conversation partners or evaluators. Evaluators do not appear in the student chat.' : 'Maak gespreksparters of beoordelaars. Beoordelaars verschijnen niet in de student-chat.'}</p>
           </div>
           <button onClick={() => setEditingPersona({ name: '', system_prompt: '', avatar_emoji: '🤖', rag_enabled: true, persona_type: 'conversational' })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg" data-testid="button-add-custom-persona">
-            <Plus className="w-4 h-4" /> Nieuwe persona
+            <Plus className="w-4 h-4" />{lang === 'en' ? 'New persona' : 'Nieuwe persona'}
           </button>
         </div>
         {personas.length === 0 ? (
-          <p className="text-sm text-gray-500">Nog geen persona's. Voeg er één toe.</p>
+          <p className="text-sm text-gray-500">{lang === 'en' ? 'No personas yet. Add one.' : 'Nog geen persona\'s. Voeg er één toe.'}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {personas.map(p => {
@@ -583,16 +592,16 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-gray-900 flex items-center gap-2">
                         {p.name}
-                        {isEval && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> beoordelaar</span>}
-                        {p.source_persona_id && <span className="text-[10px] text-gray-400">uit bibliotheek</span>}
+                        {isEval && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded flex items-center gap-1"><ShieldAlert className="w-3 h-3" />{lang === 'en' ? 'evaluator' : 'beoordelaar'}</span>}
+                        {p.source_persona_id && <span className="text-[10px] text-gray-400">{lang === 'en' ? 'from library' : 'uit bibliotheek'}</span>}
                       </div>
                       <p className="text-xs text-gray-500 line-clamp-2">{p.system_prompt.slice(0, 200)}</p>
                     </div>
                     <div className="flex gap-1">
                       <button onClick={() => copyToLibrary(p)} disabled={copying === p.id} className="px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1 disabled:opacity-40" data-testid={`button-copy-to-lib-${p.id}`}>
-                        <Copy className="w-3 h-3" /> {copying === p.id ? 'Bezig…' : 'Kopieer naar bibliotheek'}
+                        <Copy className="w-3 h-3" />{copying === p.id ? (lang === 'en' ? 'Working…' : 'Bezig…') : (lang === 'en' ? 'Copy to library' : 'Kopieer naar bibliotheek')}
                       </button>
-                      <button onClick={() => setEditingPersona(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-pp-${p.id}`}>Bewerk</button>
+                      <button onClick={() => setEditingPersona(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-pp-${p.id}`}>{lang === 'en' ? 'Edit' : 'Bewerk'}</button>
                       <button onClick={() => removePersona(p)} className="p-2 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-pp-${p.id}`}>
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -601,7 +610,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                   {isEval && (
                     <div className="mt-2 ml-10 bg-purple-50/40 border border-purple-100 rounded-lg p-3">
                       <div className="flex items-center justify-between mb-2">
-                        <div className="text-xs font-medium text-purple-900 flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Verborgen rubric ({rubricList.length})</div>
+                        <div className="text-xs font-medium text-purple-900 flex items-center gap-1"><ShieldAlert className="w-3 h-3" />{lang === 'en' ? `Hidden rubric (${rubricList.length})` : `Verborgen rubric (${rubricList.length})`}</div>
                         <label className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded cursor-pointer ${uploadingRubric === p.id ? 'bg-gray-100 text-gray-400' : 'bg-purple-600 text-white hover:bg-purple-700'}`}>
                           {uploadingRubric === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Paperclip className="w-3 h-3" />}
                           Upload rubric
@@ -614,7 +623,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                         </label>
                       </div>
                       {rubricList.length === 0 ? (
-                        <p className="text-[11px] text-purple-700/70">Nog geen rubric-bestand gekoppeld. Zonder bestand gebruikt de beoordelaar alleen de leerdoelen van het project.</p>
+                        <p className="text-[11px] text-purple-700/70">{lang === 'en' ? 'No rubric file linked yet. Without a file the evaluator uses only the project learning goals.' : 'Nog geen rubric-bestand gekoppeld. Zonder bestand gebruikt de beoordelaar alleen de leerdoelen van het project.'}</p>
                       ) : (
                         <ul className="space-y-1">
                           {rubricList.map(r => (

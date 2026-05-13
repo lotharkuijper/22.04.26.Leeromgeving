@@ -72,7 +72,7 @@ export function ProjectsPage() {
         body: JSON.stringify({ projectId: p.id }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Aanmaken mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Creation failed' : 'Aanmaken mislukt'));
       // Sessie-record wordt server-side aangemaakt (supabaseAdmin).
       navigate(`/projects/${p.id}/group/${d.group.id}`);
     } catch (e: any) {
@@ -99,7 +99,7 @@ export function ProjectsPage() {
         body: JSON.stringify({ projectId: p.id }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Herstarten mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Restart failed' : 'Herstarten mislukt'));
       setRestartConfirm(null);
       await load();
       await startNew(p);
@@ -121,7 +121,7 @@ export function ProjectsPage() {
         body: JSON.stringify({ inviteCode: inviteCode.trim() }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Aansluiten mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Join failed' : 'Aansluiten mislukt'));
       // Sessie-record wordt server-side aangemaakt (supabaseAdmin).
       setJoinDialog(false); setInviteCode('');
       navigate(`/projects/${d.group.project_id}/group/${d.group.id}`);
