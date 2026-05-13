@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
   Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database, EyeOff,
-  LogOut, ScrollText,
+  LogOut, ScrollText, ChevronDown, ChevronRight,
 } from 'lucide-react';
 
 interface Persona {
@@ -155,6 +155,8 @@ export function ProjectRoomPage() {
   const [conversationLog, setConversationLog] = useState<ClosedConversation[]>([]);
   const [logbookLoading, setLogbookLoading] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<'briefing' | 'logboek'>('briefing');
+  const [openPersonaFolders, setOpenPersonaFolders] = useState<Set<string>>(new Set());
+  const [expandedLogItems, setExpandedLogItems] = useState<Set<string>>(new Set());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const personaInputRef = useRef<HTMLTextAreaElement>(null);
@@ -551,11 +553,24 @@ export function ProjectRoomPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
-      if (r.ok) setConversationLog(d.conversations || []);
+      if (r.ok) {
+        const convs: ClosedConversation[] = d.conversations || [];
+        setConversationLog(convs);
+        // Open de map van de actief geselecteerde persona standaard;
+        // als die er niet is, open de eerste map.
+        setOpenPersonaFolders(prev => {
+          const ids = [...new Set(convs.map(c => c.personaId))];
+          if (ids.length === 0) return prev;
+          const toOpen = activePersonaId && ids.includes(activePersonaId)
+            ? activePersonaId
+            : ids[0];
+          return new Set([...prev, toOpen]);
+        });
+      }
     } catch { /* stil */ } finally {
       setLogbookLoading(false);
     }
-  }, [token, groupId]);
+  }, [token, groupId, activePersonaId]);
 
   useEffect(() => { loadConversationLog(); }, [loadConversationLog]);
 
@@ -931,41 +946,114 @@ export function ProjectRoomPage() {
                     Nog geen afgesloten gesprekken. Gebruik de <LogOut className="w-3 h-3 inline" />-knop in de chat om een gesprek af te sluiten.
                   </p>
                 )}
-                {!logbookLoading && conversationLog.map(conv => (
-                  <div key={conv.threadId} className="mb-4 pb-4 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0" data-testid={`logboek-entry-${conv.threadId}`}>
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <span className="text-base">{conv.avatarEmoji}</span>
-                      <span className="font-semibold text-gray-800 text-xs">{conv.personaName}</span>
-                      <span className="ml-auto text-[10px] text-gray-400 shrink-0">
-                        {new Date(conv.closedAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                    {conv.topics.length > 0 && (
-                      <div className="mb-1.5">
-                        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Besproken</p>
-                        <ul className="space-y-0.5">
-                          {conv.topics.map((t, i) => (
-                            <li key={i} className="flex gap-1.5 text-xs text-gray-700">
-                              <span className="text-blue-400 shrink-0">•</span>{t}
-                            </li>
-                          ))}
-                        </ul>
+                {!logbookLoading && conversationLog.length > 0 && (() => {
+                  // Groepeer per persona, nieuwste gesprek bovenaan per map.
+                  const grouped = new Map<string, { personaName: string; avatarEmoji: string; conversations: ClosedConversation[] }>();
+                  for (const conv of conversationLog) {
+                    if (!grouped.has(conv.personaId)) {
+                      grouped.set(conv.personaId, { personaName: conv.personaName, avatarEmoji: conv.avatarEmoji, conversations: [] });
+                    }
+                    grouped.get(conv.personaId)!.conversations.push(conv);
+                  }
+                  // Sorteer gesprekken per map: nieuwste bovenaan.
+                  for (const g of grouped.values()) {
+                    g.conversations.sort((a, b) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime());
+                  }
+                  return [...grouped.entries()].map(([personaId, { personaName, avatarEmoji, conversations }]) => {
+                    const folderOpen = openPersonaFolders.has(personaId);
+                    const toggleFolder = () => setOpenPersonaFolders(prev => {
+                      const next = new Set(prev);
+                      folderOpen ? next.delete(personaId) : next.add(personaId);
+                      return next;
+                    });
+                    return (
+                      <div key={personaId} className="mb-1" data-testid={`logboek-folder-${personaId}`}>
+                        {/* Map-header */}
+                        <button
+                          onClick={toggleFolder}
+                          className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-gray-100 transition-colors text-left"
+                          data-testid={`logboek-folder-toggle-${personaId}`}
+                        >
+                          {folderOpen
+                            ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                            : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+                          <span className="text-base leading-none">{avatarEmoji}</span>
+                          <span className="font-semibold text-gray-800 text-xs flex-1 truncate">{personaName}</span>
+                          <span className="text-[10px] bg-gray-100 text-gray-500 rounded-full px-1.5 py-0.5 font-medium shrink-0">
+                            {conversations.length}
+                          </span>
+                        </button>
+
+                        {/* Uitklapbare items */}
+                        {folderOpen && (
+                          <div className="ml-5 mt-0.5 space-y-0.5">
+                            {conversations.map(conv => {
+                              const itemOpen = expandedLogItems.has(conv.threadId);
+                              const toggleItem = () => setExpandedLogItems(prev => {
+                                const next = new Set(prev);
+                                itemOpen ? next.delete(conv.threadId) : next.add(conv.threadId);
+                                return next;
+                              });
+                              const hasContent = conv.topics.length > 0 || conv.agreements.length > 0;
+                              return (
+                                <div key={conv.threadId} className="border border-gray-100 rounded-lg overflow-hidden" data-testid={`logboek-entry-${conv.threadId}`}>
+                                  <button
+                                    onClick={hasContent ? toggleItem : undefined}
+                                    className={`w-full flex items-center gap-2 px-2.5 py-2 text-left transition-colors ${hasContent ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default'} ${itemOpen ? 'bg-gray-50' : ''}`}
+                                    data-testid={`logboek-item-toggle-${conv.threadId}`}
+                                  >
+                                    {hasContent
+                                      ? (itemOpen
+                                          ? <ChevronDown className="w-3 h-3 text-gray-400 shrink-0" />
+                                          : <ChevronRight className="w-3 h-3 text-gray-400 shrink-0" />)
+                                      : <span className="w-3 shrink-0" />}
+                                    <span className="text-[11px] text-gray-600 flex-1">
+                                      {new Date(conv.closedAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    {conv.agreements.length > 0 && (
+                                      <span className="text-[10px] text-green-600 font-medium shrink-0">
+                                        {conv.agreements.length} afsprk.
+                                      </span>
+                                    )}
+                                  </button>
+
+                                  {itemOpen && hasContent && (
+                                    <div className="px-3 pb-3 pt-1 border-t border-gray-100">
+                                      {conv.topics.length > 0 && (
+                                        <div className="mb-2">
+                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Besproken</p>
+                                          <ul className="space-y-0.5">
+                                            {conv.topics.map((t, i) => (
+                                              <li key={i} className="flex gap-1.5 text-xs text-gray-700">
+                                                <span className="text-blue-400 shrink-0 mt-0.5">•</span>{t}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      )}
+                                      {conv.agreements.length > 0 && (
+                                        <div>
+                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Afgesproken</p>
+                                          <ul className="space-y-0.5">
+                                            {conv.agreements.map((a, i) => (
+                                              <li key={i} className="flex gap-1.5 text-xs text-gray-700">
+                                                <span className="text-green-500 shrink-0 mt-0.5">✓</span>{a}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {conv.agreements.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Afgesproken</p>
-                        <ul className="space-y-0.5">
-                          {conv.agreements.map((a, i) => (
-                            <li key={i} className="flex gap-1.5 text-xs text-gray-700">
-                              <span className="text-green-500 shrink-0">✓</span>{a}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                    );
+                  });
+                })()}
               </div>
             )}
 
