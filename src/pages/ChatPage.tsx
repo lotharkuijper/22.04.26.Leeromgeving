@@ -129,7 +129,7 @@ export function ChatPage() {
         console.error('[CHAT] Error loading conversations:', error);
         setPageNotice({
           kind: 'error',
-          message: 'Kon conversaties niet laden. Probeer de pagina te vernieuwen.',
+          message: lang === 'en' ? 'Could not load conversations. Try refreshing the page.' : 'Kon conversaties niet laden. Probeer de pagina te vernieuwen.',
         });
         return;
       }
@@ -143,7 +143,7 @@ export function ChatPage() {
       console.error('[CHAT] Unexpected error loading conversations:', error);
       setPageNotice({
         kind: 'error',
-        message: 'Er is een onverwachte fout opgetreden bij het laden van conversaties.',
+        message: lang === 'en' ? 'An unexpected error occurred while loading conversations.' : 'Er is een onverwachte fout opgetreden bij het laden van conversaties.',
       });
     }
   };
@@ -174,7 +174,7 @@ export function ChatPage() {
       console.error('No profile found');
       setPageNotice({
         kind: 'error',
-        message: 'Je profiel is niet geladen. Probeer opnieuw in te loggen.',
+        message: lang === 'en' ? 'Your profile could not be loaded. Please try logging in again.' : 'Je profiel is niet geladen. Probeer opnieuw in te loggen.',
       });
       return;
     }
@@ -185,7 +185,7 @@ export function ChatPage() {
       .from('conversations')
       .insert({
         user_id: profile.id,
-        title: 'Nieuwe conversatie',
+        title: lang === 'en' ? 'New conversation' : 'Nieuwe conversatie',
         module_type: 'general'
       })
       .select()
@@ -195,7 +195,7 @@ export function ChatPage() {
       console.error('Error creating conversation:', error);
       setPageNotice({
         kind: 'error',
-        message: `Kon geen conversatie aanmaken: ${error.message}`,
+        message: lang === 'en' ? `Could not create conversation: ${error.message}` : `Kon geen conversatie aanmaken: ${error.message}`,
       });
       return;
     }
@@ -220,7 +220,7 @@ export function ChatPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Archiveren mislukt (${res.status})`);
+        throw new Error(err.error || (lang === 'en' ? `Archive failed (${res.status})` : `Archiveren mislukt (${res.status})`));
       }
 
       const result = await res.json();
@@ -236,11 +236,11 @@ export function ChatPage() {
       if (generateSummary && result.summaryFailed) {
         setPageNotice({
           kind: 'warning',
-          message: 'Het gesprek is afgesloten, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
+          message: lang === 'en' ? 'The conversation was closed, but the summary could not be saved to your learning journal. Please try again later.' : 'Het gesprek is afgesloten, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
         });
       }
     } catch (err: any) {
-      setPageNotice({ kind: 'error', message: `Fout bij archiveren: ${err.message}` });
+      setPageNotice({ kind: 'error', message: lang === 'en' ? `Archive error: ${err.message}` : `Fout bij archiveren: ${err.message}` });
     } finally {
       setArchiving(false);
     }
@@ -360,7 +360,7 @@ export function ChatPage() {
     } catch (error: any) {
       console.error('[CHAT] Error sending message:', error);
       setFeedbackError({
-        title: 'Er is een fout opgetreden bij het versturen van het bericht.',
+        title: lang === 'en' ? 'An error occurred while sending the message.' : 'Er is een fout opgetreden bij het versturen van het bericht.',
         detail: error?.message || undefined,
       });
       setPendingRetry({ history, isFirstMessage });
@@ -490,7 +490,7 @@ export function ChatPage() {
               <button
                 data-testid={`btn-archive-${conv.id}`}
                 onClick={(e) => { e.stopPropagation(); setArchiveDialog({ conversationId: conv.id, title: conv.title }); }}
-                title="Verplaats naar leerdagboek"
+                title={lang === 'en' ? 'Move to learning journal' : 'Verplaats naar leerdagboek'}
                 className="absolute right-2 top-2.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-green-200 text-green-700"
               >
                 <BookText className="w-4 h-4" />
@@ -535,7 +535,7 @@ export function ChatPage() {
                     {msg.retrievedContext?.chunks && msg.retrievedContext.chunks.length > 0 && (
                       <SourceList
                         sources={msg.retrievedContext.chunks.map((c: any) => ({ title: c.documentTitle, similarity: c.similarity }))}
-                        label="Bronnen uit cursusmateriaal"
+                        label={lang === 'en' ? 'Sources from course material' : 'Bronnen uit cursusmateriaal'}
                       />
                     )}
                     {msg.role === 'assistant' && (() => {
@@ -609,10 +609,16 @@ export function ChatPage() {
                           data-testid="text-chat-context-stats-error"
                         >
                           {contextStats.used < contextStats.total
-                            ? `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`
+                            ? (lang === 'en'
+                              ? `${contextStats.used} of ${contextStats.total} found passages were included (the rest were skipped to keep the prompt within the limit).`
+                              : `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`)
                             : contextStats.charTrimmed
-                              ? `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`
-                              : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`}
+                              ? (lang === 'en'
+                                  ? `All ${contextStats.total} found passages were included, but one passage was truncated to keep the prompt within the limit.`
+                                  : `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`)
+                              : (lang === 'en'
+                                  ? `All ${contextStats.total} found passages were available to the language model.`
+                                  : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`)}
                         </p>
                       )}
                       <button
@@ -636,8 +642,12 @@ export function ChatPage() {
                     data-testid="text-chat-context-stats"
                   >
                     {contextStats.used < contextStats.total
-                      ? `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`
-                      : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`}
+                      ? (lang === 'en'
+                        ? `Note: ${contextStats.used} of ${contextStats.total} found passages were sent to the language model (highest-scoring first). The rest were skipped to keep the prompt within the limit.`
+                        : `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`)
+                      : (lang === 'en'
+                          ? `Note: all ${contextStats.total} found passages were included, but one passage was truncated to keep the prompt within the limit.`
+                          : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`)}
                   </p>
                 </div>
               )}

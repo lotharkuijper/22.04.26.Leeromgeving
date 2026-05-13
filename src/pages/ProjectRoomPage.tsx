@@ -440,7 +440,7 @@ export function ProjectRoomPage() {
           body: JSON.stringify({ lang }),
         });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || 'Preview ophalen mislukt');
+        if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Failed to load preview' : 'Preview ophalen mislukt'));
         setCheckpointPreview(data.threads || []);
         setCheckpointSynthesis(data.synthesis || null);
       } catch (e: any) {
@@ -590,10 +590,10 @@ export function ProjectRoomPage() {
       });
       const contentType = r.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
-        throw new Error(`Server-fout (${r.status}): onverwachte response. Probeer het opnieuw.`);
+        throw new Error(lang === 'en' ? `Server error (${r.status}): unexpected response. Please try again.` : `Server-fout (${r.status}): onverwachte response. Probeer het opnieuw.`);
       }
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Preview ophalen mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Failed to load preview' : 'Preview ophalen mislukt'));
       setClosePreviewData({ topics: d.topics || [], agreements: d.agreements || [] });
     } catch (e: any) {
       setCloseModalError(e.message);
