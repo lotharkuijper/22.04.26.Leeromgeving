@@ -661,25 +661,39 @@ function evaluateNumericAnswer(
   studentAnswer: string,
   modelAnswer: string,
 ): AnswerEvaluation {
+  const lang = _getLang();
+  const en = lang === 'en';
   const tolerance = Number.isFinite(toleranceRaw as number) && (toleranceRaw as number) > 0
     ? (toleranceRaw as number)
     : 0;
   const student = parseNumericAnswer(studentAnswer);
   const formatExpected = () => {
-    const t = tolerance > 0 ? ` (tolerantie ± ${tolerance})` : '';
+    const t = tolerance > 0
+      ? (en ? ` (tolerance ± ${tolerance})` : ` (tolerantie ± ${tolerance})`)
+      : '';
     return `${expected}${t}`;
   };
   const methodNote = tolerance > 0
-    ? `Beoordelingsmethode: numerieke tolerantie-check (±${tolerance}, op basis van het ItemBank-veld extol).`
-    : `Beoordelingsmethode: strikte numerieke vergelijking (geen extol-tolerantie opgegeven in de ItemBank).`;
+    ? (en
+        ? `Evaluation method: numeric tolerance check (±${tolerance}, based on the ItemBank field extol).`
+        : `Beoordelingsmethode: numerieke tolerantie-check (±${tolerance}, op basis van het ItemBank-veld extol).`)
+    : (en
+        ? `Evaluation method: strict numeric comparison (no extol tolerance specified in the ItemBank).`
+        : `Beoordelingsmethode: strikte numerieke vergelijking (geen extol-tolerantie opgegeven in de ItemBank).`);
   const modelNote = modelAnswer && modelAnswer.trim().length > 0
-    ? `\n\nUitleg uit het modelantwoord:\n${modelAnswer.trim()}`
+    ? (en
+        ? `\n\nExplanation from the model answer:\n${modelAnswer.trim()}`
+        : `\n\nUitleg uit het modelantwoord:\n${modelAnswer.trim()}`)
     : '';
 
   if (student === null) {
     return {
-      feedback: `Je hebt geen numeriek antwoord gegeven dat ik kon herleiden. Het verwachte antwoord is ${formatExpected()}. ${methodNote}${modelNote}`,
-      feedforward: `Schrijf je antwoord als één getal (bijv. ${expected}). Een korte toelichting mag, maar zorg dat het getal duidelijk in je antwoord staat.`,
+      feedback: en
+        ? `You did not provide a numeric answer that I could parse. The expected answer is ${formatExpected()}. ${methodNote}${modelNote}`
+        : `Je hebt geen numeriek antwoord gegeven dat ik kon herleiden. Het verwachte antwoord is ${formatExpected()}. ${methodNote}${modelNote}`,
+      feedforward: en
+        ? `Write your answer as a single number (e.g. ${expected}). A brief explanation is fine, but make sure the number appears clearly in your answer.`
+        : `Schrijf je antwoord als één getal (bijv. ${expected}). Een korte toelichting mag, maar zorg dat het getal duidelijk in je antwoord staat.`,
       score: 0,
     };
   }
@@ -690,15 +704,23 @@ function evaluateNumericAnswer(
 
   if (correct) {
     return {
-      feedback: `Je antwoord ${student} komt overeen met het verwachte antwoord ${formatExpected()}. ${methodNote}${modelNote}`,
-      feedforward: `Goed zo — bij vergelijkbare numerieke vragen blijf je telkens controleren of je tussenstappen en eenheden kloppen.`,
+      feedback: en
+        ? `Your answer ${student} matches the expected answer ${formatExpected()}. ${methodNote}${modelNote}`
+        : `Je antwoord ${student} komt overeen met het verwachte antwoord ${formatExpected()}. ${methodNote}${modelNote}`,
+      feedforward: en
+        ? `Well done — with similar numeric questions, always double-check your intermediate steps and units.`
+        : `Goed zo — bij vergelijkbare numerieke vragen blijf je telkens controleren of je tussenstappen en eenheden kloppen.`,
       score: 100,
     };
   }
 
   return {
-    feedback: `Je antwoord ${student} wijkt af van het verwachte antwoord ${formatExpected()}; het verschil is ${Number(diff.toPrecision(4))}. ${methodNote}${modelNote}`,
-    feedforward: `Reken de berekening stap voor stap opnieuw door en let op eenheden, afronding en welk getal precies gevraagd wordt.`,
+    feedback: en
+      ? `Your answer ${student} differs from the expected answer ${formatExpected()}; the difference is ${Number(diff.toPrecision(4))}. ${methodNote}${modelNote}`
+      : `Je antwoord ${student} wijkt af van het verwachte antwoord ${formatExpected()}; het verschil is ${Number(diff.toPrecision(4))}. ${methodNote}${modelNote}`,
+    feedforward: en
+      ? `Redo the calculation step by step and pay attention to units, rounding, and exactly what number is being asked for.`
+      : `Reken de berekening stap voor stap opnieuw door en let op eenheden, afronding en welk getal precies gevraagd wordt.`,
     score: 0,
   };
 }
@@ -737,9 +759,15 @@ export async function evaluateOpenAnswer(
   // studenten begrijpen waarom hun tekst- of cloze-antwoord is gescoord
   // tegen het ShareStats-modelantwoord (Task #67).
   if (question.source === 'itembank') {
+    const lang = _getLang();
+    const en = lang === 'en';
     const methodNote = question.extype === 'cloze'
-      ? `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (cloze-vraag uit de ItemBank).`
-      : `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (open vraag uit de ItemBank).`;
+      ? (en
+          ? `Evaluation method: textual comparison with the ShareStats model answer (cloze question from the ItemBank).`
+          : `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (cloze-vraag uit de ItemBank).`)
+      : (en
+          ? `Evaluation method: textual comparison with the ShareStats model answer (open question from the ItemBank).`
+          : `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (open vraag uit de ItemBank).`);
     return {
       ...evaluation,
       feedback: evaluation.feedback ? `${evaluation.feedback}\n\n${methodNote}` : methodNote,
