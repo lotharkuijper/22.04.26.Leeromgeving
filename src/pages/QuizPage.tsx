@@ -131,18 +131,18 @@ function questionTypeLabel(t: string | null | undefined, lang: string): string {
   return t || '';
 }
 
-function formatDateTime(iso: string): string {
+function formatDateTime(iso: string, lang = 'nl'): string {
   try {
-    return new Date(iso).toLocaleString('nl-NL', {
+    return new Date(iso).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit',
     });
   } catch { return iso; }
 }
 
-function topicsLabelOf(row: QuizAttemptRow): string {
+function topicsLabelOf(row: QuizAttemptRow, lang = 'nl'): string {
   if (Array.isArray(row.topics) && row.topics.length > 0) return row.topics.join(', ');
-  return '(zonder onderwerp)';
+  return lang === 'en' ? '(no topic)' : '(zonder onderwerp)';
 }
 
 export function QuizPage() {
@@ -292,7 +292,7 @@ export function QuizPage() {
       });
     } catch (err: any) {
       console.error('[QUIZ] loadTopics error:', err);
-      setTopicsError(err?.message || 'Kon onderwerpen niet laden');
+      setTopicsError(err?.message || (lang === 'en' ? 'Could not load topics' : 'Kon onderwerpen niet laden'));
       setAvailableTopics([]);
     } finally {
       setTopicsLoading(false);
@@ -317,9 +317,9 @@ export function QuizPage() {
         || /column .* does not exist/i.test(error.message || '');
       setAttemptsError(
         isSchemaError
-          ? 'De quiz-database is nog niet bijgewerkt naar het nieuwe model. ' +
-            'Je beheerder moet migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase toepassen. ' +
-            'Tot dat moment kun je nog wel quizzes genereren en oefenen, maar afgeronde pogingen worden nog niet bewaard.'
+          ? (lang === 'en'
+              ? 'The quiz database has not yet been updated to the new model. Your administrator must apply migration 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase. Until then you can still generate and practise quizzes, but completed attempts will not be saved.'
+              : 'De quiz-database is nog niet bijgewerkt naar het nieuwe model. Je beheerder moet migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase toepassen. Tot dat moment kun je nog wel quizzes genereren en oefenen, maar afgeronde pogingen worden nog niet bewaard.')
           : error.message,
       );
       setAttempts([]);
@@ -423,7 +423,7 @@ export function QuizPage() {
         return;
       }
       if (generated.length === 0) {
-        setFeedbackError({ title: 'Er konden geen vragen worden samengesteld uit de geselecteerde bronnen.' });
+        setFeedbackError({ title: lang === 'en' ? 'No questions could be compiled from the selected sources.' : 'Er konden geen vragen worden samengesteld uit de geselecteerde bronnen.' });
         return;
       }
       setLastMixCounts(mixCounts);
@@ -444,7 +444,7 @@ export function QuizPage() {
     } catch (error) {
       console.error('Error generating quiz:', error);
       setFeedbackError({
-        title: 'Er is een fout opgetreden bij het genereren van de quiz.',
+        title: lang === 'en' ? 'An error occurred while generating the quiz.' : 'Er is een fout opgetreden bij het genereren van de quiz.',
         detail: error instanceof Error ? error.message : undefined,
       });
     } finally {
@@ -487,7 +487,7 @@ export function QuizPage() {
     if (q.type === 'mcq') return;
     const text = draftText.trim();
     if (!text) {
-      setEvalError({ title: 'Schrijf eerst een antwoord voor je inlevert.' });
+      setEvalError({ title: lang === 'en' ? 'Write an answer before submitting.' : 'Schrijf eerst een antwoord voor je inlevert.' });
       return;
     }
 
@@ -566,10 +566,10 @@ export function QuizPage() {
         // Niet blokkerend voor de UI — toon summary alsnog, maar geef hint.
         setFeedbackError({
           title: isSchemaError
-            ? 'Je quiz kon niet in je geschiedenis worden opgeslagen omdat de quiz-database nog niet is bijgewerkt naar het nieuwe model.'
-            : 'Je quiz kon niet in je geschiedenis worden opgeslagen.',
+            ? (lang === 'en' ? 'Your quiz could not be saved to your history because the quiz database has not yet been updated to the new model.' : 'Je quiz kon niet in je geschiedenis worden opgeslagen omdat de quiz-database nog niet is bijgewerkt naar het nieuwe model.')
+            : (lang === 'en' ? 'Your quiz could not be saved to your history.' : 'Je quiz kon niet in je geschiedenis worden opgeslagen.'),
           detail: isSchemaError
-            ? 'Vraag je beheerder om migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase toe te passen.'
+            ? (lang === 'en' ? 'Ask your administrator to apply migration 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase.' : 'Vraag je beheerder om migratie 20260430120000_extend_quiz_attempts_for_multi_type.sql in Supabase toe te passen.')
             : error.message,
         });
       }
@@ -620,13 +620,13 @@ export function QuizPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || err.error || `Opslaan mislukt (${res.status})`);
+        throw new Error(err.detail || err.error || (lang === 'en' ? `Save failed (${res.status})` : `Opslaan mislukt (${res.status})`));
       }
 
       const data = await res.json();
       setSummaryStatus({ kind: 'saved', journalEntryId: data.journalEntryId });
     } catch (err: any) {
-      setSummaryStatus({ kind: 'error', message: err?.message || 'Onbekende fout' });
+      setSummaryStatus({ kind: 'error', message: err?.message || (lang === 'en' ? 'Unknown error' : 'Onbekende fout') });
     } finally {
       setSavingSummary(false);
     }
@@ -646,7 +646,7 @@ export function QuizPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Verwijderen mislukt (${res.status})`);
+        throw new Error(err.error || (lang === 'en' ? `Delete failed (${res.status})` : `Verwijderen mislukt (${res.status})`));
       }
 
       const result = await res.json();
@@ -657,11 +657,11 @@ export function QuizPage() {
       if (generateSummary && result.summaryFailed) {
         setPageNotice({
           kind: 'warning',
-          message: 'De quiz is verwijderd, maar de samenvatting kon niet in je leerdagboek worden opgeslagen. Probeer het later opnieuw.',
+          message: lang === 'en' ? 'The quiz was deleted, but the summary could not be saved to your learning journal. Please try again later.' : 'De quiz is verwijderd, maar de samenvatting kon niet in je leerdagboek worden opgeslagen. Probeer het later opnieuw.',
         });
       }
     } catch (err: any) {
-      setPageNotice({ kind: 'error', message: `Fout bij verwijderen: ${err.message}` });
+      setPageNotice({ kind: 'error', message: lang === 'en' ? `Delete error: ${err.message}` : `Fout bij verwijderen: ${err.message}` });
     } finally {
       setArchiving(false);
     }
@@ -689,17 +689,17 @@ export function QuizPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* SETUP LEFT COLUMN */}
           <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-200 p-6 space-y-6">
-            <h2 className="text-xl font-bold text-gray-900">Nieuwe quiz starten</h2>
+            <h2 className="text-xl font-bold text-gray-900">{lang === 'en' ? 'Start new quiz' : 'Nieuwe quiz starten'}</h2>
 
             {/* TOPICS */}
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Onderwerpen ({selectedTopicIds.size} geselecteerd)
+                {lang === 'en' ? `Topics (${selectedTopicIds.size} selected)` : `Onderwerpen (${selectedTopicIds.size} geselecteerd)`}
               </label>
 
               {topicsLoading && (
                 <p className="text-sm text-gray-500 flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Onderwerpen laden…
+                  <Loader2 className="w-4 h-4 animate-spin" /> {lang === 'en' ? 'Loading topics…' : 'Onderwerpen laden…'}
                 </p>
               )}
 
@@ -711,14 +711,14 @@ export function QuizPage() {
                     className="ml-2 underline hover:no-underline"
                     data-testid="button-topics-retry"
                   >
-                    Opnieuw proberen
+                    {lang === 'en' ? 'Try again' : 'Opnieuw proberen'}
                   </button>
                 </div>
               )}
 
               {!topicsLoading && !topicsError && availableTopics.length === 0 && (
                 <p className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                  Voor deze cursus zijn nog geen onderwerpen beschikbaar. Vraag je docent om eerst begrippen toe te voegen.
+                  {lang === 'en' ? 'No topics available for this course yet. Ask your lecturer to add concepts first.' : 'Voor deze cursus zijn nog geen onderwerpen beschikbaar. Vraag je docent om eerst begrippen toe te voegen.'}
                 </p>
               )}
 
@@ -726,7 +726,7 @@ export function QuizPage() {
                 <>
                   {topicsSource === 'global' && (
                     <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2">
-                      Voor de actieve cursus zijn nog geen specifieke onderwerpen — je ziet nu de algemene lijst.
+                      {lang === 'en' ? 'No specific topics for the active course yet — showing the general list.' : 'Voor de actieve cursus zijn nog geen specifieke onderwerpen — je ziet nu de algemene lijst.'}
                     </p>
                   )}
 
@@ -736,7 +736,7 @@ export function QuizPage() {
                       type="text"
                       value={topicSearch}
                       onChange={e => setTopicSearch(e.target.value)}
-                      placeholder="Zoek in onderwerpen…"
+                      placeholder={lang === 'en' ? 'Search topics…' : 'Zoek in onderwerpen…'}
                       className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-cyan-500 focus:border-transparent outline-none text-sm"
                       data-testid="input-topic-search"
                     />
@@ -747,7 +747,7 @@ export function QuizPage() {
                     data-testid="list-quiz-topics"
                   >
                     {filteredTopics.length === 0 ? (
-                      <div className="p-3 text-sm text-gray-500">Geen onderwerpen gevonden voor "{topicSearch}".</div>
+                      <div className="p-3 text-sm text-gray-500">{lang === 'en' ? `No topics found for "${topicSearch}".` : `Geen onderwerpen gevonden voor "${topicSearch}".`}</div>
                     ) : filteredTopics.map(t => {
                       const checked = selectedTopicIds.has(t.id);
                       return (
@@ -784,7 +784,7 @@ export function QuizPage() {
                           <button
                             onClick={() => toggleTopic(t.id)}
                             className="hover:text-cyan-900"
-                            aria-label={`Verwijder ${t.name}`}
+                            aria-label={lang === 'en' ? `Remove ${t.name}` : `Verwijder ${t.name}`}
                           >
                             <X className="w-3 h-3" />
                           </button>
@@ -797,7 +797,7 @@ export function QuizPage() {
                     <div className="mt-3 border border-gray-200 rounded-lg bg-gray-50 p-3" data-testid="panel-concept-availability">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-gray-700">
-                          Beschikbaar materiaal per begrip
+                          {lang === 'en' ? 'Available material per concept' : 'Beschikbaar materiaal per begrip'}
                         </span>
                         {availabilityLoading && <Loader2 className="w-3 h-3 animate-spin text-gray-500" />}
                       </div>
@@ -818,7 +818,7 @@ export function QuizPage() {
                               <span className="flex items-center gap-1.5">
                                 <span
                                   className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${hasRag ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-600'}`}
-                                  title={ragCount === null ? 'Geen primaire RAG-folder gekoppeld' : `${ragCount} document(en) in primaire folder`}
+                                  title={ragCount === null ? (lang === 'en' ? 'No primary RAG folder linked' : 'Geen primaire RAG-folder gekoppeld') : (lang === 'en' ? `${ragCount} document(s) in primary folder` : `${ragCount} document(en) in primaire folder`)}
                                   data-testid={`avail-rag-${t.id}`}
                                 >
                                   RAG: {ragCount === null ? '—' : ragCount}
@@ -830,8 +830,8 @@ export function QuizPage() {
                                     const open = a?.itembank_open_count ?? 0;
                                     const split = (mcq > 0 || open > 0) ? ` (${mcq} mcq · ${open} open)` : '';
                                     return a?.itembank_count_truncated
-                                      ? `Ten minste ${ibCount} ItemBank-vraag/vragen${split} — exacte telling beperkt door cap`
-                                      : `${ibCount} ItemBank-vraag/vragen${split} via koppelingen`;
+                                      ? (lang === 'en' ? `At least ${ibCount} ItemBank question(s)${split} — exact count capped` : `Ten minste ${ibCount} ItemBank-vraag/vragen${split} — exacte telling beperkt door cap`)
+                                      : (lang === 'en' ? `${ibCount} ItemBank question(s)${split} via mappings` : `${ibCount} ItemBank-vraag/vragen${split} via koppelingen`);
                                   })()}
                                   data-testid={`avail-itembank-${t.id}`}
                                 >
@@ -839,7 +839,7 @@ export function QuizPage() {
                                 </span>
                                 <span
                                   className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-100 text-violet-800"
-                                  title="LLM-creatief is altijd beschikbaar — Groq genereert toepassings- en transfervragen zonder externe bron"
+                                  title={lang === 'en' ? 'LLM-creative is always available — Groq generates application and transfer questions without an external source' : 'LLM-creatief is altijd beschikbaar — Groq genereert toepassings- en transfervragen zonder externe bron'}
                                   data-testid={`avail-llm-${t.id}`}
                                 >
                                   LLM
@@ -850,8 +850,7 @@ export function QuizPage() {
                         })}
                       </ul>
                       <p className="text-[11px] text-gray-500 mt-2">
-                        Heeft een begrip "RAG: —"? Dan is er nog geen primaire cursus-folder gekoppeld
-                        en valt de generator terug op de algemene cursus-mappen.
+                        {lang === 'en' ? 'If a concept shows "RAG: —", no primary course folder is linked yet and the generator falls back to general course folders.' : 'Heeft een begrip "RAG: —"? Dan is er nog geen primaire cursus-folder gekoppeld en valt de generator terug op de algemene cursus-mappen.'}
                       </p>
                     </div>
                   )}
@@ -861,7 +860,7 @@ export function QuizPage() {
 
             {/* QUESTION TYPE */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Vraagtype</label>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">{lang === 'en' ? 'Question type' : 'Vraagtype'}</label>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {(Object.keys(QUESTION_TYPE_META) as QuestionType[]).map(t => {
                   const meta = QUESTION_TYPE_META[t];
@@ -891,7 +890,7 @@ export function QuizPage() {
 
             {/* DIFFICULTY */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Moeilijkheidsgraad</label>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">{lang === 'en' ? 'Difficulty' : 'Moeilijkheidsgraad'}</label>
               <div className="grid grid-cols-3 gap-3">
                 {(['easy', 'medium', 'hard'] as const).map(level => (
                   <button
@@ -930,7 +929,7 @@ export function QuizPage() {
               </div>
               {questionType !== 'mcq' && (
                 <p className="text-xs text-gray-500 mt-1">
-                  Voor open vragen en casussen blijft het aantal beperkt — elke vraag wordt door het taalmodel beoordeeld.
+                  {lang === 'en' ? 'For open questions and cases the number is limited — each answer is evaluated by the language model.' : 'Voor open vragen en casussen blijft het aantal beperkt — elke vraag wordt door het taalmodel beoordeeld.'}
                 </p>
               )}
             </div>
@@ -950,7 +949,7 @@ export function QuizPage() {
               if (items.length === 0) return null;
               return (
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-3" data-testid="block-mix-preview">
-                  <div className="text-xs font-semibold text-gray-700 mb-2">Bronnen voor deze quiz</div>
+                  <div className="text-xs font-semibold text-gray-700 mb-2">{lang === 'en' ? 'Sources for this quiz' : 'Bronnen voor deze quiz'}</div>
                   <div className="flex flex-wrap gap-2">
                     {items.map(it => (
                       <span
@@ -964,7 +963,7 @@ export function QuizPage() {
                   </div>
                   {questionType === 'casus' && sourceMix.pct_itembank > 0 && (
                     <p className="text-xs text-gray-500 mt-2">
-                      ItemBank bevat geen casussen — voor dit vraagtype wordt deze bron overgeslagen en aangevuld met creatieve LLM-vragen.
+                      {lang === 'en' ? 'ItemBank contains no cases — for this question type this source is skipped and supplemented with creative LLM questions.' : 'ItemBank bevat geen casussen — voor dit vraagtype wordt deze bron overgeslagen en aangevuld met creatieve LLM-vragen.'}
                     </p>
                   )}
                 </div>
@@ -973,7 +972,7 @@ export function QuizPage() {
 
             {lastMixCounts && (lastMixCounts.itembank > 0 || lastMixCounts.rag > 0 || lastMixCounts.llm > 0) && (
               <div className="text-xs text-gray-600" data-testid="text-last-mix-counts">
-                Vorige quiz bevatte: {lastMixCounts.rag} cursus · {lastMixCounts.itembank} ItemBank · {lastMixCounts.llm} creatief
+                {lang === 'en' ? `Previous quiz contained: ${lastMixCounts.rag} course · ${lastMixCounts.itembank} ItemBank · ${lastMixCounts.llm} creative` : `Vorige quiz bevatte: ${lastMixCounts.rag} cursus · ${lastMixCounts.itembank} ItemBank · ${lastMixCounts.llm} creatief`}
               </div>
             )}
 
@@ -1039,7 +1038,7 @@ export function QuizPage() {
                       data-testid="button-quiz-retry"
                     >
                       <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                      Probeer opnieuw
+                      {lang === 'en' ? 'Try again' : 'Probeer opnieuw'}
                     </button>
                   </div>
                 </div>
@@ -1050,12 +1049,19 @@ export function QuizPage() {
           {/* RIGHT COLUMN: short hint card */}
           <div className="space-y-6">
             <div className="bg-white rounded-2xl border border-gray-200 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-2">Hoe werkt het?</h3>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">{lang === 'en' ? 'How does it work?' : 'Hoe werkt het?'}</h3>
               <ul className="text-sm text-gray-700 space-y-2 list-disc pl-4">
-                <li>Bij <strong>meerkeuze</strong> krijg je per vraag direct correct/incorrect te zien.</li>
-                <li>Bij <strong>open vragen</strong> typ je een antwoord; je krijgt feedback, feed forward en een score van 0–100.</li>
-                <li>Bij <strong>casussen</strong> lees je eerst een korte probleemschets, en daarna geldt hetzelfde als bij open vragen.</li>
-                <li>Afgeronde quizzes verschijnen onderaan deze pagina. Verwijderen kan altijd, eventueel met een notitie in je leerdagboek.</li>
+                {lang === 'en' ? <>
+                  <li>With <strong>multiple choice</strong> you see correct/incorrect directly per question.</li>
+                  <li>With <strong>open questions</strong> you type an answer; you receive feedback, feed forward and a score of 0–100.</li>
+                  <li>With <strong>cases</strong> you first read a short problem sketch, then the same as open questions applies.</li>
+                  <li>Completed quizzes appear at the bottom of this page. You can always delete them, optionally with a note in your learning journal.</li>
+                </> : <>
+                  <li>Bij <strong>meerkeuze</strong> krijg je per vraag direct correct/incorrect te zien.</li>
+                  <li>Bij <strong>open vragen</strong> typ je een antwoord; je krijgt feedback, feed forward en een score van 0–100.</li>
+                  <li>Bij <strong>casussen</strong> lees je eerst een korte probleemschets, en daarna geldt hetzelfde als bij open vragen.</li>
+                  <li>Afgeronde quizzes verschijnen onderaan deze pagina. Verwijderen kan altijd, eventueel met een notitie in je leerdagboek.</li>
+                </>}
               </ul>
             </div>
           </div>
@@ -1068,7 +1074,8 @@ export function QuizPage() {
           error={attemptsError}
           expandedId={expandedAttemptId}
           onToggleExpand={(id) => setExpandedAttemptId(prev => prev === id ? null : id)}
-          onAskDelete={(row) => setArchiveDialog({ id: row.id, label: topicsLabelOf(row) })}
+          onAskDelete={(row) => setArchiveDialog({ id: row.id, label: topicsLabelOf(row, lang) })}
+          lang={lang}
         />
 
         {/* ARCHIVE DIALOG */}
@@ -1141,7 +1148,7 @@ export function QuizPage() {
             className="inline-flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg"
           >
             <Play className="w-5 h-5" />
-            Quiz starten
+            {lang === 'en' ? 'Start quiz' : 'Quiz starten'}
           </button>
         </div>
       </div>
@@ -1208,7 +1215,7 @@ export function QuizPage() {
           {/* Casus context bovenaan */}
           {currentQ.type === 'casus' && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900" data-testid="block-casus-context">
-              <div className="font-semibold mb-1 text-amber-800">Casus</div>
+              <div className="font-semibold mb-1 text-amber-800">{lang === 'en' ? 'Case' : 'Casus'}</div>
               <p className="whitespace-pre-wrap">{currentQ.context}</p>
             </div>
           )}
@@ -1284,7 +1291,7 @@ export function QuizPage() {
                   : <XCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />}
                 <div>
                   <p className={`font-semibold mb-1 ${currentAnswer.isCorrect ? 'text-green-900' : 'text-orange-900'}`}>
-                    {currentAnswer.isCorrect ? 'Correct!' : 'Helaas, dat is niet juist'}
+                    {currentAnswer.isCorrect ? 'Correct!' : (lang === 'en' ? 'Not quite right' : 'Helaas, dat is niet juist')}
                   </p>
                   <p className={`text-sm ${currentAnswer.isCorrect ? 'text-green-800' : 'text-orange-800'}`}>
                     {(currentQ as MCQQuestion).explanation}
@@ -1301,7 +1308,7 @@ export function QuizPage() {
                 value={draftText}
                 onChange={e => setDraftText(e.target.value)}
                 disabled={isEvaluatedFree || evaluating}
-                placeholder="Schrijf hier jouw antwoord in volledige zinnen…"
+                placeholder={lang === 'en' ? 'Write your answer in full sentences here…' : 'Schrijf hier jouw antwoord in volledige zinnen…'}
                 rows={6}
                 className="w-full p-3 rounded-xl border-2 border-gray-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-200 outline-none disabled:bg-gray-50 disabled:text-gray-700 text-sm resize-y"
                 data-testid="textarea-free-answer"
@@ -1315,9 +1322,9 @@ export function QuizPage() {
                     data-testid="button-submit-free-answer"
                   >
                     {evaluating ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                    Antwoord inleveren
+                    {lang === 'en' ? 'Submit answer' : 'Antwoord inleveren'}
                   </button>
-                  {evaluating && <span className="text-sm text-gray-500">Bezig met beoordelen…</span>}
+                  {evaluating && <span className="text-sm text-gray-500">{lang === 'en' ? 'Evaluating…' : 'Bezig met beoordelen…'}</span>}
                 </div>
               )}
 
@@ -1326,11 +1333,11 @@ export function QuizPage() {
                   <div className="flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                     <div className="flex-1">
-                      <p className="text-sm font-semibold text-red-900">Beoordeling mislukt</p>
+                      <p className="text-sm font-semibold text-red-900">{lang === 'en' ? 'Evaluation failed' : 'Beoordeling mislukt'}</p>
                       <p className="text-sm text-red-800 mb-2">{evalError.title}</p>
                       {evalError.detail && (
                         <details className="text-xs text-red-700">
-                          <summary className="cursor-pointer hover:underline">Technische details</summary>
+                          <summary className="cursor-pointer hover:underline">{lang === 'en' ? 'Technical details' : 'Technische details'}</summary>
                           <p className="mt-1 font-mono whitespace-pre-wrap bg-red-100/60 rounded-md px-2 py-1">{evalError.detail}</p>
                         </details>
                       )}
@@ -1339,7 +1346,7 @@ export function QuizPage() {
                         className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
                         data-testid="button-eval-retry"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" /> Opnieuw proberen
+                        <RefreshCw className="w-3.5 h-3.5" /> {lang === 'en' ? 'Try again' : 'Opnieuw proberen'}
                       </button>
                     </div>
                   </div>
@@ -1347,7 +1354,7 @@ export function QuizPage() {
               )}
 
               {isEvaluatedFree && currentAnswer && currentAnswer.type !== 'mcq' && currentAnswer.evaluation && (
-                <FreeTextEvaluationBlock evaluation={currentAnswer.evaluation} modelAnswer={(currentQ as OpenQuestion | CasusQuestion).modelAnswer} />
+                <FreeTextEvaluationBlock evaluation={currentAnswer.evaluation} modelAnswer={(currentQ as OpenQuestion | CasusQuestion).modelAnswer} lang={lang} />
               )}
             </div>
           )}
@@ -1360,7 +1367,7 @@ export function QuizPage() {
             className="px-6 py-3 bg-gray-200 text-gray-700 font-semibold rounded-xl hover:bg-gray-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="button-prev-question"
           >
-            Vorige
+            {lang === 'en' ? 'Previous' : 'Vorige'}
           </button>
           <button
             onClick={handleNextQuestion}
@@ -1368,7 +1375,7 @@ export function QuizPage() {
             className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-cyan-600 text-white font-semibold rounded-xl hover:from-cyan-600 hover:to-cyan-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="button-next-question"
           >
-            {currentQuestion === questions.length - 1 ? 'Afronden' : 'Volgende'}
+            {currentQuestion === questions.length - 1 ? (lang === 'en' ? 'Finish' : 'Afronden') : (lang === 'en' ? 'Next' : 'Volgende')}
           </button>
         </div>
       </div>
@@ -1393,18 +1400,18 @@ export function QuizPage() {
           </div>
 
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Quiz voltooid!</h1>
-            <p className="text-gray-600">Je hebt de quiz over "{topicsText}" afgerond</p>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">{lang === 'en' ? 'Quiz completed!' : 'Quiz voltooid!'}</h1>
+            <p className="text-gray-600">{lang === 'en' ? `You have completed the quiz about "${topicsText}"` : `Je hebt de quiz over "${topicsText}" afgerond`}</p>
           </div>
 
           <div className="inline-block px-8 py-6 bg-gray-50 rounded-2xl">
             <div className="text-6xl font-bold text-gray-900 mb-2" data-testid="text-final-score">{percentage}%</div>
-            <div className="text-gray-600">{questions.length} vragen — {QUESTION_TYPE_META[questionType].label}</div>
+            <div className="text-gray-600">{questions.length} {lang === 'en' ? 'questions' : 'vragen'} — {QUESTION_TYPE_META[questionType].label}</div>
           </div>
 
           <div className={`p-4 rounded-xl ${passed ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
             <p className={`font-semibold ${passed ? 'text-green-900' : 'text-orange-900'}`}>
-              {passed ? 'Goed gedaan! Je hebt de quiz succesvol afgerond.' : 'Blijf oefenen! Je hebt minimaal 70% nodig om te slagen.'}
+              {passed ? (lang === 'en' ? 'Well done! You have successfully completed the quiz.' : 'Goed gedaan! Je hebt de quiz succesvol afgerond.') : (lang === 'en' ? 'Keep practising! You need at least 70% to pass.' : 'Blijf oefenen! Je hebt minimaal 70% nodig om te slagen.')}
             </p>
           </div>
 
@@ -1422,9 +1429,9 @@ export function QuizPage() {
             >
               <CheckCircle className="w-5 h-5 text-green-700 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <p className="font-semibold text-green-900 mb-0.5">Notitie opgeslagen in je leerdagboek</p>
+                <p className="font-semibold text-green-900 mb-0.5">{lang === 'en' ? 'Note saved to your learning journal' : 'Notitie opgeslagen in je leerdagboek'}</p>
                 <p className="text-sm text-green-800">
-                  Je kunt 'm later teruglezen op de pagina <a href="/feedback" className="underline hover:no-underline font-medium">Leer Dagboek</a>.
+                  {lang === 'en' ? <>You can read it back later on the <a href="/feedback" className="underline hover:no-underline font-medium">Learning Journal</a> page.</> : <>Je kunt 'm later teruglezen op de pagina <a href="/feedback" className="underline hover:no-underline font-medium">Leer Dagboek</a>.</>}
                 </p>
               </div>
             </div>
@@ -1436,7 +1443,7 @@ export function QuizPage() {
             >
               <AlertCircle className="w-5 h-5 text-red-700 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <p className="font-semibold text-red-900 mb-0.5">Opslaan mislukt</p>
+                <p className="font-semibold text-red-900 mb-0.5">{lang === 'en' ? 'Save failed' : 'Opslaan mislukt'}</p>
                 <p className="text-sm text-red-800">{summaryStatus.message}</p>
               </div>
             </div>
@@ -1452,10 +1459,10 @@ export function QuizPage() {
               >
                 {savingSummary ? <Loader2 className="w-5 h-5 animate-spin" /> : <BookText className="w-5 h-5" />}
                 {savingSummary
-                  ? 'Samenvatting wordt opgesteld…'
+                  ? (lang === 'en' ? 'Preparing summary…' : 'Samenvatting wordt opgesteld…')
                   : summaryStatus.kind === 'error'
-                    ? 'Opnieuw proberen'
-                    : 'Bewaar samenvatting in leerdagboek'}
+                    ? (lang === 'en' ? 'Try again' : 'Opnieuw proberen')
+                    : (lang === 'en' ? 'Save summary to learning journal' : 'Bewaar samenvatting in leerdagboek')}
               </button>
             )}
             <button
@@ -1464,7 +1471,7 @@ export function QuizPage() {
               data-testid="button-new-quiz"
             >
               <RotateCcw className="w-5 h-5" />
-              Nieuwe quiz
+              {lang === 'en' ? 'New quiz' : 'Nieuwe quiz'}
             </button>
           </div>
         </div>
@@ -1472,16 +1479,16 @@ export function QuizPage() {
         <div className="bg-white rounded-2xl border border-gray-200 p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
             <TrendingUp className="w-6 h-6 text-cyan-600" />
-            Antwoordenoverzicht
+            {lang === 'en' ? 'Answer overview' : 'Antwoordenoverzicht'}
           </h2>
           <div className="space-y-4">
             {questions.map((q, index) => (
-              <QuestionReviewCard key={index} index={index} question={q} answer={answers[index]} />
+              <QuestionReviewCard key={index} index={index} question={q} answer={answers[index]} lang={lang} />
             ))}
           </div>
           {ragSources.length > 0 && (
             <div className="mt-2">
-              <SourceList sources={ragSources} label="Quiz gebaseerd op cursusmateriaal" />
+              <SourceList sources={ragSources} label={lang === 'en' ? 'Quiz based on course material' : 'Quiz gebaseerd op cursusmateriaal'} />
             </div>
           )}
           {ragStats && (
@@ -1508,13 +1515,13 @@ export function QuizPage() {
 // HELPER COMPONENTS (in dezelfde file conform fullstack-js skill)
 // ────────────────────────────────────────────────────────────
 
-function FreeTextEvaluationBlock({ evaluation, modelAnswer }: { evaluation: AnswerEvaluation; modelAnswer?: string }) {
+function FreeTextEvaluationBlock({ evaluation, modelAnswer, lang = 'nl' }: { evaluation: AnswerEvaluation; modelAnswer?: string; lang?: string }) {
   const passed = evaluation.score >= 70;
   return (
     <div className={`rounded-xl border-2 p-4 space-y-3 ${passed ? 'border-green-200 bg-green-50' : 'border-orange-200 bg-orange-50'}`} data-testid="block-free-evaluation">
       <div className="flex items-center justify-between">
         <div className={`text-sm font-semibold ${passed ? 'text-green-900' : 'text-orange-900'}`}>
-          Beoordeling
+          {lang === 'en' ? 'Evaluation' : 'Beoordeling'}
         </div>
         <div
           className={`px-3 py-1 rounded-full text-sm font-bold ${passed ? 'bg-green-600 text-white' : 'bg-orange-600 text-white'}`}
@@ -1533,7 +1540,7 @@ function FreeTextEvaluationBlock({ evaluation, modelAnswer }: { evaluation: Answ
       </div>
       {modelAnswer && (
         <details className="text-sm">
-          <summary className="cursor-pointer text-gray-700 hover:underline">Voorbeeld-antwoord van het model</summary>
+          <summary className="cursor-pointer text-gray-700 hover:underline">{lang === 'en' ? 'Model answer example' : 'Voorbeeld-antwoord van het model'}</summary>
           <p className="mt-2 text-gray-800 whitespace-pre-wrap bg-white/70 border border-gray-200 rounded-md p-2">{modelAnswer}</p>
         </details>
       )}
@@ -1541,7 +1548,7 @@ function FreeTextEvaluationBlock({ evaluation, modelAnswer }: { evaluation: Answ
   );
 }
 
-function QuestionReviewCard({ index, question, answer }: { index: number; question: QuizQuestion; answer: QuizAnswer | undefined }) {
+function QuestionReviewCard({ index, question, answer, lang = 'nl' }: { index: number; question: QuizQuestion; answer: QuizAnswer | undefined; lang?: string }) {
   if (question.type === 'mcq') {
     const a = answer && answer.type === 'mcq' ? answer : null;
     const isCorrect = !!a?.isCorrect;
@@ -1555,14 +1562,14 @@ function QuestionReviewCard({ index, question, answer }: { index: number; questi
             <p className="font-semibold text-gray-900 mb-2">{question.question}</p>
             <div className="space-y-1 text-sm">
               <p className={isCorrect ? 'text-green-700' : 'text-red-700'}>
-                <strong>Jouw antwoord:</strong> {a && a.selectedIndex >= 0 ? question.options[a.selectedIndex] : '(geen antwoord)'}
+                <strong>{lang === 'en' ? 'Your answer:' : 'Jouw antwoord:'}</strong> {a && a.selectedIndex >= 0 ? question.options[a.selectedIndex] : (lang === 'en' ? '(no answer)' : '(geen antwoord)')}
               </p>
               {!isCorrect && (
                 <p className="text-green-700">
-                  <strong>Correct antwoord:</strong> {question.options[question.correctAnswer]}
+                  <strong>{lang === 'en' ? 'Correct answer:' : 'Correct antwoord:'}</strong> {question.options[question.correctAnswer]}
                 </p>
               )}
-              <p className="text-gray-700 mt-2"><strong>Uitleg:</strong> {question.explanation}</p>
+              <p className="text-gray-700 mt-2"><strong>{lang === 'en' ? 'Explanation:' : 'Uitleg:'}</strong> {question.explanation}</p>
             </div>
           </div>
           {isCorrect ? <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" /> : <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
@@ -1582,11 +1589,11 @@ function QuestionReviewCard({ index, question, answer }: { index: number; questi
         </div>
         <div className="flex-1 min-w-0">
           {question.type === 'casus' && (
-            <p className="text-xs italic text-gray-600 mb-1 whitespace-pre-wrap"><strong>Casus:</strong> {question.context}</p>
+            <p className="text-xs italic text-gray-600 mb-1 whitespace-pre-wrap"><strong>{lang === 'en' ? 'Case:' : 'Casus:'}</strong> {question.context}</p>
           )}
           <p className="font-semibold text-gray-900 mb-2">{question.question}</p>
           <div className="space-y-1 text-sm">
-            <p className="text-gray-800"><strong>Jouw antwoord:</strong> {(a?.text || '(geen antwoord)').trim()}</p>
+            <p className="text-gray-800"><strong>{lang === 'en' ? 'Your answer:' : 'Jouw antwoord:'}</strong> {(a?.text || (lang === 'en' ? '(no answer)' : '(geen antwoord)')).trim()}</p>
             {ev && (
               <>
                 <p className="text-gray-800"><strong>Score:</strong> {ev.score}/100</p>
@@ -1602,7 +1609,7 @@ function QuestionReviewCard({ index, question, answer }: { index: number; questi
 }
 
 function ResultsList({
-  attempts, loading, error, expandedId, onToggleExpand, onAskDelete,
+  attempts, loading, error, expandedId, onToggleExpand, onAskDelete, lang = 'nl',
 }: {
   attempts: QuizAttemptRow[];
   loading: boolean;
@@ -1610,18 +1617,19 @@ function ResultsList({
   expandedId: string | null;
   onToggleExpand: (id: string) => void;
   onAskDelete: (row: QuizAttemptRow) => void;
+  lang?: string;
 }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-200 p-6" data-testid="block-results-list">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
           <TrendingUp className="w-5 h-5 text-cyan-600" />
-          Jouw afgeronde quizzes
+          {lang === 'en' ? 'Your completed quizzes' : 'Jouw afgeronde quizzes'}
         </h2>
         <span className="text-sm text-gray-500">{attempts.length} {attempts.length === 1 ? 'quiz' : 'quizzes'}</span>
       </div>
 
-      {loading && <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Laden…</p>}
+      {loading && <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> {lang === 'en' ? 'Loading…' : 'Laden…'}</p>}
       {error && <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</p>}
 
       {!loading && !error && attempts.length === 0 && (
@@ -1647,9 +1655,9 @@ function ResultsList({
                       {score == null ? '–' : `${score}%`}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-gray-900 truncate">{topicsLabelOf(row)}</div>
+                      <div className="font-medium text-gray-900 truncate">{topicsLabelOf(row, lang)}</div>
                       <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
-                        <Calendar className="w-3 h-3" /> {formatDateTime(row.created_at)}
+                        <Calendar className="w-3 h-3" /> {formatDateTime(row.created_at, lang)}
                         <span>•</span>
                         <span>{questionTypeLabel(row.question_type, lang)}</span>
                         <span>•</span>
@@ -1678,6 +1686,7 @@ function ResultsList({
                         index={idx}
                         question={q}
                         answer={(row.answers || [])[idx]}
+                        lang={lang}
                       />
                     ))}
                     {(!row.questions_data || row.questions_data.length === 0) && (
@@ -1758,7 +1767,7 @@ function ArchiveDialog({
             disabled={archiving}
             className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
           >
-            Annuleren
+            {lang === 'en' ? 'Cancel' : 'Annuleren'}
           </button>
         </div>
       </div>

@@ -145,7 +145,7 @@ export function ResourcesPage() {
         data-testid={`download-btn-${resource.id}`}
       >
         <Download className="w-3.5 h-3.5" />
-        Download
+        {lang === 'en' ? 'Download' : 'Download'}
       </button>
     </div>
   );

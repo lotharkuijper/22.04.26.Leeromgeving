@@ -223,7 +223,7 @@ export function ProjectsPage() {
                               className="flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-40"
                               data-testid={`button-restart-${p.id}`}
                             >
-                              <RefreshCw className="w-4 h-4" /> Opnieuw beginnen
+                              <RefreshCw className="w-4 h-4" /> {lang === 'en' ? 'Start over' : 'Opnieuw beginnen'}
                             </button>
                           )}
                         </div>
