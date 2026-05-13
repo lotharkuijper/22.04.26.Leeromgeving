@@ -175,7 +175,7 @@ export function ProjectRoomPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) {
-        setError((await r.json()).error || 'Kon projectruimte niet laden');
+        setError((await r.json()).error || (lang === 'en' ? 'Could not load project room' : 'Kon projectruimte niet laden'));
         return;
       }
       const data = await r.json();
@@ -243,16 +243,16 @@ export function ProjectRoomPage() {
 
   const uploadFile = async (file: File) => {
     if (!token || !projectId || !activePersonaId || activePersonaId === '__default__') {
-      setError('Voeg eerst een echte persona toe in het beheerpaneel.');
+      setError(lang === 'en' ? 'First add a real persona in the management panel.' : 'Voeg eerst een echte persona toe in het beheerpaneel.');
       return;
     }
     const ALLOWED = /\.(txt|md|markdown|csv|tsv|json|log|pdf|docx|pptx|xlsx|odt|ods|odp)$/i;
     if (!ALLOWED.test(file.name)) {
-      setError('Ondersteunde formaten: .txt, .md, .csv, .tsv, .json, .pdf, .docx, .pptx, .xlsx, .odt, .ods, .odp.');
+      setError(lang === 'en' ? 'Supported formats: .txt, .md, .csv, .tsv, .json, .pdf, .docx, .pptx, .xlsx, .odt, .ods, .odp.' : 'Ondersteunde formaten: .txt, .md, .csv, .tsv, .json, .pdf, .docx, .pptx, .xlsx, .odt, .ods, .odp.');
       return;
     }
     if (file.size > 15_000_000) {
-      setError('Bestand is groter dan 15 MB.');
+      setError(lang === 'en' ? 'File is larger than 15 MB.' : 'Bestand is groter dan 15 MB.');
       return;
     }
     setUploadingDoc(true);
@@ -267,7 +267,7 @@ export function ProjectRoomPage() {
         body: fd,
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Upload mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Upload failed' : 'Upload mislukt'));
       setPersonaDocs(prev => [d.document, ...prev]);
     } catch (e: any) {
       setError(e.message);
@@ -279,14 +279,14 @@ export function ProjectRoomPage() {
 
   const deleteDoc = async (doc: PersonaDoc) => {
     if (!token || !projectId || !activePersonaId) return;
-    if (!confirm(`Verwijder "${doc.filename}"?`)) return;
+    if (!confirm(lang === 'en' ? `Delete "${doc.filename}"?` : `Verwijder "${doc.filename}"?`)) return;
     try {
       const r = await fetch(`/api/projects/${projectId}/personas/${activePersonaId}/documents/${doc.id}`, {
         method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        throw new Error(d.error || 'Verwijderen mislukt');
+        throw new Error(d.error || (lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt'));
       }
       setPersonaDocs(prev => prev.filter(d => d.id !== doc.id));
     } catch (e: any) {
@@ -351,7 +351,7 @@ export function ProjectRoomPage() {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        throw new Error(j.error || 'Download mislukt');
+        throw new Error(j.error || (lang === 'en' ? 'Download failed' : 'Download mislukt'));
       }
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
@@ -363,7 +363,7 @@ export function ProjectRoomPage() {
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e: any) {
-      setError(e.message || 'Download mislukt');
+      setError(e.message || (lang === 'en' ? 'Download failed' : 'Download mislukt'));
     }
   };
 
@@ -384,7 +384,7 @@ export function ProjectRoomPage() {
         body: JSON.stringify({ groupId, personaId: activePersonaId, message: text, lang }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Persona-chat mislukt');
+      if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Persona chat failed' : 'Persona-chat mislukt'));
       if (data.threadId) setActiveThreadId(data.threadId);
       setPersonaMessages(prev => [...prev, {
         id: `reply-${Date.now()}`, role: 'assistant', content: data.reply,
@@ -393,7 +393,7 @@ export function ProjectRoomPage() {
     } catch (e: any) {
       setPersonaMessages(prev => [...prev, {
         id: `err-${Date.now()}`, role: 'assistant',
-        content: `Fout: ${e.message}`, created_at: new Date().toISOString(), user_id: null,
+        content: `${lang === 'en' ? 'Error' : 'Fout'}: ${e.message}`, created_at: new Date().toISOString(), user_id: null,
       }]);
     } finally {
       setPersonaLoading(false);
@@ -458,7 +458,7 @@ export function ProjectRoomPage() {
     if (!showCheckpointModal || !groupId || !token) return;
     // kind='final' vereist handmatige reflectie; kind='checkpoint' gebruikt de preview.
     if (showCheckpointModal === 'final' && reflection.trim().length < 20) {
-      setError('Schrijf een reflectie van minimaal 20 tekens.');
+      setError(lang === 'en' ? 'Write a reflection of at least 20 characters.' : 'Schrijf een reflectie van minimaal 20 tekens.');
       return;
     }
     setSubmittingCheckpoint(true);
@@ -477,7 +477,7 @@ export function ProjectRoomPage() {
       } else {
         // kind='checkpoint': altijd personaSummaries sturen; knop is verborgen als preview leeg is.
         if (!checkpointPreview || checkpointPreview.length === 0) {
-          throw new Error('Geen gesprekken om op te slaan.');
+          throw new Error(lang === 'en' ? 'No conversations to save.' : 'Geen gesprekken om op te slaan.');
         }
         body.personaSummaries = checkpointPreview;
       }
@@ -488,7 +488,7 @@ export function ProjectRoomPage() {
         body: JSON.stringify(body),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Checkpoint mislukt');
+      if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Checkpoint failed' : 'Checkpoint mislukt'));
       setCheckpoints(prev => [data.checkpoint, ...prev]);
       setReflection('');
       setCheckpointPreview(null);
@@ -517,7 +517,7 @@ export function ProjectRoomPage() {
 
   const requestEvaluation = async () => {
     if (!groupId || !token) return;
-    if (!confirm('Vraag je een formatieve beoordeling aan? De beoordelaar leest jullie gesprekken en zet feedback in elk leerdagboek.')) return;
+    if (!confirm(lang === 'en' ? 'Are you requesting a formative assessment? The assessor will read your conversations and add feedback to each learning journal.' : 'Vraag je een formatieve beoordeling aan? De beoordelaar leest jullie gesprekken en zet feedback in elk leerdagboek.')) return;
     setEvaluating(true);
     setError(null);
     try {
@@ -533,11 +533,11 @@ export function ProjectRoomPage() {
         body: JSON.stringify({ requestId }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Beoordeling mislukt');
+      if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Assessment failed' : 'Beoordeling mislukt'));
       const okCount = (data.results || []).filter((x: any) => x.ok).length;
       setInfo(okCount > 0
-        ? `Beoordeling klaar — ${okCount} feedback-rapport(en) staan in jullie leerdagboeken.`
-        : 'Beoordeling voltooid maar er kwam geen feedback terug.');
+        ? (lang === 'en' ? `Assessment complete — ${okCount} feedback report(s) are in your learning journals.` : `Beoordeling klaar — ${okCount} feedback-rapport(en) staan in jullie leerdagboeken.`)
+        : (lang === 'en' ? 'Assessment completed but no feedback was returned.' : 'Beoordeling voltooid maar er kwam geen feedback terug.'));
       setTimeout(() => setInfo(null), 7000);
       setEvaluateRequestId(null);
     } catch (e: any) {
@@ -611,13 +611,13 @@ export function ProjectRoomPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Afsluiten mislukt');
+      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Close failed' : 'Afsluiten mislukt'));
       setShowCloseModal(false);
       setPersonaMessages([]);
       setActiveThreadId(null);
       setRightPanelTab('logboek');
       await loadConversationLog();
-      setInfo('Gesprek afgesloten en opgeslagen in het logboek.');
+      setInfo(lang === 'en' ? 'Conversation closed and saved to the logbook.' : 'Gesprek afgesloten en opgeslagen in het logboek.');
       setTimeout(() => setInfo(null), 5000);
     } catch (e: any) {
       setCloseModalError(e.message);
@@ -639,13 +639,13 @@ export function ProjectRoomPage() {
   const isFinalized = group?.status === 'finalized';
 
   if (loadingRoom && !project) {
-    return <div className="p-12 text-center text-gray-500">Laden…</div>;
+    return <div className="p-12 text-center text-gray-500">{lang === 'en' ? 'Loading…' : 'Laden…'}</div>;
   }
   if (!project || !group) {
     return (
       <div className="p-12 text-center">
-        <p className="text-red-600 mb-4">{error || 'Projectruimte niet gevonden'}</p>
-        <Link to="/projects" className="text-blue-600 hover:underline">← Terug naar projecten</Link>
+        <p className="text-red-600 mb-4">{error || (lang === 'en' ? 'Project room not found' : 'Projectruimte niet gevonden')}</p>
+        <Link to="/projects" className="text-blue-600 hover:underline">← {lang === 'en' ? 'Back to projects' : 'Terug naar projecten'}</Link>
       </div>
     );
   }
@@ -661,7 +661,7 @@ export function ProjectRoomPage() {
           <div className="min-w-0">
             <h1 className="font-bold text-gray-900 truncate" data-testid="text-project-title">{project.title}</h1>
             <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-xs text-gray-500 truncate">{group.name}{isFinalized && ' · afgesloten'}</p>
+              <p className="text-xs text-gray-500 truncate">{group.name}{isFinalized && (lang === 'en' ? ' · closed' : ' · afgesloten')}</p>
               {(() => {
                 const lastCp = checkpoints.length > 0
                   ? checkpoints.reduce((a, b) => new Date(a.created_at) > new Date(b.created_at) ? a : b)
@@ -669,11 +669,11 @@ export function ProjectRoomPage() {
                 return lastCp ? (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[10px] rounded border border-blue-100" data-testid="badge-last-checkpoint">
                     <CheckCircle2 className="w-2.5 h-2.5" />
-                    Laatste checkpoint: {new Date(lastCp.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {lang === 'en' ? 'Last checkpoint:' : 'Laatste checkpoint:'} {new Date(lastCp.created_at).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-50 text-gray-400 text-[10px] rounded border border-gray-200" data-testid="badge-no-checkpoint">
-                    Nog geen checkpoint
+                    {lang === 'en' ? 'No checkpoint yet' : 'Nog geen checkpoint'}
                   </span>
                 );
               })()}
@@ -681,7 +681,7 @@ export function ProjectRoomPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 text-sm">
-          <button onClick={copyInvite} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs font-mono" title="Kopieer invite-code" data-testid="button-copy-invite">
+          <button onClick={copyInvite} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs font-mono" title={lang === 'en' ? 'Copy invite code' : 'Kopieer invite-code'} data-testid="button-copy-invite">
             <Copy className="w-3.5 h-3.5" />
             {group.invite_code}
           </button>
@@ -702,7 +702,7 @@ export function ProjectRoomPage() {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white hover:bg-green-700 rounded-lg text-xs font-medium"
                 data-testid="button-open-finalize"
               >
-                <Flag className="w-4 h-4" /> Afronden
+                <Flag className="w-4 h-4" /> {lang === 'en' ? 'Finalise' : 'Afronden'}
               </button>
             </>
           )}
@@ -712,10 +712,10 @@ export function ProjectRoomPage() {
               disabled={evaluating}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 rounded-lg text-xs font-medium"
               data-testid="button-request-evaluation"
-              title="Vraag de beoordelaar om formatieve feedback op jullie gesprekken"
+              title={lang === 'en' ? 'Ask the assessor for formative feedback on your conversations' : 'Vraag de beoordelaar om formatieve feedback op jullie gesprekken'}
             >
               {evaluating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldAlert className="w-4 h-4" />}
-              {evaluating ? 'Beoordeelt…' : 'Beoordeling opvragen'}
+              {evaluating ? (lang === 'en' ? 'Assessing…' : 'Beoordeelt…') : (lang === 'en' ? 'Request assessment' : 'Beoordeling opvragen')}
             </button>
           )}
         </div>
@@ -737,7 +737,7 @@ export function ProjectRoomPage() {
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
                 data-testid="select-persona"
               >
-                {personas.length === 0 && <option value="">(geen persona's beschikbaar)</option>}
+                {personas.length === 0 && <option value="">{lang === 'en' ? "(no personas available)" : "(geen persona's beschikbaar)"}</option>}
                 {personas.map(p => (
                   <option key={p.id} value={p.id} data-testid={`option-persona-${p.id}`}>
                     {(p.avatar_emoji || '🤖')} {p.name}
@@ -748,13 +748,13 @@ export function ProjectRoomPage() {
             {activePersona && activePersonaId !== '__default__' && (
               <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
                 <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                  <span className="text-gray-500">Documenten ({personaDocs.length}):</span>
-                  {personaDocs.length === 0 && <span className="italic text-gray-400">geen</span>}
+                  <span className="text-gray-500">{lang === 'en' ? 'Documents' : 'Documenten'} ({personaDocs.length}):</span>
+                  {personaDocs.length === 0 && <span className="italic text-gray-400">{lang === 'en' ? 'none' : 'geen'}</span>}
                   {personaDocs.map(d => (
                     <span key={d.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded" data-testid={`doc-${d.id}`}>
                       <FileText className="w-3 h-3" />
                       <span className="max-w-[120px] truncate" title={d.filename}>{d.filename}</span>
-                      <button onClick={() => deleteDoc(d)} className="text-red-500 hover:text-red-700" title="Verwijder" data-testid={`button-delete-doc-${d.id}`}>
+                      <button onClick={() => deleteDoc(d)} className="text-red-500 hover:text-red-700" title={lang === 'en' ? 'Delete' : 'Verwijder'} data-testid={`button-delete-doc-${d.id}`}>
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </span>
@@ -780,7 +780,7 @@ export function ProjectRoomPage() {
             {personaMessages.length === 0 && activePersona && (
               <div className="text-center text-gray-500 text-sm py-8">
                 <Bot className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-                Begin een gesprek met <strong>{activePersona.name}</strong>.
+                {lang === 'en' ? <>Start a conversation with <strong>{activePersona.name}</strong>.</> : <>Begin een gesprek met <strong>{activePersona.name}</strong>.</>}
               </div>
             )}
             {personaMessages.map(m => (
@@ -798,7 +798,7 @@ export function ProjectRoomPage() {
             {personaLoading && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 px-4 py-2 rounded-2xl text-sm text-gray-500 flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" /> denkt na…
+                  <Loader2 className="w-3 h-3 animate-spin" /> {lang === 'en' ? 'thinking…' : 'denkt na…'}
                 </div>
               </div>
             )}
@@ -815,7 +815,7 @@ export function ProjectRoomPage() {
                     sendPersona();
                   }
                 }}
-                placeholder={activePersona ? `Vraag iets aan ${activePersona.name}… (Shift+Enter = nieuwe regel)` : 'Kies eerst een persona'}
+                placeholder={activePersona ? (lang === 'en' ? `Ask ${activePersona.name} something… (Shift+Enter = new line)` : `Vraag iets aan ${activePersona.name}… (Shift+Enter = nieuwe regel)`) : (lang === 'en' ? 'Select a persona first' : 'Kies eerst een persona')}
                 disabled={!activePersona || personaLoading || isFinalized}
                 rows={6}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[150px] max-h-[300px]"
@@ -834,7 +834,7 @@ export function ProjectRoomPage() {
                   onClick={openCloseModal}
                   disabled={!activeThreadId || personaLoading || isFinalized}
                   className="px-4 py-2 border border-gray-200 text-gray-400 hover:bg-red-50 hover:border-red-200 hover:text-red-500 rounded-lg disabled:opacity-30 transition-colors"
-                  title="Gesprek afsluiten en neerslag opslaan"
+                  title={lang === 'en' ? 'Close conversation and save summary' : 'Gesprek afsluiten en neerslag opslaan'}
                   data-testid="button-close-conversation"
                 >
                   <LogOut className="w-4 h-4" />
@@ -849,18 +849,18 @@ export function ProjectRoomPage() {
           {/* Groepschat */}
           <div className="flex-1 flex flex-col bg-white rounded-xl border border-gray-200 min-h-0">
             <div className="border-b border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 flex items-center gap-2">
-              <MessageCircle className="w-4 h-4" /> Groepschat
+              <MessageCircle className="w-4 h-4" /> {lang === 'en' ? 'Group chat' : 'Groepschat'}
             </div>
             <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-3 space-y-2">
               {chatMessages.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-6">Nog geen berichten — start het gesprek met je groep.</p>
+                <p className="text-xs text-gray-400 text-center py-6">{lang === 'en' ? 'No messages yet — start the conversation with your group.' : 'Nog geen berichten — start het gesprek met je groep.'}</p>
               )}
               {chatMessages.map(m => {
                 const isMe = m.user_id === profile?.id;
-                const author = m.profiles?.full_name || m.profiles?.email?.split('@')[0] || 'iemand';
+                const author = m.profiles?.full_name || m.profiles?.email?.split('@')[0] || (lang === 'en' ? 'someone' : 'iemand');
                 return (
                   <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                    <div className="text-[10px] text-gray-400 mb-0.5">{isMe ? 'jij' : author}</div>
+                    <div className="text-[10px] text-gray-400 mb-0.5">{isMe ? (lang === 'en' ? 'you' : 'jij') : author}</div>
                     <div className={`group max-w-[85%] px-3 py-2 rounded-2xl text-sm ${isMe ? 'bg-blue-100 text-blue-950' : 'bg-gray-100 text-gray-900'}`} data-testid={`msg-chat-${m.id}`}>
                       <div className="whitespace-pre-wrap break-words">{m.body}</div>
                       <div className="flex items-center gap-1 mt-1 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -890,7 +890,7 @@ export function ProjectRoomPage() {
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendChat())}
-                  placeholder="Bericht aan je groep…"
+                  placeholder={lang === 'en' ? 'Message to your group…' : 'Bericht aan je groep…'}
                   disabled={isFinalized}
                   className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50"
                   data-testid="input-group-chat"
@@ -904,7 +904,7 @@ export function ProjectRoomPage() {
                   <Send className="w-4 h-4" />
                 </button>
               </div>
-              <p className="text-[10px] text-gray-400 mt-1">Tip: gebruik je OS-emoji-picker (Win+. of Cmd+Ctrl+Space).</p>
+              <p className="text-[10px] text-gray-400 mt-1">{lang === 'en' ? 'Tip: use your OS emoji picker (Win+. or Cmd+Ctrl+Space).' : 'Tip: gebruik je OS-emoji-picker (Win+. of Cmd+Ctrl+Space).'}</p>
             </div>
           </div>
 
@@ -917,14 +917,14 @@ export function ProjectRoomPage() {
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${rightPanelTab === 'briefing' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:bg-gray-50'}`}
                 data-testid="tab-briefing"
               >
-                <Clipboard className="w-3 h-3" /> Briefing
+                <Clipboard className="w-3 h-3" /> {lang === 'en' ? 'Briefing' : 'Briefing'}
               </button>
               <button
                 onClick={() => setRightPanelTab('logboek')}
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${rightPanelTab === 'logboek' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:bg-gray-50'}`}
                 data-testid="tab-logboek"
               >
-                <ScrollText className="w-3 h-3" /> Logboek
+                <ScrollText className="w-3 h-3" /> {lang === 'en' ? 'Logbook' : 'Logboek'}
                 {conversationLog.length > 0 && (
                   <span className="ml-0.5 bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5 text-[10px] font-semibold" data-testid="badge-logboek-count">
                     {conversationLog.length}
@@ -940,12 +940,12 @@ export function ProjectRoomPage() {
               <div data-testid="section-logboek">
                 {logbookLoading && (
                   <div className="flex items-center gap-2 text-gray-400 text-xs py-4 justify-center">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Logboek laden…
+                    <Loader2 className="w-4 h-4 animate-spin" /> {lang === 'en' ? 'Loading logbook…' : 'Logboek laden…'}
                   </div>
                 )}
                 {!logbookLoading && conversationLog.length === 0 && (
                   <p className="text-xs text-gray-400 italic py-4 text-center">
-                    Nog geen afgesloten gesprekken. Gebruik de <LogOut className="w-3 h-3 inline" />-knop in de chat om een gesprek af te sluiten.
+                    {lang === 'en' ? <>No closed conversations yet. Use the <LogOut className="w-3 h-3 inline" /> button in the chat to close a conversation.</> : <>Nog geen afgesloten gesprekken. Gebruik de <LogOut className="w-3 h-3 inline" />-knop in de chat om een gesprek af te sluiten.</>}
                   </p>
                 )}
                 {!logbookLoading && conversationLog.length > 0 && (() => {
@@ -1010,11 +1010,11 @@ export function ProjectRoomPage() {
                                           : <ChevronRight className="w-3 h-3 text-gray-400 shrink-0" />)
                                       : <span className="w-3 shrink-0" />}
                                     <span className="text-[11px] text-gray-600 flex-1">
-                                      {new Date(conv.closedAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                      {new Date(conv.closedAt).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                                     </span>
                                     {conv.agreements.length > 0 && (
                                       <span className="text-[10px] text-green-600 font-medium shrink-0">
-                                        {conv.agreements.length} afsprk.
+                                        {conv.agreements.length} {lang === 'en' ? 'agr.' : 'afsprk.'}
                                       </span>
                                     )}
                                   </button>
@@ -1023,7 +1023,7 @@ export function ProjectRoomPage() {
                                     <div className="px-3 pb-3 pt-1 border-t border-gray-100">
                                       {conv.topics.length > 0 && (
                                         <div className="mb-2">
-                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Besproken</p>
+                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{lang === 'en' ? 'Discussed' : 'Besproken'}</p>
                                           <ul className="space-y-0.5">
                                             {conv.topics.map((t, i) => (
                                               <li key={i} className="flex gap-1.5 text-xs text-gray-700">
@@ -1035,7 +1035,7 @@ export function ProjectRoomPage() {
                                       )}
                                       {conv.agreements.length > 0 && (
                                         <div>
-                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Afgesproken</p>
+                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{lang === 'en' ? 'Agreed' : 'Afgesproken'}</p>
                                           <ul className="space-y-0.5">
                                             {conv.agreements.map((a, i) => (
                                               <li key={i} className="flex gap-1.5 text-xs text-gray-700">
@@ -1066,7 +1066,7 @@ export function ProjectRoomPage() {
                 {project.briefing_markdown}
               </div>
             ) : (
-              <p className="text-xs text-gray-400 italic">Geen briefing ingesteld.</p>
+              <p className="text-xs text-gray-400 italic">{lang === 'en' ? 'No briefing set.' : 'Geen briefing ingesteld.'}</p>
             )}
             {projectMaterials.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
@@ -1081,7 +1081,7 @@ export function ProjectRoomPage() {
                     const hiddenCount = projectMaterials.length - visibleCount;
                     return (
                       <span className="flex items-center gap-1">
-                        <Download className="w-3 h-3" /> Bestanden van de docent ({visibleCount}{isStaff && hiddenCount > 0 ? ` + ${hiddenCount} verborgen` : ''})
+                        <Download className="w-3 h-3" /> {lang === 'en' ? 'Files from the lecturer' : 'Bestanden van de docent'} ({visibleCount}{isStaff && hiddenCount > 0 ? ` + ${hiddenCount} ${lang === 'en' ? 'hidden' : 'verborgen'}` : ''})
                       </span>
                     );
                   })()}
@@ -1114,23 +1114,23 @@ export function ProjectRoomPage() {
                           {isStaff && !d.is_visible_to_students && (
                             <span
                               className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-1 shrink-0"
-                              title="Verborgen voor studenten"
+                              title={lang === 'en' ? 'Hidden from students' : 'Verborgen voor studenten'}
                               data-testid={`badge-hidden-${d.id}`}
                             >
-                              <EyeOff className="w-2.5 h-2.5" /> verborgen
+                              <EyeOff className="w-2.5 h-2.5" /> {lang === 'en' ? 'hidden' : 'verborgen'}
                             </span>
                           )}
                         </li>
                       ))}
                     </ul>
-                    <p className="text-[10px] text-gray-400 mt-1.5">Klik een bestand om te downloaden.</p>
+                    <p className="text-[10px] text-gray-400 mt-1.5">{lang === 'en' ? 'Click a file to download.' : 'Klik een bestand om te downloaden.'}</p>
                   </div>
                 )}
               </div>
             )}
             {Array.isArray(project.rubric_criteria) && project.rubric_criteria.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
-                <div className="text-xs font-semibold text-gray-700 mb-1">Rubriek</div>
+                <div className="text-xs font-semibold text-gray-700 mb-1">{lang === 'en' ? 'Rubric' : 'Rubriek'}</div>
                 <ul className="text-xs text-gray-600 list-disc list-inside space-y-0.5">
                   {project.rubric_criteria.map((c, i) => (
                     <li key={i}>{typeof c === 'string' ? c : (c.title || c.name || JSON.stringify(c))}</li>
@@ -1147,9 +1147,9 @@ export function ProjectRoomPage() {
                   {checkpoints.map(cp => (
                     <li key={cp.id} className="text-gray-600">
                       <span className={`inline-block px-1.5 rounded text-[10px] ${cp.kind === 'final' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                        {cp.kind === 'final' ? 'eind' : 'tussentijds'}
+                        {cp.kind === 'final' ? (lang === 'en' ? 'final' : 'eind') : (lang === 'en' ? 'interim' : 'tussentijds')}
                       </span>{' '}
-                      <span className="text-gray-400">{new Date(cp.created_at).toLocaleDateString('nl-NL')}</span>
+                      <span className="text-gray-400">{new Date(cp.created_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'nl-NL')}</span>
                     </li>
                   ))}
                 </ul>
@@ -1180,15 +1180,15 @@ export function ProjectRoomPage() {
       {showCloseModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="modal-close-conversation">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 max-h-[80vh] overflow-y-auto">
-            <h2 className="text-lg font-bold text-gray-900 mb-1">Gesprek afsluiten</h2>
+            <h2 className="text-lg font-bold text-gray-900 mb-1">{lang === 'en' ? 'Close conversation' : 'Gesprek afsluiten'}</h2>
             <p className="text-sm text-gray-600 mb-4">
-              Hieronder zie je de neerslag die de AI van dit gesprek heeft gemaakt. Controleer het en sluit dan af.
+              {lang === 'en' ? 'Below you can see the summary the AI has made of this conversation. Review it and then close.' : 'Hieronder zie je de neerslag die de AI van dit gesprek heeft gemaakt. Controleer het en sluit dan af.'}
             </p>
 
             {closeModalLoading && (
               <div className="flex flex-col items-center justify-center py-10 gap-3 text-gray-500">
                 <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
-                <span className="text-sm">Neerslag wordt gemaakt…</span>
+                <span className="text-sm">{lang === 'en' ? 'Creating summary…' : 'Neerslag wordt gemaakt…'}</span>
               </div>
             )}
 
@@ -1201,7 +1201,7 @@ export function ProjectRoomPage() {
             {!closeModalLoading && closePreviewData && (
               <div className="space-y-4">
                 <div>
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Besproken onderwerpen</h3>
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{lang === 'en' ? 'Topics discussed' : 'Besproken onderwerpen'}</h3>
                   <ul className="space-y-1.5">
                     {closePreviewData.topics.map((t, i) => (
                       <li key={i} className="flex gap-2 text-sm text-gray-700">
@@ -1212,7 +1212,7 @@ export function ProjectRoomPage() {
                 </div>
                 {closePreviewData.agreements.length > 0 ? (
                   <div>
-                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Afgesproken</h3>
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{lang === 'en' ? 'Agreed' : 'Afgesproken'}</h3>
                     <ul className="space-y-1.5">
                       {closePreviewData.agreements.map((a, i) => (
                         <li key={i} className="flex gap-2 text-sm text-gray-700">
@@ -1222,7 +1222,7 @@ export function ProjectRoomPage() {
                     </ul>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-400 italic">Geen expliciete afspraken herkend in dit gesprek.</p>
+                  <p className="text-xs text-gray-400 italic">{lang === 'en' ? 'No explicit agreements identified in this conversation.' : 'Geen expliciete afspraken herkend in dit gesprek.'}</p>
                 )}
               </div>
             )}
@@ -1234,7 +1234,7 @@ export function ProjectRoomPage() {
                 className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 data-testid="button-cancel-close-conversation"
               >
-                Annuleren
+                {lang === 'en' ? 'Cancel' : 'Annuleren'}
               </button>
               <button
                 onClick={confirmClose}
@@ -1245,7 +1245,7 @@ export function ProjectRoomPage() {
                 {closingConversation
                   ? <Loader2 className="w-4 h-4 animate-spin" />
                   : <LogOut className="w-4 h-4" />}
-                {closingConversation ? 'Afsluiten…' : 'Gesprek afsluiten'}
+                {closingConversation ? (lang === 'en' ? 'Closing…' : 'Afsluiten…') : (lang === 'en' ? 'Close conversation' : 'Gesprek afsluiten')}
               </button>
             </div>
           </div>
@@ -1257,24 +1257,24 @@ export function ProjectRoomPage() {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-1">
-              {showCheckpointModal === 'final' ? 'Project afronden' : 'Tussentijdse checkpoint'}
+              {showCheckpointModal === 'final' ? (lang === 'en' ? 'Finalise project' : 'Project afronden') : (lang === 'en' ? 'Interim checkpoint' : 'Tussentijdse checkpoint')}
             </h2>
 
             {/* ── kind='final': reflectie-textarea (ongewijzigd) ── */}
             {showCheckpointModal === 'final' && (
               <>
                 <p className="text-sm text-gray-600 mb-4">
-                  Schrijf een gezamenlijke eindreflectie. De begeleider geeft per rubriekspunt feedback en zet die in ieders leerdagboek.
+                  {lang === 'en' ? 'Write a joint final reflection. The supervisor gives feedback per rubric criterion and adds it to everyone\'s learning journal.' : 'Schrijf een gezamenlijke eindreflectie. De begeleider geeft per rubriekspunt feedback en zet die in ieders leerdagboek.'}
                 </p>
                 <textarea
                   value={reflection}
                   onChange={e => setReflection(e.target.value)}
                   rows={10}
-                  placeholder="Wat hebben jullie gedaan? Wat snappen jullie nog niet? Wat is de volgende stap?"
+                  placeholder={lang === 'en' ? 'What have you done? What do you still not understand? What is the next step?' : 'Wat hebben jullie gedaan? Wat snappen jullie nog niet? Wat is de volgende stap?'}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                   data-testid="textarea-reflection"
                 />
-                <div className="text-xs text-gray-400 mt-1">{reflection.trim().length} tekens · minimaal 20</div>
+                <div className="text-xs text-gray-400 mt-1">{reflection.trim().length} {lang === 'en' ? 'characters · minimum 20' : 'tekens · minimaal 20'}</div>
               </>
             )}
 
@@ -1282,13 +1282,13 @@ export function ProjectRoomPage() {
             {showCheckpointModal === 'checkpoint' && (
               <>
                 <p className="text-sm text-gray-600 mb-4">
-                  Hieronder staan automatische samenvattingen van jullie gesprekken. Pas ze aan als je dat wilt en sla ze op in jullie leerdagboeken.
+                  {lang === 'en' ? 'Below are automatic summaries of your conversations. Adjust them if you wish and save them to your learning journals.' : 'Hieronder staan automatische samenvattingen van jullie gesprekken. Pas ze aan als je dat wilt en sla ze op in jullie leerdagboeken.'}
                 </p>
 
                 {checkpointPreviewLoading && (
                   <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-500" data-testid="checkpoint-preview-loading">
                     <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
-                    <span className="text-sm">Samenvattingen worden gemaakt…</span>
+                    <span className="text-sm">{lang === 'en' ? 'Creating summaries…' : 'Samenvattingen worden gemaakt…'}</span>
                   </div>
                 )}
 
@@ -1300,7 +1300,7 @@ export function ProjectRoomPage() {
 
                 {!checkpointPreviewLoading && !checkpointPreviewError && checkpointPreview !== null && checkpointPreview.length === 0 && (
                   <p className="text-sm text-gray-500 italic py-4" data-testid="checkpoint-preview-empty">
-                    Geen gesprekken gevonden om samen te vatten.
+                    {lang === 'en' ? 'No conversations found to summarise.' : 'Geen gesprekken gevonden om samen te vatten.'}
                   </p>
                 )}
 
@@ -1312,7 +1312,7 @@ export function ProjectRoomPage() {
                           <span className="text-xl">{t.avatarEmoji}</span>
                           <span className="font-semibold text-gray-800 text-sm">{t.personaName}</span>
                         </div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Jouw vragen/input</label>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? 'Your questions/input' : 'Jouw vragen/input'}</label>
                         <textarea
                           value={t.studentSummary}
                           onChange={e => updatePreviewSummary(t.threadId, 'studentSummary', e.target.value)}
@@ -1320,7 +1320,7 @@ export function ProjectRoomPage() {
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white mb-3 resize-none"
                           data-testid={`textarea-student-summary-${t.threadId}`}
                         />
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Reactie van {t.personaName}</label>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? `Response from ${t.personaName}` : `Reactie van ${t.personaName}`}</label>
                         <textarea
                           value={t.personaSummary}
                           onChange={e => updatePreviewSummary(t.threadId, 'personaSummary', e.target.value)}
@@ -1338,12 +1338,12 @@ export function ProjectRoomPage() {
                   <div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4" data-testid="checkpoint-synthesis">
                     <div className="flex items-center gap-2 mb-3">
                       <ScrollText className="w-4 h-4 text-indigo-600" />
-                      <h3 className="font-semibold text-indigo-900 text-sm">Overzicht over alle gesprekken</h3>
+                      <h3 className="font-semibold text-indigo-900 text-sm">{lang === 'en' ? 'Overview across all conversations' : 'Overzicht over alle gesprekken'}</h3>
                     </div>
 
                     {checkpointSynthesis.overeenstemming.length > 0 && (
                       <div className="mb-3">
-                        <p className="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide mb-1.5">Overeenstemming</p>
+                        <p className="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide mb-1.5">{lang === 'en' ? 'Agreement' : 'Overeenstemming'}</p>
                         <ul className="space-y-1">
                           {checkpointSynthesis.overeenstemming.map((item, i) => (
                             <li key={i} className="flex gap-2 text-xs text-gray-800">
@@ -1356,7 +1356,7 @@ export function ProjectRoomPage() {
 
                     {checkpointSynthesis.spanningspunten.length > 0 && (
                       <div className="mb-3">
-                        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">Spanningspunten</p>
+                        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">{lang === 'en' ? 'Tensions' : 'Spanningspunten'}</p>
                         <ul className="space-y-1">
                           {checkpointSynthesis.spanningspunten.map((item, i) => (
                             <li key={i} className="flex gap-2 text-xs text-gray-800">
@@ -1369,7 +1369,7 @@ export function ProjectRoomPage() {
 
                     {checkpointSynthesis.suggesties.length > 0 && (
                       <div>
-                        <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide mb-1.5">Suggesties voor vervolg</p>
+                        <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide mb-1.5">{lang === 'en' ? 'Suggestions for follow-up' : 'Suggesties voor vervolg'}</p>
                         <ul className="space-y-1">
                           {checkpointSynthesis.suggesties.map((item, i) => (
                             <li key={i} className="flex gap-2 text-xs text-gray-800">
@@ -1388,16 +1388,16 @@ export function ProjectRoomPage() {
             {checkpointSaved && (
               <div className="mt-5 rounded-xl bg-blue-50 border border-blue-200 p-5 text-center" data-testid="checkpoint-saved-confirmation">
                 <CheckCircle2 className="w-10 h-10 text-blue-500 mx-auto mb-3" />
-                <p className="font-semibold text-gray-900 mb-1">Checkpoint opgeslagen!</p>
+                <p className="font-semibold text-gray-900 mb-1">{lang === 'en' ? 'Checkpoint saved!' : 'Checkpoint opgeslagen!'}</p>
                 <p className="text-sm text-gray-600 mb-4">
-                  De samenvattingen staan in jullie leerdagboeken. Het project staat nog open — je kunt gewoon doorgaan met de gesprekken.
+                  {lang === 'en' ? 'The summaries are in your learning journals. The project is still open — you can continue with the conversations.' : 'De samenvattingen staan in jullie leerdagboeken. Het project staat nog open — je kunt gewoon doorgaan met de gesprekken.'}
                 </p>
                 <button
                   onClick={() => { setShowCheckpointModal(null); setCheckpointSaved(false); }}
                   className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
                   data-testid="button-continue-after-checkpoint"
                 >
-                  Ga verder met het project
+                  {lang === 'en' ? 'Continue with the project' : 'Ga verder met het project'}
                 </button>
               </div>
             )}
@@ -1409,7 +1409,7 @@ export function ProjectRoomPage() {
                   className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg text-sm"
                   data-testid="button-cancel-checkpoint"
                 >
-                  Annuleren
+                  {lang === 'en' ? 'Cancel' : 'Annuleren'}
                 </button>
                 {/* Sla-knop: verberg bij lege preview of preview-fout */}
                 {!(showCheckpointModal === 'checkpoint' && (checkpointPreviewError !== null || (checkpointPreview !== null && checkpointPreview.length === 0))) && (
@@ -1423,7 +1423,7 @@ export function ProjectRoomPage() {
                     className={`px-4 py-2 text-white rounded-lg text-sm disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                     data-testid="button-submit-checkpoint"
                   >
-                    {submittingCheckpoint ? 'Even geduld…' : (showCheckpointModal === 'final' ? 'Afronden + opslaan' : 'Opslaan in leerdagboek')}
+                    {submittingCheckpoint ? (lang === 'en' ? 'Please wait…' : 'Even geduld…') : (showCheckpointModal === 'final' ? (lang === 'en' ? 'Finalise + save' : 'Afronden + opslaan') : (lang === 'en' ? 'Save to learning journal' : 'Opslaan in leerdagboek'))}
                   </button>
                 )}
               </div>
