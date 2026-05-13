@@ -4993,7 +4993,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
     if (persona.id !== '__default__') {
       const { data: existingThread } = await supabaseAdmin
         .from('group_persona_threads')
-        .select('id').eq('group_id', groupId).eq('persona_id', persona.id).maybeSingle();
+        .select('id').eq('group_id', groupId).eq('persona_id', persona.id).is('closed_at', null).maybeSingle();
       if (existingThread) {
         threadId = existingThread.id;
       } else {
@@ -5096,10 +5096,27 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       }
     }
 
+    // Eerdere gemaakte afspraken ophalen uit afgesloten gesprekken met dezelfde persona.
+    let priorAgreements = [];
+    if (persona.id !== '__default__') {
+      const { data: closedThreads } = await supabaseAdmin
+        .from('group_persona_threads')
+        .select('agreements, closed_at')
+        .eq('group_id', groupId)
+        .eq('persona_id', persona.id)
+        .not('closed_at', 'is', null)
+        .order('closed_at', { ascending: false })
+        .limit(3);
+      priorAgreements = (closedThreads || []).flatMap(t => t.agreements || []).filter(Boolean);
+    }
+
+    const agreementsBlock = priorAgreements.length > 0
+      ? `\n\nGemaakte afspraken in eerdere gesprekken:\n${priorAgreements.map(a => `- ${a}`).join('\n')}`
+      : '';
     const ragBlock = context ? `\n\nContext uit cursusmateriaal:\n${context}` : '';
     const docBlock = uploadedContext ? `\n\nGeüploade documenten van de groep:\n${uploadedContext}` : '';
     const projectDocBlock = projectDocContext ? `\n\nProjectmateriaal van de docent:\n${projectDocContext}` : '';
-    const systemContent = `${persona.system_prompt}${ragBlock}${projectDocBlock}${docBlock}`;
+    const systemContent = `${persona.system_prompt}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}`;
 
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
@@ -5153,17 +5170,180 @@ app.get('/api/projects/persona-thread', async (req, res) => {
     if (!(await isGroupMember(groupId, auth.user.id))) {
       return res.status(403).json({ error: 'Geen toegang' });
     }
-    if (personaId === '__default__') return res.json({ messages: [] });
+    if (personaId === '__default__') return res.json({ messages: [], threadId: null });
     const { data: thread } = await supabaseAdmin
-      .from('group_persona_threads').select('id')
-      .eq('group_id', groupId).eq('persona_id', personaId).maybeSingle();
-    if (!thread) return res.json({ messages: [] });
+      .from('group_persona_threads').select('id, closed_at')
+      .eq('group_id', groupId).eq('persona_id', personaId).is('closed_at', null).maybeSingle();
+    if (!thread) return res.json({ messages: [], threadId: null });
     const { data: msgs } = await supabaseAdmin
       .from('group_persona_messages')
       .select('id, role, content, rag_sources, created_at, user_id')
       .eq('thread_id', thread.id).order('created_at', { ascending: true });
-    return res.json({ messages: msgs || [] });
+    return res.json({ messages: msgs || [], threadId: thread.id });
   } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/groups/:groupId/threads/:threadId/close-preview
+// Genereert een AI-samenvatting (topics + agreements) zonder te schrijven naar de DB.
+app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { groupId, threadId } = req.params;
+
+  try {
+    if (!(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    const { data: thread } = await supabaseAdmin
+      .from('group_persona_threads')
+      .select('id, group_id, closed_at')
+      .eq('id', threadId).eq('group_id', groupId).is('closed_at', null).maybeSingle();
+    if (!thread) return res.status(404).json({ error: 'Thread niet gevonden of al afgesloten' });
+
+    const { data: msgs } = await supabaseAdmin
+      .from('group_persona_messages')
+      .select('role, content')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: true });
+    const allMsgs = msgs || [];
+    if (allMsgs.length < 2) {
+      return res.status(400).json({ error: 'Het gesprek is te kort om samen te vatten (minimaal 2 berichten).' });
+    }
+
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
+
+    const conversationText = allMsgs
+      .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
+      .join('\n').slice(0, 12000);
+
+    const msgCount = allMsgs.filter(m => m.role === 'user').length;
+    const topicsInstruction = msgCount <= 3
+      ? '2-3 korte onderwerpen'
+      : msgCount <= 8
+        ? '3-5 onderwerpen'
+        : '5-8 onderwerpen';
+
+    const prompt = `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\nSchrijf in het Nederlands. Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
+
+    let topics = [];
+    let agreements = [];
+    try {
+      const groqResp = await fetch(GROQ_API_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+          max_tokens: 600,
+          response_format: { type: 'json_object' },
+        }),
+      });
+      if (groqResp.ok) {
+        const raw = ((await groqResp.json()).choices?.[0]?.message?.content || '{}').trim();
+        const parsed = JSON.parse(raw);
+        topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
+        agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
+      }
+    } catch (e) {
+      console.error('[close-preview] LLM/parse fout:', e.message);
+    }
+    // Fallback als het model geen bruikbare output geeft.
+    if (topics.length === 0) {
+      topics = allMsgs.filter(m => m.role === 'user')
+        .map(m => (m.content || '').slice(0, 100))
+        .filter(Boolean).slice(0, 3);
+    }
+    return res.json({ topics, agreements });
+  } catch (err) {
+    console.error('[threads/close-preview]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/groups/:groupId/threads/:threadId/close
+// Markeert de thread als afgesloten met de opgegeven topics + agreements.
+app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { groupId, threadId } = req.params;
+  const { topics = [], agreements = [] } = req.body || {};
+
+  try {
+    if (!(await isGroupMember(groupId, auth.user.id))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    const { data: thread } = await supabaseAdmin
+      .from('group_persona_threads')
+      .select('id, group_id, closed_at')
+      .eq('id', threadId).eq('group_id', groupId).is('closed_at', null).maybeSingle();
+    if (!thread) return res.status(404).json({ error: 'Thread niet gevonden of al afgesloten' });
+
+    const { error: updErr } = await supabaseAdmin
+      .from('group_persona_threads')
+      .update({
+        closed_at: new Date().toISOString(),
+        closed_by: auth.user.id,
+        topics: topics,
+        agreements: agreements,
+      })
+      .eq('id', threadId);
+    if (updErr) return res.status(500).json({ error: updErr.message });
+
+    return res.json({ ok: true, threadId });
+  } catch (err) {
+    console.error('[threads/close]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/projects/groups/:groupId/conversation-log — alle afgesloten gesprekken.
+app.get('/api/projects/groups/:groupId/conversation-log', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { groupId } = req.params;
+
+  try {
+    const isMember = await isGroupMember(groupId, auth.user.id);
+    const { data: prof } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaffUser = prof && (prof.role === 'admin' || prof.role === 'docent' || prof.email === SUPERUSER_EMAIL);
+    if (!isMember && !isStaffUser) return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+
+    const { data: threads } = await supabaseAdmin
+      .from('group_persona_threads')
+      .select('id, persona_id, closed_at, closed_by, topics, agreements')
+      .eq('group_id', groupId)
+      .not('closed_at', 'is', null)
+      .order('closed_at', { ascending: false });
+    if (!threads || threads.length === 0) return res.json({ conversations: [] });
+
+    const personaIds = [...new Set(threads.map(t => t.persona_id))];
+    const { data: personas } = await supabaseAdmin
+      .from('project_personas').select('id, name, avatar_emoji').in('id', personaIds);
+    const personaMap = Object.fromEntries((personas || []).map(p => [p.id, p]));
+
+    const conversations = threads.map(t => {
+      const p = personaMap[t.persona_id] || {};
+      return {
+        threadId: t.id,
+        personaId: t.persona_id,
+        personaName: p.name || 'Gesprek',
+        avatarEmoji: p.avatar_emoji || '💬',
+        closedAt: t.closed_at,
+        topics: t.topics || [],
+        agreements: t.agreements || [],
+      };
+    });
+    return res.json({ conversations });
+  } catch (err) {
+    console.error('[conversation-log]', err);
     return res.status(500).json({ error: err.message });
   }
 });

@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
   Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database, EyeOff,
+  LogOut, ScrollText,
 } from 'lucide-react';
 
 interface Persona {
@@ -85,6 +86,15 @@ interface ProjectMaterialDoc {
   is_visible_to_students: boolean;
   created_at: string;
 }
+interface ClosedConversation {
+  threadId: string;
+  personaId: string;
+  personaName: string;
+  avatarEmoji: string;
+  closedAt: string;
+  topics: string[];
+  agreements: string[];
+}
 
 const QUICK_REACTIONS = ['👍', '❤️', '🤔', '✅'];
 
@@ -125,6 +135,20 @@ export function ProjectRoomPage() {
   const [evaluating, setEvaluating] = useState(false);
   const [evaluateRequestId, setEvaluateRequestId] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  // Gesprek afsluiten
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [closeModalLoading, setCloseModalLoading] = useState(false);
+  const [closePreviewData, setClosePreviewData] = useState<{ topics: string[]; agreements: string[] } | null>(null);
+  const [closeModalError, setCloseModalError] = useState<string | null>(null);
+  const [closingConversation, setClosingConversation] = useState(false);
+
+  // Gesprekslogboek
+  const [conversationLog, setConversationLog] = useState<ClosedConversation[]>([]);
+  const [logbookLoading, setLogbookLoading] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'briefing' | 'logboek'>('briefing');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const personaInputRef = useRef<HTMLTextAreaElement>(null);
   const personaScrollRef = useRef<HTMLDivElement>(null);
@@ -176,11 +200,17 @@ export function ProjectRoomPage() {
     if (!token || !groupId || !activePersonaId) return;
     let cancelled = false;
     setPersonaMessages([]);
+    setActiveThreadId(null);
     fetch(`/api/projects/persona-thread?groupId=${groupId}&personaId=${activePersonaId}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
-      .then(d => { if (!cancelled) setPersonaMessages(d.messages || []); })
+      .then(d => {
+        if (!cancelled) {
+          setPersonaMessages(d.messages || []);
+          setActiveThreadId(d.threadId || null);
+        }
+      })
       .catch(() => { /* genegeerd — UI valt terug op leeg */ });
     return () => { cancelled = true; };
   }, [token, groupId, activePersonaId]);
@@ -344,6 +374,7 @@ export function ProjectRoomPage() {
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Persona-chat mislukt');
+      if (data.threadId) setActiveThreadId(data.threadId);
       setPersonaMessages(prev => [...prev, {
         id: `reply-${Date.now()}`, role: 'assistant', content: data.reply,
         created_at: new Date().toISOString(), user_id: null,
@@ -499,6 +530,69 @@ export function ProjectRoomPage() {
       setError(e.message);
     } finally {
       setEvaluating(false);
+    }
+  };
+
+  const loadConversationLog = useCallback(async () => {
+    if (!token || !groupId) return;
+    setLogbookLoading(true);
+    try {
+      const r = await fetch(`/api/projects/groups/${groupId}/conversation-log`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await r.json();
+      if (r.ok) setConversationLog(d.conversations || []);
+    } catch { /* stil */ } finally {
+      setLogbookLoading(false);
+    }
+  }, [token, groupId]);
+
+  useEffect(() => { loadConversationLog(); }, [loadConversationLog]);
+
+  const openCloseModal = async () => {
+    if (!activeThreadId || !groupId || !token) return;
+    setShowCloseModal(true);
+    setCloseModalLoading(true);
+    setClosePreviewData(null);
+    setCloseModalError(null);
+    try {
+      const r = await fetch(`/api/projects/groups/${groupId}/threads/${activeThreadId}/close-preview`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Preview ophalen mislukt');
+      setClosePreviewData({ topics: d.topics || [], agreements: d.agreements || [] });
+    } catch (e: any) {
+      setCloseModalError(e.message);
+    } finally {
+      setCloseModalLoading(false);
+    }
+  };
+
+  const confirmClose = async () => {
+    if (!activeThreadId || !groupId || !token || !closePreviewData) return;
+    setClosingConversation(true);
+    setCloseModalError(null);
+    try {
+      const r = await fetch(`/api/projects/groups/${groupId}/threads/${activeThreadId}/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ topics: closePreviewData.topics, agreements: closePreviewData.agreements }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Afsluiten mislukt');
+      setShowCloseModal(false);
+      setPersonaMessages([]);
+      setActiveThreadId(null);
+      setRightPanelTab('logboek');
+      await loadConversationLog();
+      setInfo('Gesprek afgesloten en opgeslagen in het logboek.');
+      setTimeout(() => setInfo(null), 5000);
+    } catch (e: any) {
+      setCloseModalError(e.message);
+    } finally {
+      setClosingConversation(false);
     }
   };
 
@@ -697,14 +791,25 @@ export function ProjectRoomPage() {
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[150px] max-h-[300px]"
                 data-testid="input-persona-message"
               />
-              <button
-                onClick={sendPersona}
-                disabled={!personaInput.trim() || personaLoading || isFinalized}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40"
-                data-testid="button-send-persona"
-              >
-                <Send className="w-4 h-4" />
-              </button>
+              <div className="flex flex-col gap-1">
+                <button
+                  onClick={sendPersona}
+                  disabled={!personaInput.trim() || personaLoading || isFinalized}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40"
+                  data-testid="button-send-persona"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={openCloseModal}
+                  disabled={personaMessages.length < 2 || !activeThreadId || personaLoading || isFinalized}
+                  className="px-4 py-2 border border-gray-200 text-gray-400 hover:bg-red-50 hover:border-red-200 hover:text-red-500 rounded-lg disabled:opacity-30 transition-colors"
+                  title="Gesprek afsluiten en neerslag opslaan"
+                  data-testid="button-close-conversation"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -773,11 +878,86 @@ export function ProjectRoomPage() {
             </div>
           </div>
 
-          {/* Briefing + checkpoints */}
-          <div className="bg-white rounded-xl border border-gray-200 p-3 max-h-[40%] overflow-y-auto">
-            <div className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <Clipboard className="w-4 h-4" /> Briefing
+          {/* Briefing / Logboek tabs */}
+          <div className="bg-white rounded-xl border border-gray-200 max-h-[40%] flex flex-col">
+            {/* Tab-balk */}
+            <div className="flex border-b border-gray-200 shrink-0">
+              <button
+                onClick={() => setRightPanelTab('briefing')}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${rightPanelTab === 'briefing' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:bg-gray-50'}`}
+                data-testid="tab-briefing"
+              >
+                <Clipboard className="w-3 h-3" /> Briefing
+              </button>
+              <button
+                onClick={() => setRightPanelTab('logboek')}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${rightPanelTab === 'logboek' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:bg-gray-50'}`}
+                data-testid="tab-logboek"
+              >
+                <ScrollText className="w-3 h-3" /> Logboek
+                {conversationLog.length > 0 && (
+                  <span className="ml-0.5 bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5 text-[10px] font-semibold" data-testid="badge-logboek-count">
+                    {conversationLog.length}
+                  </span>
+                )}
+              </button>
             </div>
+
+            {/* Tab-inhoud */}
+            <div className="flex-1 overflow-y-auto p-3">
+
+            {rightPanelTab === 'logboek' && (
+              <div data-testid="section-logboek">
+                {logbookLoading && (
+                  <div className="flex items-center gap-2 text-gray-400 text-xs py-4 justify-center">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Logboek laden…
+                  </div>
+                )}
+                {!logbookLoading && conversationLog.length === 0 && (
+                  <p className="text-xs text-gray-400 italic py-4 text-center">
+                    Nog geen afgesloten gesprekken. Gebruik de <LogOut className="w-3 h-3 inline" />-knop in de chat om een gesprek af te sluiten.
+                  </p>
+                )}
+                {!logbookLoading && conversationLog.map(conv => (
+                  <div key={conv.threadId} className="mb-4 pb-4 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0" data-testid={`logboek-entry-${conv.threadId}`}>
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <span className="text-base">{conv.avatarEmoji}</span>
+                      <span className="font-semibold text-gray-800 text-xs">{conv.personaName}</span>
+                      <span className="ml-auto text-[10px] text-gray-400 shrink-0">
+                        {new Date(conv.closedAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    {conv.topics.length > 0 && (
+                      <div className="mb-1.5">
+                        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Besproken</p>
+                        <ul className="space-y-0.5">
+                          {conv.topics.map((t, i) => (
+                            <li key={i} className="flex gap-1.5 text-xs text-gray-700">
+                              <span className="text-blue-400 shrink-0">•</span>{t}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {conv.agreements.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Afgesproken</p>
+                        <ul className="space-y-0.5">
+                          {conv.agreements.map((a, i) => (
+                            <li key={i} className="flex gap-1.5 text-xs text-gray-700">
+                              <span className="text-green-500 shrink-0">✓</span>{a}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {rightPanelTab === 'briefing' && (
+            <div>
             {project.briefing_markdown ? (
               <div className="text-xs text-gray-700 whitespace-pre-wrap" data-testid="text-briefing">
                 {project.briefing_markdown}
@@ -872,6 +1052,10 @@ export function ProjectRoomPage() {
                 </ul>
               </div>
             )}
+            </div>
+            )}
+
+            </div>
           </div>
         </div>
       </div>
@@ -886,6 +1070,82 @@ export function ProjectRoomPage() {
         <div className="fixed bottom-4 right-4 bg-green-50 border border-green-200 text-green-800 px-4 py-2 rounded-lg text-sm" data-testid="text-info">
           {info}
           <button onClick={() => setInfo(null)} className="ml-2 font-bold">×</button>
+        </div>
+      )}
+
+      {/* Gesprek afsluiten modal */}
+      {showCloseModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="modal-close-conversation">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 max-h-[80vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">Gesprek afsluiten</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Hieronder zie je de neerslag die de AI van dit gesprek heeft gemaakt. Controleer het en sluit dan af.
+            </p>
+
+            {closeModalLoading && (
+              <div className="flex flex-col items-center justify-center py-10 gap-3 text-gray-500">
+                <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
+                <span className="text-sm">Neerslag wordt gemaakt…</span>
+              </div>
+            )}
+
+            {closeModalError && !closeModalLoading && (
+              <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm mb-4" data-testid="text-close-modal-error">
+                {closeModalError}
+              </div>
+            )}
+
+            {!closeModalLoading && closePreviewData && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Besproken onderwerpen</h3>
+                  <ul className="space-y-1.5">
+                    {closePreviewData.topics.map((t, i) => (
+                      <li key={i} className="flex gap-2 text-sm text-gray-700">
+                        <span className="text-blue-400 shrink-0">•</span>{t}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                {closePreviewData.agreements.length > 0 ? (
+                  <div>
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Afgesproken</h3>
+                    <ul className="space-y-1.5">
+                      {closePreviewData.agreements.map((a, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-gray-700">
+                          <span className="text-green-500 shrink-0">✓</span>{a}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400 italic">Geen expliciete afspraken herkend in dit gesprek.</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-2 justify-end mt-6">
+              <button
+                onClick={() => setShowCloseModal(false)}
+                disabled={closingConversation}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                data-testid="button-cancel-close-conversation"
+              >
+                Annuleren
+              </button>
+              <button
+                onClick={confirmClose}
+                disabled={!closePreviewData || closingConversation}
+                className="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 disabled:opacity-50"
+                data-testid="button-confirm-close-conversation"
+              >
+                {closingConversation
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <LogOut className="w-4 h-4" />}
+                {closingConversation ? 'Afsluiten…' : 'Gesprek afsluiten'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
