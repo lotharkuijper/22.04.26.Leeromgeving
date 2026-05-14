@@ -1776,9 +1776,13 @@ const tabGroups = [
               ) : (
                 <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm border bg-gray-50 border-gray-200 text-gray-600">
                   <Globe className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                  Globale standaard — geldt voor alle cursussen zonder eigen instelling.
+                  {lang === 'en' ? 'Global default — applies to all courses without a custom setting.' : 'Globale standaard — geldt voor alle cursussen zonder eigen instelling.'}
                   {coursesWithOverrides.size > 0 && (
-                    <span className="ml-1 text-blue-600 font-medium">({coursesWithOverrides.size} cursus{coursesWithOverrides.size !== 1 ? 'sen' : ''} met eigen instelling)</span>
+                    <span className="ml-1 text-blue-600 font-medium">
+                      {lang === 'en'
+                        ? `(${coursesWithOverrides.size} course${coursesWithOverrides.size !== 1 ? 's' : ''} with custom setting)`
+                        : `(${coursesWithOverrides.size} cursus${coursesWithOverrides.size !== 1 ? 'sen' : ''} met eigen instelling)`}
+                    </span>
                   )}
                 </div>
               )}
@@ -1826,17 +1830,18 @@ const tabGroups = [
                       data-testid="slider-threshold-extraction"
                     />
                     <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                      <span>Geen filter (0.00)</span><span>Strikt (0.95)</span>
+                      <span>{lang === 'en' ? 'No filter (0.00)' : 'Geen filter (0.00)'}</span><span>{lang === 'en' ? 'Strict (0.95)' : 'Strikt (0.95)'}</span>
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Min. bewijschunks (<span className="font-mono">{ragSettingsState.extraction.min_evidence_chunks}</span>)
+                      {lang === 'en' ? 'Min. evidence chunks' : 'Min. bewijschunks'} (<span className="font-mono">{ragSettingsState.extraction.min_evidence_chunks}</span>)
                     </label>
                     <p className="text-xs text-gray-500 mb-2">
-                      Hoeveel chunks moeten boven de drempel scoren om het begrip te accepteren?
-                      Hoger = strikter.
+                      {lang === 'en'
+                        ? 'How many chunks must score above the threshold to accept the concept? Higher = stricter.'
+                        : 'Hoeveel chunks moeten boven de drempel scoren om het begrip te accepteren? Hoger = strikter.'}
                     </p>
                     <input
                       type="range"
@@ -1849,14 +1854,16 @@ const tabGroups = [
                       data-testid="slider-min-evidence-extraction"
                     />
                     <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                      <span>0 (geen filter)</span><span>5 (zeer strikt)</span>
+                      <span>{lang === 'en' ? '0 (no filter)' : '0 (geen filter)'}</span><span>{lang === 'en' ? '5 (very strict)' : '5 (zeer strikt)'}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
               {(['chat', 'explain', 'quiz', 'project'] as const).map(mod => {
-                const labels: Record<string, string> = { chat: 'Chat', explain: 'Begrippen uitleggen', quiz: 'Quiz', project: 'Project' };
+                const labels: Record<string, string> = lang === 'en'
+                  ? { chat: 'Chat', explain: 'Explain concepts', quiz: 'Quiz', project: 'Project' }
+                  : { chat: 'Chat', explain: 'Begrippen uitleggen', quiz: 'Quiz', project: 'Project' };
                 const s = ragSettingsState[mod];
                 return (
                   <div key={mod} className="border border-gray-200 rounded-xl p-5 space-y-4 bg-gray-50">
@@ -1868,9 +1875,9 @@ const tabGroups = [
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Drempelwaarde (<span className="font-mono">{s.similarity_threshold.toFixed(2)}</span>)
+                          {lang === 'en' ? 'Threshold' : 'Drempelwaarde'} (<span className="font-mono">{s.similarity_threshold.toFixed(2)}</span>)
                         </label>
-                        <p className="text-xs text-gray-500 mb-2">Minimale overeenkomst voor RAG-chunks (0.0 – 1.0)</p>
+                        <p className="text-xs text-gray-500 mb-2">{lang === 'en' ? 'Minimum similarity for RAG chunks (0.0 – 1.0)' : 'Minimale overeenkomst voor RAG-chunks (0.0 – 1.0)'}</p>
                         <input
                           type="range"
                           min={0.10}
@@ -1882,14 +1889,14 @@ const tabGroups = [
                           data-testid={`slider-threshold-${mod}`}
                         />
                         <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                          <span>Breed (0.10)</span><span>Strikt (0.95)</span>
+                          <span>{lang === 'en' ? 'Broad (0.10)' : 'Breed (0.10)'}</span><span>{lang === 'en' ? 'Strict (0.95)' : 'Strikt (0.95)'}</span>
                         </div>
                         {s.similarity_threshold < 0.20 && (
                           <p
                             className="mt-1.5 text-xs text-amber-700"
                             data-testid={`warning-threshold-permissive-${mod}`}
                           >
-                            Erg permissief — kan irrelevante passages binnenhalen.
+                            {lang === 'en' ? 'Very permissive — may return irrelevant passages.' : 'Erg permissief — kan irrelevante passages binnenhalen.'}
                           </p>
                         )}
                       </div>
@@ -1898,7 +1905,7 @@ const tabGroups = [
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Max. chunks (<span className="font-mono">{s.match_count}</span>)
                         </label>
-                        <p className="text-xs text-gray-500 mb-2">Aantal top-overeenkomende passages (1 – 20)</p>
+                        <p className="text-xs text-gray-500 mb-2">{lang === 'en' ? 'Number of top-matching passages (1 – 20)' : 'Aantal top-overeenkomende passages (1 – 20)'}</p>
                         <input
                           type="range"
                           min={1}
@@ -1915,15 +1922,15 @@ const tabGroups = [
                       </div>
 
                       <div className="flex flex-col justify-center">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Strikte bronbeperking</label>
-                        <p className="text-xs text-gray-500 mb-3">LLM mag alleen antwoorden op basis van de gevonden cursusteksten</p>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">{lang === 'en' ? 'Strict source restriction' : 'Strikte bronbeperking'}</label>
+                        <p className="text-xs text-gray-500 mb-3">{lang === 'en' ? 'LLM may only answer based on the retrieved course texts' : 'LLM mag alleen antwoorden op basis van de gevonden cursusteksten'}</p>
                         <button
                           onClick={() => updateRagModule(mod, 'rag_strict_mode', !s.rag_strict_mode)}
                           className={`relative inline-flex items-center gap-3 w-fit px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${s.rag_strict_mode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
                           data-testid={`toggle-strict-${mod}`}
                         >
                           {s.rag_strict_mode ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                          {s.rag_strict_mode ? 'Strikt aan' : 'Strikt uit'}
+                          {s.rag_strict_mode ? (lang === 'en' ? 'Strict on' : 'Strikt aan') : (lang === 'en' ? 'Strict off' : 'Strikt uit')}
                         </button>
                       </div>
                     </div>
@@ -1942,7 +1949,7 @@ const tabGroups = [
                           data-testid={`toggle-expansion-${mod}`}
                         >
                           {s.query_expansion_enabled ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                          {s.query_expansion_enabled ? 'Verrijking aan' : 'Verrijking uit'}
+                          {s.query_expansion_enabled ? (lang === 'en' ? 'Enrichment on' : 'Verrijking aan') : (lang === 'en' ? 'Enrichment off' : 'Verrijking uit')}
                         </button>
                       </div>
                     )}
@@ -1976,17 +1983,17 @@ const tabGroups = [
                 <div>
                   <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                     <Search className="w-4 h-4 text-gray-600" />
-                    Diagnose: test drempelwaarde
+                    {lang === 'en' ? 'Diagnose: test threshold' : 'Diagnose: test drempelwaarde'}
                   </h3>
                   <p className="text-xs text-gray-600 mt-1 max-w-2xl">
-                    Type een zoekterm (bijvoorbeeld een begripsnaam) om te zien welke chunks worden
-                    gevonden — zonder drempel toe te passen. Zo kun je inschatten welke drempel
-                    realistisch is voor jouw cursusmateriaal.
+                    {lang === 'en'
+                      ? 'Type a search term (e.g. a concept name) to see which chunks are returned — without applying a threshold. This lets you estimate which threshold is realistic for your course material.'
+                      : 'Type een zoekterm (bijvoorbeeld een begripsnaam) om te zien welke chunks worden gevonden — zonder drempel toe te passen. Zo kun je inschatten welke drempel realistisch is voor jouw cursusmateriaal.'}
                   </p>
                   {!isAdmin && !ragSelectedCourseId && (
                     <p className="text-xs text-amber-700 mt-2 flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-md w-fit">
                       <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                      Kies eerst een cursus hierboven — diagnose vereist een cursusselectie voor docenten.
+                      {lang === 'en' ? 'Choose a course above first — diagnosis requires a course selection for lecturers.' : 'Kies eerst een cursus hierboven — diagnose vereist een cursusselectie voor docenten.'}
                     </p>
                   )}
                 </div>
@@ -1998,7 +2005,7 @@ const tabGroups = [
                       value={diagnosticQuery}
                       onChange={e => setDiagnosticQuery(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !diagnosticLoading) runDiagnostic(); }}
-                      placeholder="bijv. Cross-over onderzoek"
+                      placeholder={lang === 'en' ? 'e.g. Cross-over study' : 'bijv. Cross-over onderzoek'}
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
                       data-testid="input-diagnostic-query"
                     />
@@ -2020,18 +2027,20 @@ const tabGroups = [
                       className="accent-blue-600"
                       data-testid="checkbox-diagnostic-expand"
                     />
-                    Verrijk de zoekterm met synoniemen (zelfde logica als &ldquo;Begrippen uitleggen&rdquo; gebruikt)
+                    {lang === 'en' ? 'Enrich the search term with synonyms (same logic as "Explain concepts" uses)' : 'Verrijk de zoekterm met synoniemen (zelfde logica als \u201cBegrippen uitleggen\u201d gebruikt)'}
                   </label>
                   {diagnosticExpand && (
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-gray-600">
-                        Optioneel: definition van het begrip (zoals opgeslagen in <code>concepts</code>) voor een eerlijke vergelijking met &ldquo;Begrippen uitleggen&rdquo;.
+                        {lang === 'en'
+                          ? <>Optional: definition of the concept (as stored in <code>concepts</code>) for a fair comparison with "Explain concepts".</>
+                          : <>Optioneel: definition van het begrip (zoals opgeslagen in <code>concepts</code>) voor een eerlijke vergelijking met &ldquo;Begrippen uitleggen&rdquo;.</>}
                       </label>
                       <textarea
                         value={diagnosticDefinition}
                         onChange={e => setDiagnosticDefinition(e.target.value)}
                         rows={2}
-                        placeholder="Bijv. 'Een groep mensen met een gemeenschappelijk kenmerk die in de tijd gevolgd wordt.'"
+                        placeholder={lang === 'en' ? "E.g. 'A group of people with a common characteristic followed over time.'" : "Bijv. 'Een groep mensen met een gemeenschappelijk kenmerk die in de tijd gevolgd wordt.'"}
                         className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-full"
                         data-testid="textarea-diagnostic-definition"
                       />
@@ -2049,21 +2058,21 @@ const tabGroups = [
                 {diagnosticResult && (
                   <div className="space-y-3" data-testid="diagnostic-results">
                     <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                      <span>Resultaat voor <strong>"{diagnosticResult.query}"</strong>:</span>
+                      <span>{lang === 'en' ? 'Result for' : 'Resultaat voor'} <strong>"{diagnosticResult.query}"</strong>:</span>
                       <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-mono">
-                        Beste score: {diagnosticResult.maxScore.toFixed(3)}
+                        {lang === 'en' ? 'Best score' : 'Beste score'}: {diagnosticResult.maxScore.toFixed(3)}
                       </span>
                       <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
-                        {diagnosticResult.chunks.length} chunks teruggegeven
+                        {diagnosticResult.chunks.length} {lang === 'en' ? 'chunks returned' : 'chunks teruggegeven'}
                       </span>
                       {diagnosticResult.candidatesInAllowedFolders !== undefined && (
                         <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
-                          ({diagnosticResult.candidatesInAllowedFolders} kandidaten in toegestane mappen)
+                          ({diagnosticResult.candidatesInAllowedFolders} {lang === 'en' ? 'candidates in allowed folders' : 'kandidaten in toegestane mappen'})
                         </span>
                       )}
                       {diagnosticResult.expanded && (
                         <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs">
-                          verrijkte zoekterm gebruikt
+                          {lang === 'en' ? 'enriched search term used' : 'verrijkte zoekterm gebruikt'}
                         </span>
                       )}
                     </div>
@@ -2072,14 +2081,14 @@ const tabGroups = [
                         className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-3 py-2"
                         data-testid="text-diagnostic-embed-query"
                       >
-                        <span className="font-medium text-blue-900">Verrijkte zoekstring:</span>{' '}
+                        <span className="font-medium text-blue-900">{lang === 'en' ? 'Enriched search string:' : 'Verrijkte zoekstring:'}</span>{' '}
                         <span className="font-mono break-words">{diagnosticResult.embedQuery}</span>
                       </div>
                     )}
 
                     {diagnosticResult.chunks.length === 0 ? (
                       <div className="text-sm text-gray-500 italic">
-                        Geen chunks gevonden. Controleer of de cursus RAG-mappen heeft toegewezen.
+                        {lang === 'en' ? 'No chunks found. Check whether the course has RAG folders assigned.' : 'Geen chunks gevonden. Controleer of de cursus RAG-mappen heeft toegewezen.'}
                       </div>
                     ) : (
                       <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -2122,16 +2131,24 @@ const tabGroups = [
 
           {activeTab === 'settings' && (
             <div className="space-y-4">
-              <p className="text-gray-600">Systeeminstellingen en configuratie</p>
+              <p className="text-gray-600">{lang === 'en' ? 'System settings and configuration' : 'Systeeminstellingen en configuratie'}</p>
               <div className="space-y-4">
                 <div className="p-4 border border-gray-200 rounded-lg">
-                  <h3 className="font-semibold text-gray-900 mb-2">API Configuratie</h3>
+                  <h3 className="font-semibold text-gray-900 mb-2">{lang === 'en' ? 'API Configuration' : 'API Configuratie'}</h3>
                   <p className="text-sm text-gray-600">
-                    Voeg je API keys toe als Replit Secrets:<br />
-                    - GROQ_API_KEY voor LLM functionaliteit<br />
-                    - OPENAI_API_KEY voor embeddings/RAG<br />
-                    - HUGGINGFACE_API_KEY voor alternatieve embeddings<br />
-                    - GITHUB_TOKEN voor hogere GitHub API limieten
+                    {lang === 'en' ? (
+                      <>Add your API keys as Replit Secrets:<br />
+                      - GROQ_API_KEY for LLM functionality<br />
+                      - OPENAI_API_KEY for embeddings/RAG<br />
+                      - HUGGINGFACE_API_KEY for alternative embeddings<br />
+                      - GITHUB_TOKEN for higher GitHub API limits</>
+                    ) : (
+                      <>Voeg je API keys toe als Replit Secrets:<br />
+                      - GROQ_API_KEY voor LLM functionaliteit<br />
+                      - OPENAI_API_KEY voor embeddings/RAG<br />
+                      - HUGGINGFACE_API_KEY voor alternatieve embeddings<br />
+                      - GITHUB_TOKEN voor hogere GitHub API limieten</>
+                    )}
                   </p>
                 </div>
               </div>
