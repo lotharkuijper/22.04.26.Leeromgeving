@@ -1,9 +1,14 @@
 /**
- * LAIR-VU Promo Video Assembler (fixed)
+ * LAIR-VU Promo Video Assembler v2
+ * - 1920×1080 output
+ * - 2s held-last-frame pause after each scene → total ~97s (within 90-105s)
+ * - SRT generation + libass subtitle burn-in
+ * - Voice-over MP3 + background music mix (14%)
+ * - drawtext title overlays on scenes 1 and 10
  * Outputs: lairvu_promo_nl.mp4 and lairvu_promo_en.mp4
  */
 import { execFileSync } from 'child_process';
-import { writeFileSync, mkdirSync, readdirSync, unlinkSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -16,18 +21,14 @@ const OUT    = join(ROOT, 'attached_assets');
 
 mkdirSync(TMP, { recursive: true });
 
-function run(cmd, args) {
+function ffmpeg(args) {
   try {
-    execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('ffmpeg', ['-y', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
-    const errTxt = e.stderr?.toString() ?? '';
-    // Show just last 600 chars of stderr
-    console.error(`  ✗ ${cmd} error:\n${errTxt.slice(-600)}`);
+    console.error('FFmpeg error:', e.stderr?.toString().slice(-800));
     throw e;
   }
 }
-
-function ffmpeg(args) { run('ffmpeg', ['-y', ...args]); }
 
 function probe(file) {
   return parseFloat(
@@ -37,195 +38,213 @@ function probe(file) {
   );
 }
 
-function escDt(s) {
-  // Escape text for FFmpeg drawtext
-  return s
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\u2019")   // replace smart apostrophe to avoid escaping issues
-    .replace(/:/g, '\\:')
-    .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]')
-    .replace(/,/g, '\\,')
-    .replace(/é/g, 'e')        // keep ASCII for drawtext compatibility
-    .replace(/è/g, 'e')
-    .replace(/ê/g, 'e')
-    .replace(/ë/g, 'e')
-    .replace(/à/g, 'a')
-    .replace(/â/g, 'a')
-    .replace(/ô/g, 'o')
-    .replace(/î/g, 'i')
-    .replace(/û/g, 'u')
-    .replace(/ü/g, 'u')
-    .replace(/ç/g, 'c')
-    .replace(/ï/g, 'i')
-    .replace(/—/g, '-')
-    .replace(/'/g, "'")
-    .replace(/"/g, '"')
-    .replace(/"/g, '"');
+function toSrtTime(sec) {
+  const h  = Math.floor(sec / 3600);
+  const m  = Math.floor((sec % 3600) / 60);
+  const s  = Math.floor(sec % 60);
+  const ms = Math.round((sec % 1) * 1000);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
 }
 
-// ─── Scene data ────────────────────────────────────────────────────────────
-const TOTAL_DUR = 76.04;
+// ─── Scene data (exact approved copy) ─────────────────────────────────────
+const HOLD = 2.0; // seconds of held last frame after each scene
 
 const scenes = [
-  { id:1,  video:'scene1_opening.mp4',          vidDur:8.00,
-    nl:{ dur:3.91, lines:["Wat als je AI-assistent je",  "niet zomaar het antwoord geeft?"] },
-    en:{ dur:3.60, lines:["What if your AI assistant",   "didn't just give you the answer?"] } },
+  { id:1,  video:'scene1_opening.mp4',
+    nl:{ dur:3.864, lines:['Wat als je AI-assistent', 'je niet zomaar het antwoord geeft?'] },
+    en:{ dur:4.008, lines:["What if your AI assistant", "didn't just give you the answer?"] } },
 
-  { id:2,  video:'scene2_socratic_dialogue.mp4', vidDur:8.00,
-    nl:{ dur:6.67, lines:["LAIR-VU helpt je echt begrijpen -", "door te vragen, te redeneren,", "en stap voor stap samen te denken."] },
-    en:{ dur:6.07, lines:["LAIR-VU helps you truly understand -", "by asking questions, reasoning together,", "step by step."] } },
+  { id:2,  video:'scene2_socratic_dialogue.mp4',
+    nl:{ dur:6.480, lines:['LAIR-VU helpt je echt begrijpen,', 'door te vragen, te redeneren,', 'en stap voor stap samen te denken.'] },
+    en:{ dur:6.000, lines:['LAIR-VU helps you truly understand,', 'by asking questions, reasoning together,', 'step by step.'] } },
 
-  { id:3,  video:'scene3_learning_science.mp4',  vidDur:8.00,
-    nl:{ dur:4.80, lines:["Gebouwd op hoe leren werkt:", "actief, sociaal, met ruimte voor fouten."] },
-    en:{ dur:4.87, lines:["Built on learning science:", "active, social, with room to make mistakes."] } },
+  { id:3,  video:'scene3_learning_science.mp4',
+    nl:{ dur:5.112, lines:['De tool is gebouwd op hoe leren werkt:', 'actief, sociaal, en met ruimte voor fouten.'] },
+    en:{ dur:4.848, lines:['Built on learning science:', 'active, social, and with room to make mistakes.'] } },
 
-  { id:4,  video:'scene4_explain_concepts.mp4',  vidDur:8.00,
-    nl:{ dur:7.08, lines:["Vraag uitleg over een begrip.", "Je krijgt hulp om het zelf te doorgronden.", "Geen kant-en-klaar antwoord."] },
-    en:{ dur:7.18, lines:["Ask for an explanation.", "You get guidance to figure it out yourself.", "Not a copy-paste answer."] } },
+  { id:4,  video:'scene4_explain_concepts.mp4',
+    nl:{ dur:7.128, lines:['Vraag uitleg over een begrip.', 'Je krijgt geen kant-en-klaar antwoord,', 'maar hulp om het zelf te doorgronden.'] },
+    en:{ dur:7.104, lines:["Ask for an explanation.", "You won't get a copy-paste answer.", "You'll get guidance to figure it out yourself."] } },
 
-  { id:5,  video:'scene5_course_material.mp4',   vidDur:8.00,
-    nl:{ dur:3.94, lines:["Gebaseerd op jouw cursusmateriaal -", "niet op het internet."] },
-    en:{ dur:4.51, lines:["Grounded in your own course material -", "not the internet."] } },
+  { id:5,  video:'scene5_course_material.mp4',
+    nl:{ dur:4.080, lines:['Alles gebaseerd op jouw cursusmateriaal,', 'niet op het internet.'] },
+    en:{ dur:4.536, lines:['Everything grounded in your own course material,', 'not the internet.'] } },
 
-  { id:6,  video:'scene6_quiz.mp4',              vidDur:8.00,
-    nl:{ dur:4.61, lines:["Oefen met slimme quizvragen", "die echt aansluiten op wat je studeert."] },
-    en:{ dur:5.21, lines:["Practice with smart quiz questions", "that match exactly what you are studying."] } },
+  { id:6,  video:'scene6_quiz.mp4',
+    nl:{ dur:4.560, lines:['Oefen met slimme quizvragen', 'die echt aansluiten op wat je studeert.'] },
+    en:{ dur:5.184, lines:['Practice with smart quiz questions', 'that match exactly what you are studying.'] } },
 
-  { id:7,  video:'scene7_project_personas.mp4',  vidDur:8.00,
-    nl:{ dur:6.26, lines:["In projecten chat je met AI-experts", "die vragen stellen die je", "aan het denken zetten."] },
-    en:{ dur:5.66, lines:["In projects, you talk with AI experts", "who ask the questions", "that make you think."] } },
+  { id:7,  video:'scene7_project_personas.mp4',
+    nl:{ dur:6.552, lines:['In projecten voer je gesprekken', 'met AI-experts die vragen stellen', 'die je aan het denken zetten.'] },
+    en:{ dur:5.712, lines:["In projects, you'll talk with AI experts", "who ask the questions", "that make you think."] } },
 
-  { id:8,  video:'scene8_reflection.mp4',        vidDur:6.02,
-    nl:{ dur:4.25, lines:["Daarna reflecteer je op wat je leerde.", "Zo beklijft het."] },
-    en:{ dur:4.94, lines:["Afterwards, you reflect on what you learned.", "That's what makes it stick."] } },
+  { id:8,  video:'scene8_reflection.mp4',
+    nl:{ dur:4.440, lines:['En daarna reflecteer je op wat je leerde.', 'Zo beklijft het.'] },
+    en:{ dur:5.040, lines:["Afterwards, you reflect on what you've learned.", "That's what makes it stick."] } },
 
-  { id:9,  video:'scene9_generic_courses.mp4',   vidDur:6.02,
-    nl:{ dur:2.86, lines:["Voor elke cursus,", "in het Nederlands en Engels."] },
-    en:{ dur:2.45, lines:["For any course,", "in Dutch and English."] } },
+  { id:9,  video:'scene9_generic_courses.mp4',
+    nl:{ dur:3.120, lines:['Voor elke cursus,', 'in het Nederlands en Engels.'] },
+    en:{ dur:2.472, lines:['For any course,', 'in Dutch and English.'] } },
 
-  { id:10, video:'scene10_closing.mp4',          vidDur:8.00,
-    nl:{ dur:2.38, lines:["LAIR-VU", "Leren zoals het bedoeld is."] },
-    en:{ dur:3.02, lines:["LAIR-VU", "Learning the way it is meant to be."] } },
+  { id:10, video:'scene10_closing.mp4',
+    nl:{ dur:2.448, lines:['LAIR-VU', 'Leren zoals het bedoeld is.'] },
+    en:{ dur:2.976, lines:['LAIR-VU', 'Learning the way it is meant to be.'] } },
 ];
 
-// ─── Step 1: Background music ──────────────────────────────────────────────
-console.log('[1/4] Generating background music...');
-const bgPath = join(TMP, 'bg.mp3');
-const totalPlusFade = Math.ceil(TOTAL_DUR) + 6;
+// Calculate actual video durations from files
+for (const sc of scenes) {
+  sc.vidDur = probe(join(VIDEOS, sc.video));
+}
 
-// 3 layered sine waves (A major triad), mixed and filtered
+// Each processed scene duration = vidDur + HOLD (except last which gets +3)
+scenes.forEach((sc, i) => {
+  sc.holdDur = (i === scenes.length - 1) ? 3.0 : HOLD;
+  sc.totalDur = sc.vidDur + sc.holdDur;
+});
+const TOTAL_DUR = scenes.reduce((s, sc) => s + sc.totalDur, 0);
+console.log(`Total duration: ${TOTAL_DUR.toFixed(2)}s (target: 90-105s)`);
+
+// Cumulative scene start times
+let cumT = 0;
+for (const sc of scenes) {
+  sc.startT = cumT;
+  cumT += sc.totalDur;
+}
+
+// ─── Step 1: Background music ──────────────────────────────────────────────
+console.log('\n[1/5] Generating background music...');
+const bgPath = join(TMP, 'bg.mp3');
+const bgDurSec = Math.ceil(TOTAL_DUR) + 5;
 ffmpeg([
-  '-f', 'lavfi', '-i', `sine=frequency=220:duration=${totalPlusFade}`,
-  '-f', 'lavfi', '-i', `sine=frequency=277:duration=${totalPlusFade}`,
-  '-f', 'lavfi', '-i', `sine=frequency=330:duration=${totalPlusFade}`,
+  '-f', 'lavfi', '-i', `sine=frequency=220:duration=${bgDurSec}`,
+  '-f', 'lavfi', '-i', `sine=frequency=277:duration=${bgDurSec}`,
+  '-f', 'lavfi', '-i', `sine=frequency=330:duration=${bgDurSec}`,
   '-filter_complex',
   [
     '[0:a][1:a][2:a]amix=inputs=3:duration=first[mix]',
-    `[mix]volume=0.07,aecho=0.5:0.5:80|120:0.25|0.15,lowpass=f=600,afade=t=out:st=${TOTAL_DUR - 1}:d=4[out]`
+    `[mix]volume=0.065,aecho=0.5:0.5:100|150:0.2|0.12,lowpass=f=550,` +
+    `afade=t=in:st=0:d=3,afade=t=out:st=${TOTAL_DUR - 2}:d=4[out]`
   ].join(';'),
   '-map', '[out]',
-  '-c:a', 'libmp3lame', '-q:a', '4',
+  '-c:a', 'libmp3lame', '-q:a', '3',
   bgPath
 ]);
 console.log('  ✓ background music ready');
 
-// ─── Step 2+3: Build per-language video ────────────────────────────────────
+// ─── Steps 2-4: Build per-language video ──────────────────────────────────
 async function buildVideo(lang) {
-  const stepNum = lang === 'nl' ? '2' : '3';
-  console.log(`\n[${stepNum}/4] Building ${lang.toUpperCase()} video...`);
+  console.log(`\n[${lang === 'nl' ? 2 : 3}/5] Building ${lang.toUpperCase()} video...`);
 
-  // 2a. Process each clip: combine video + padded TTS
+  // 2a. Build per-scene clips with 2s freeze-frame hold
   const clipPaths = [];
   for (const sc of scenes) {
     const vidPath = join(VIDEOS, sc.video);
     const ttsPath = join(AUDIO, `scene${sc.id}_${lang}.mp3`);
     const clipOut = join(TMP, `c${sc.id}_${lang}.mp4`);
-    const ttsDur  = sc[lang].dur;
+    const sceneTotalDur = sc.totalDur;
 
-    // Pad TTS with silence to match full video duration
+    // Video: scale to 1920x1080, add hold (clone last frame), set fps
+    // Audio: TTS padded with silence to sceneTotalDur
     ffmpeg([
       '-i', vidPath,
       '-i', ttsPath,
       '-filter_complex',
       [
-        `[0:v]scale=1280:720,fps=25,format=yuv420p[v]`,
-        `[1:a]apad=whole_dur=${sc.vidDur}[a]`,
+        // Video: scale → 1080p, hold last frame for holdDur, set fps
+        `[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,` +
+        `pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,` +
+        `fps=25,tpad=stop_duration=${sc.holdDur}:stop_mode=clone,` +
+        `format=yuv420p[v]`,
+        // Audio: pad TTS to full scene duration
+        `[1:a]apad=whole_dur=${sceneTotalDur}[a]`,
       ].join(';'),
       '-map', '[v]', '-map', '[a]',
-      '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+      '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
       '-c:a', 'aac', '-b:a', '128k',
-      '-t', String(sc.vidDur),
+      '-t', String(sceneTotalDur),
       clipOut
     ]);
     clipPaths.push(clipOut);
     process.stdout.write(`  ✓ clip ${sc.id}/10\r`);
   }
-  console.log('  ✓ all clips processed   ');
+  console.log('  ✓ all 10 clips processed   ');
 
-  // 2b. Concat list
+  // 2b. Concatenate
   const concatTxt = join(TMP, `concat_${lang}.txt`);
   writeFileSync(concatTxt, clipPaths.map(p => `file '${p}'`).join('\n'));
-
   const concatRaw = join(TMP, `raw_${lang}.mp4`);
-  ffmpeg([
-    '-f', 'concat', '-safe', '0', '-i', concatTxt,
-    '-c', 'copy',
-    concatRaw
-  ]);
+  ffmpeg(['-f', 'concat', '-safe', '0', '-i', concatTxt, '-c', 'copy', concatRaw]);
   console.log('  ✓ clips concatenated');
 
-  // 2c. Build drawtext subtitle filter for each scene line
-  // Each scene's lines appear from the start of that scene
-  const DT_FONTSIZE = 28;
-  const DT_FONTCOLOR = 'white@0.95';
-  const DT_SHADOW    = '0x000000@0.8';
-  const DT_MARGIN    = 50; // px from bottom per line
-
-  let vChain = '[0:v]';
-  const dtParts = [];
-  let cumT = 0;
-
+  // 2c. Generate SRT subtitle file
+  const srtLines = [];
+  let idx = 1;
   for (const sc of scenes) {
-    const langData = sc[lang];
-    const lines = langData.lines;
-    const showEnd = cumT + langData.dur + 0.2;
-    const showStart = cumT + 0.15;
+    const ld = sc[lang];
+    const subStart = sc.startT + 0.2;
+    const subEnd   = sc.startT + ld.dur + 0.1;
+    srtLines.push(`${idx}\n${toSrtTime(subStart)} --> ${toSrtTime(subEnd)}\n${ld.lines.join('\n')}\n`);
+    idx++;
+  }
+  const srtPath = join(OUT, `lairvu_promo_${lang}.srt`);
+  writeFileSync(srtPath, srtLines.join('\n'));
+  console.log(`  ✓ SRT file: ${srtPath}`);
 
-    const isClosing = sc.id === 10;
-    const fontSize  = isClosing ? 42 : DT_FONTSIZE;
+  // 2d. Build drawtext title cards for scene 1 (opening) and scene 10 (closing)
+  // These are minimal overlays at specific moments
+  const sc1 = scenes[0];
+  const sc10 = scenes[9];
 
-    // Lines stack from bottom up
-    lines.forEach((line, li) => {
-      const lineIdx  = lines.length - 1 - li; // 0 = bottom
-      const yPos     = 720 - DT_MARGIN - lineIdx * (fontSize + 8);
-      const txt      = escDt(line);
-      const fs       = (isClosing && li === 0) ? 52 : fontSize; // first line of closing = big title
-      dtParts.push(
-        `drawtext=fontsize=${fs}:fontcolor=${DT_FONTCOLOR}` +
-        `:shadowcolor=${DT_SHADOW}:shadowx=2:shadowy=2` +
-        `:x=(w-text_w)/2:y=${yPos}` +
-        `:text='${txt}'` +
-        `:enable='between(t,${showStart.toFixed(2)},${showEnd.toFixed(2)})'`
-      );
-    });
-    cumT += sc.vidDur;
+  // Scene 1: small "LAIR-VU" brand mark top-right, visible whole scene
+  const sc1Start = sc1.startT;
+  const sc1End   = sc1.startT + sc1.vidDur;
+
+  // Scene 10: large centered brand name + tagline (first and second lines)
+  const sc10Start = sc10.startT;
+  const sc10End   = sc10.startT + sc10.vidDur;
+
+  const sc10Lines = sc10[lang].lines;
+  // Line 0 = large brand name, line 1 = tagline
+  const brandName = sc10Lines[0];  // "LAIR-VU"
+  const tagline   = sc10Lines[1];  // "Leren zoals..."
+
+  function dtEsc(s) {
+    return s
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, '\u2019')
+      .replace(/:/g, '\\:')
+      .replace(/\[/g, '\\[')
+      .replace(/\]/g, '\\]')
+      .replace(/,/g, '\\,')
+      .replace(/\u2014/g, '-');
   }
 
-  const videoFilter = dtParts.join(',') + '[vout]';
-  const fullFilter = `[0:v]${videoFilter}`;
+  const titleFilter = [
+    // Scene 10: brand name big centered ~middle of screen
+    `drawtext=fontsize=72:fontcolor=white@0.95:shadowcolor=0x000000@0.8:shadowx=3:shadowy=3` +
+    `:x=(w-text_w)/2:y=h/2-60:text='${dtEsc(brandName)}'` +
+    `:enable='between(t,${sc10Start.toFixed(2)},${sc10End.toFixed(2)})'`,
+    // Scene 10: tagline below brand name
+    `drawtext=fontsize=36:fontcolor=white@0.9:shadowcolor=0x000000@0.7:shadowx=2:shadowy=2` +
+    `:x=(w-text_w)/2:y=h/2+30:text='${dtEsc(tagline)}'` +
+    `:enable='between(t,${(sc10Start+0.5).toFixed(2)},${sc10End.toFixed(2)})'`,
+  ].join(',');
 
-  // 2d. Final render: video + subtitles + bg music
+  const srtPathEsc = srtPath.replace(/'/g, "\\'").replace(/:/g, '\\:');
+
+  // 2e. Final render: raw video → subtitles (libass) → title overlays → bg music mix
   const finalOut = join(OUT, `lairvu_promo_${lang}.mp4`);
   ffmpeg([
     '-i', concatRaw,
     '-i', bgPath,
     '-filter_complex',
     [
-      fullFilter,
-      '[0:a]volume=1.0[va]',
+      // Apply libass subtitles, then drawtext title cards
+      `[0:v]subtitles=${srtPathEsc}:force_style='FontSize=28,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=2,Shadow=1,Alignment=2,MarginV=45',${titleFilter}[vout]`,
+      // Mix voice-over at full volume with gentle bg music
+      `[0:a]volume=1.0[va]`,
       `[1:a]volume=0.14,atrim=0:${TOTAL_DUR}[bga]`,
-      '[va][bga]amix=inputs=2:duration=first[aout]',
+      `[va][bga]amix=inputs=2:duration=first[aout]`,
     ].join(';'),
     '-map', '[vout]',
     '-map', '[aout]',
@@ -237,19 +256,20 @@ async function buildVideo(lang) {
   ]);
 
   const actualDur = probe(finalOut);
-  console.log(`  ✓ ${lang.toUpperCase()} → ${finalOut} (${actualDur.toFixed(1)}s)`);
+  console.log(`  ✓ ${lang.toUpperCase()} → ${finalOut.split('/').slice(-1)[0]} (${actualDur.toFixed(1)}s, 1080p)`);
   return finalOut;
 }
 
 const nlOut = await buildVideo('nl');
 const enOut = await buildVideo('en');
 
-// ─── Cleanup ───────────────────────────────────────────────────────────────
-console.log('\n[4/4] Cleaning up temp files...');
-try {
-  for (const f of readdirSync(TMP)) unlinkSync(join(TMP, f));
-} catch(_) {}
+// ─── Step 5: Cleanup & summary ─────────────────────────────────────────────
+console.log('\n[5/5] Cleaning up temp files...');
+try { for (const f of readdirSync(TMP)) unlinkSync(join(TMP, f)); } catch(_){}
 
-console.log('\n✓ DONE');
-console.log(`  NL: ${nlOut}`);
-console.log(`  EN: ${enOut}`);
+const nlDur = probe(nlOut);
+const enDur = probe(enOut);
+console.log('\n=== DONE ===');
+console.log(`NL: ${nlOut}  (${nlDur.toFixed(1)}s, 1920x1080)`);
+console.log(`EN: ${enOut}  (${enDur.toFixed(1)}s, 1920x1080)`);
+console.log(`SRT: ${join(OUT, 'lairvu_promo_nl.srt')} + lairvu_promo_en.srt`);

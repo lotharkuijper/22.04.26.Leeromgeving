@@ -1,0 +1,52 @@
+1
+00:00:00,200 --> 00:00:04,108
+What if your AI assistant
+didn't just give you the answer?
+
+2
+00:00:10,200 --> 00:00:16,100
+LAIR-VU helps you truly understand,
+by asking questions, reasoning together,
+step by step.
+
+3
+00:00:20,200 --> 00:00:24,948
+Built on learning science:
+active, social, and with room to make mistakes.
+
+4
+00:00:30,200 --> 00:00:37,204
+Ask for an explanation.
+You won't get a copy-paste answer.
+You'll get guidance to figure it out yourself.
+
+5
+00:00:40,200 --> 00:00:44,636
+Everything grounded in your own course material,
+not the internet.
+
+6
+00:00:50,200 --> 00:00:55,284
+Practice with smart quiz questions
+that match exactly what you are studying.
+
+7
+00:01:00,200 --> 00:01:05,812
+In projects, you'll talk with AI experts
+who ask the questions
+that make you think.
+
+8
+00:01:10,200 --> 00:01:15,140
+Afterwards, you reflect on what you've learned.
+That's what makes it stick.
+
+9
+00:01:18,216 --> 00:01:20,588
+For any course,
+in Dutch and English.
+
+10
+00:01:26,232 --> 00:01:29,108
+LAIR-VU
+Learning the way it is meant to be.
