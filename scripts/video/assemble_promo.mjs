@@ -79,7 +79,7 @@ const scenes = [
     en:{ dur:5.712, lines:["In projects, you'll talk with AI experts", "who ask the questions", "that make you think."] } },
 
   { id:8,  video:'scene8_reflection.mp4',
-    nl:{ dur:4.440, lines:['En daarna reflecteer je op wat je leerde.', 'Zo beklijft het.'] },
+    nl:{ dur:4.440, lines:['En daarna reflecteer je op wat je hebt geleerd.', 'Zo beklijft het.'] },
     en:{ dur:5.040, lines:["Afterwards, you reflect on what you've learned.", "That's what makes it stick."] } },
 
   { id:9,  video:'scene9_generic_courses.mp4',
@@ -190,23 +190,24 @@ async function buildVideo(lang) {
   writeFileSync(srtPath, srtLines.join('\n'));
   console.log(`  ✓ SRT file: ${srtPath}`);
 
-  // 2d. Build drawtext title cards for scene 1 (opening) and scene 10 (closing)
-  // These are minimal overlays at specific moments
-  const sc1 = scenes[0];
+  // 2d. Title card overlays: scene 1 (brand intro), scene 3 (learning science label), scene 10 (closing)
+  const sc1  = scenes[0];
+  const sc3  = scenes[2];
   const sc10 = scenes[9];
 
-  // Scene 1: small "LAIR-VU" brand mark top-right, visible whole scene
-  const sc1Start = sc1.startT;
-  const sc1End   = sc1.startT + sc1.vidDur;
-
-  // Scene 10: large centered brand name + tagline (first and second lines)
+  const sc1Start  = sc1.startT;
+  const sc1End    = sc1.startT + sc1.vidDur;
+  const sc3Start  = sc3.startT;
+  const sc3End    = sc3.startT + sc3.vidDur;
   const sc10Start = sc10.startT;
   const sc10End   = sc10.startT + sc10.vidDur;
 
   const sc10Lines = sc10[lang].lines;
-  // Line 0 = large brand name, line 1 = tagline
-  const brandName = sc10Lines[0];  // "LAIR-VU"
-  const tagline   = sc10Lines[1];  // "Leren zoals..."
+  const brandName = sc10Lines[0];
+  const tagline   = sc10Lines[1];
+
+  // Label for scene 3 differs by language
+  const sc3Label = lang === 'nl' ? 'Actief leren' : 'Active Learning';
 
   function dtEsc(s) {
     return s
@@ -220,10 +221,21 @@ async function buildVideo(lang) {
   }
 
   const titleFilter = [
-    // Scene 10: brand name big centered ~middle of screen
+    // Scene 1: LAIR-VU brand mark top-right corner (appears after 0.5s)
+    `drawtext=fontsize=42:fontcolor=white@0.9:shadowcolor=0x000000@0.85:shadowx=2:shadowy=2` +
+    `:x=w-text_w-40:y=40:text='LAIR\\-VU'` +
+    `:enable='between(t,${(sc1Start+0.5).toFixed(2)},${sc1End.toFixed(2)})'`,
+
+    // Scene 3: "Actief leren" / "Active Learning" pill label centered top
+    `drawtext=fontsize=34:fontcolor=white@0.92:shadowcolor=0x000000@0.8:shadowx=2:shadowy=2` +
+    `:x=(w-text_w)/2:y=56:text='${dtEsc(sc3Label)}'` +
+    `:enable='between(t,${(sc3Start+0.3).toFixed(2)},${sc3End.toFixed(2)})'`,
+
+    // Scene 10: brand name large centered
     `drawtext=fontsize=72:fontcolor=white@0.95:shadowcolor=0x000000@0.8:shadowx=3:shadowy=3` +
     `:x=(w-text_w)/2:y=h/2-60:text='${dtEsc(brandName)}'` +
     `:enable='between(t,${sc10Start.toFixed(2)},${sc10End.toFixed(2)})'`,
+
     // Scene 10: tagline below brand name
     `drawtext=fontsize=36:fontcolor=white@0.9:shadowcolor=0x000000@0.7:shadowx=2:shadowy=2` +
     `:x=(w-text_w)/2:y=h/2+30:text='${dtEsc(tagline)}'` +
