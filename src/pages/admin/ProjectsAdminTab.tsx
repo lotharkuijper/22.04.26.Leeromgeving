@@ -264,6 +264,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   project: ProjectRow; token: string;
   onBack: () => void; onError: (m: string) => void; onInfo: (m: string) => void;
 }) {
+  const { lang } = useLanguage();
   const [personas, setPersonas] = useState<ProjectPersona[]>([]);
   const [adding, setAdding] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Partial<ProjectPersona> | null>(null);
