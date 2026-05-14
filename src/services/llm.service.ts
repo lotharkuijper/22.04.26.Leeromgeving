@@ -321,9 +321,32 @@ function buildContextSection(ragContext?: string, ragStrictMode?: boolean): stri
     return `\n\nGebruik de volgende informatie uit het cursusmateriaal als basis voor de vragen:\n${ragContext}${strictNote}\n`;
   }
   if (ragStrictMode) {
-    return `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten beschikbaar. Geef dit aan in de vragen of genereer geen vragen.\n`;
+    // Geef geen dubbelzinnige opdracht — returneer een lege sectie zodat de
+    // aanroeper de RAG-generatie al vóór de LLM-call kan overslaan wanneer er
+    // geen context is. Dit voorkomt dat het model een weigering als quiz-vraag
+    // opmaakt.
+    return '';
   }
   return '';
+}
+
+/**
+ * Detecteert of een vraag eigenlijk een LLM-weigering is die als quiz-vraag is
+ * opgemaakt. Dit is een veiligheidsvangnet naast de fix in generateMixedQuiz.
+ */
+function isRefusalQuestion(q: QuizQuestion): boolean {
+  const text = ('question' in q ? q.question : '') || '';
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('staat niet in het beschikbare') ||
+    lower.includes('kan ik geen vraag') ||
+    lower.includes('niet in het cursusmateriaal') ||
+    lower.includes('geen relevante') ||
+    lower.includes('not in the available') ||
+    lower.includes('cannot generate') ||
+    lower.includes('unable to generate') ||
+    lower.includes('i cannot create')
+  );
 }
 
 function extractJSON<T>(content: string, kind: 'array' | 'object'): T {
@@ -567,7 +590,10 @@ ${lang === 'en'
     const parsed = extractJSON<QuizQuestion[]>(content, 'array');
     // Defensief: zorg dat elk vraag-object het type heeft (sommige modellen
     // vergeten dat veld bij MCQ omdat dat de oude default was).
-    return parsed.map((q: any) => ({ ...q, type: q.type || questionType })) as QuizQuestion[];
+    const typed = parsed.map((q: any) => ({ ...q, type: q.type || questionType })) as QuizQuestion[];
+    // Veiligheidsfilter: gooi weigeringsvragen eruit die het model per ongeluk
+    // als echte quiz-vraag heeft opgemaakt.
+    return typed.filter(q => !isRefusalQuestion(q));
   } catch (error: any) {
     console.error('Error generating quiz:', error);
     if (error instanceof LLMError) {

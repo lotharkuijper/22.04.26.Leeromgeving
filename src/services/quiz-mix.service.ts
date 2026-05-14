@@ -258,8 +258,14 @@ export async function generateMixedQuiz(args: {
   const llmCount = counts.llm + itembankShortfall;
 
   // 2) RAG (LLM met context)
+  // Sla de RAG-aanroep over als strict-mode aan staat maar er geen context
+  // beschikbaar is — anders genereert het model een "weigerings-vraag".
+  // De geplande RAG-vragen vallen dan terug naar de LLM-creatieve bron.
+  const ragContextMissing = args.ragStrictMode && !args.ragContext;
+  const llmCountWithRagFallback = llmCount + (ragContextMissing ? counts.rag : 0);
+
   let ragActual = 0;
-  if (counts.rag > 0) {
+  if (counts.rag > 0 && !ragContextMissing) {
     try {
       const ragQs = await generateQuiz(
         args.topicNames,
@@ -280,13 +286,13 @@ export async function generateMixedQuiz(args: {
 
   // 3) LLM-creatief (zonder context)
   let llmActual = 0;
-  if (llmCount > 0) {
+  if (llmCountWithRagFallback > 0) {
     try {
       const llmQs = await generateQuiz(
         args.topicNames,
         args.difficulty,
         args.questionType,
-        llmCount,
+        llmCountWithRagFallback,
         undefined,
         false,
         llmPersona,
