@@ -2070,9 +2070,12 @@ ${combinedText}`;
       );
 
       const toInsert = [];
+      const seenInBatch = new Set();
       for (const c of validConcepts) {
         const key = c.name.toLowerCase().trim();
         if (alreadyByCourse.has(key)) { skipped++; continue; }
+        if (seenInBatch.has(key)) { skipped++; continue; }
+        seenInBatch.add(key);
         toInsert.push({
           name: c.name.trim(),
           category: c.category,
@@ -2084,9 +2087,12 @@ ${combinedText}`;
       }
 
       if (toInsert.length > 0) {
+        // Gebruik upsert met ignoreDuplicates zodat begrippen met dezelfde naam
+        // die al bestaan (bv. in een andere cursus) worden overgeslagen in
+        // plaats van een constraint-fout te geven.
         const { data: ins, error: insertError } = await supabaseAdmin
           .from('concepts')
-          .insert(toInsert)
+          .upsert(toInsert, { onConflict: 'name', ignoreDuplicates: true })
           .select('id, name, category, definition');
         if (insertError) {
           console.error('[extract-concepts] Insert error (course_id path):', insertError);
