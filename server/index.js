@@ -4728,21 +4728,21 @@ async function courseRagFolderIds(courseId) {
   return (ragFolders || []).map(f => f.id);
 }
 
-// Kopieert (idempotent) één course_persona naar project_personas. Geeft de
-// resulterende project_persona-row terug, of null als de course-persona niet
-// bestaat. Voorkomt dubbele kopieën door op (project_id, source_persona_id)
-// te kijken.
+// Fallback-helper: zet een course_persona om naar een project_persona als het
+// project nog geen persona met die naam heeft. Maakt een verse, onafhankelijke
+// kopie (source_persona_id = null) conform het nieuwe sjablonen-model.
 async function ensureProjectPersonaFromCourse(projectId, coursePersonaId) {
+  const { data: cp } = await supabaseAdmin
+    .from('course_personas').select('*').eq('id', coursePersonaId).maybeSingle();
+  if (!cp) return null;
+  // Zoek op naam (niet op source_persona_id — die wordt niet meer ingevuld).
   const { data: existing } = await supabaseAdmin
     .from('project_personas')
     .select('*')
     .eq('project_id', projectId)
-    .eq('source_persona_id', coursePersonaId)
+    .eq('name', cp.name)
     .maybeSingle();
   if (existing) return existing;
-  const { data: cp } = await supabaseAdmin
-    .from('course_personas').select('*').eq('id', coursePersonaId).maybeSingle();
-  if (!cp) return null;
   const { data: existingCount } = await supabaseAdmin
     .from('project_personas').select('id').eq('project_id', projectId);
   const sortOrder = (existingCount?.length || 0);
@@ -4750,7 +4750,7 @@ async function ensureProjectPersonaFromCourse(projectId, coursePersonaId) {
     .from('project_personas')
     .insert({
       project_id: projectId,
-      source_persona_id: cp.id,
+      source_persona_id: null,
       name: cp.name,
       avatar_emoji: cp.avatar_emoji,
       system_prompt: cp.system_prompt,
@@ -4758,15 +4758,16 @@ async function ensureProjectPersonaFromCourse(projectId, coursePersonaId) {
       rag_folder_ids: cp.rag_folder_ids,
       visible_from_phase: cp.visible_from_phase,
       sort_order: sortOrder,
+      persona_type: cp.persona_type || 'conversational',
     })
     .select('*').single();
   if (error) {
-    // Mogelijk race-condition: probeer nogmaals te lezen.
+    // Mogelijk race-condition: lees opnieuw op naam.
     const { data: retry } = await supabaseAdmin
       .from('project_personas')
       .select('*')
       .eq('project_id', projectId)
-      .eq('source_persona_id', coursePersonaId)
+      .eq('name', cp.name)
       .maybeSingle();
     return retry || null;
   }
@@ -7423,7 +7424,7 @@ app.patch('/api/admin/course-personas/:personaId', async (req, res) => {
     if (rag_folder_ids !== undefined) patch.rag_folder_ids = Array.isArray(rag_folder_ids) ? rag_folder_ids : [];
     if (persona_type !== undefined) patch.persona_type = persona_type === 'evaluator' ? 'evaluator' : 'conversational';
     const { data: updated, error: uErr } = await supabaseAdmin
-      .from('course_personas').update(patch).eq('id', personaId).select('*').single();
+      .from('course_personas').update(patch).eq('id', personaId).select('*').maybeSingle();
     if (uErr) return res.status(500).json({ error: uErr.message });
     if (!updated) return res.status(404).json({ error: 'Persona niet gevonden' });
     return res.json({ persona: updated });
