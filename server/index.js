@@ -2137,10 +2137,13 @@ ${combinedText}`;
 
       const toInsert = [];
       const toUpdate = [];
+      const seenInBatch = new Set();
 
       for (const c of validConcepts) {
         const key = c.name.toLowerCase().trim();
         if (alreadyTaggedForCourse.has(key)) { skipped++; continue; }
+        if (seenInBatch.has(key)) { skipped++; continue; }
+        seenInBatch.add(key);
 
         const existing = existingByName.get(key);
         // In replace-modus skipt de update-tak ook bestaande RAG-extracten;
@@ -2170,9 +2173,12 @@ ${combinedText}`;
       updatedCount = toUpdate.length;
 
       if (toInsert.length > 0) {
+        // Gebruik upsert met ignoreDuplicates zodat begrippen waarvan de naam
+        // al bestaat (bv. via een race-condition of een dubbel LLM-resultaat)
+        // worden overgeslagen in plaats van een constraint-fout te geven.
         const { data: ins, error: insertError } = await supabaseAdmin
           .from('concepts')
-          .insert(toInsert)
+          .upsert(toInsert, { onConflict: 'name', ignoreDuplicates: true })
           .select('id, name, category, definition');
         if (insertError) {
           console.error('[extract-concepts] Insert error (key_points path):', insertError);
