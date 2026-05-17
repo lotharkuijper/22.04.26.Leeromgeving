@@ -154,6 +154,12 @@ export function PersonaLibraryTab() {
     await loadProjects();
   };
 
+  useEffect(() => {
+    if (projects.length === 1 && fetchTarget && !selectedProjectId) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [projects, fetchTarget, selectedProjectId]);
+
   const closeFetchModal = () => { setFetchTarget(null); setFetchMsg(null); };
 
   const fetchToProject = async () => {
