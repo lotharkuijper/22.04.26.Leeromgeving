@@ -1937,7 +1937,7 @@ ${combinedText}`;
             model: 'llama-3.3-70b-versatile',
             messages: [{ role: 'user', content: extractionPrompt }],
             temperature: 0.2,
-            max_tokens: 6000,
+            max_tokens: 8192,
           }),
         });
         if (resp.ok) return { resp, errData: null };
@@ -1974,8 +1974,27 @@ ${combinedText}`;
         extractedConcepts = JSON.parse(jsonMatch[0]);
       }
     } catch (parseErr) {
-      console.error('[extract-concepts] JSON parse error:', parseErr, 'raw:', rawContent.slice(0, 200));
-      return res.status(500).json({ error: 'Kon LLM-respons niet verwerken als JSON' });
+      // Fallback: de LLM-respons is waarschijnlijk afgekapt (token-limiet).
+      // Probeer individuele complete JSON-objecten te redden uit de afgekapte array.
+      console.warn('[extract-concepts] Volledige JSON-parse mislukt, probeer partial recovery…', parseErr.message);
+      try {
+        const objectMatches = rawContent.matchAll(/\{\s*"name"\s*:\s*"[^"]+"\s*,[\s\S]*?\}/g);
+        for (const m of objectMatches) {
+          try {
+            const obj = JSON.parse(m[0]);
+            if (obj.name && obj.category && obj.definition) extractedConcepts.push(obj);
+          } catch (_) { /* ongeldig object, skip */ }
+        }
+        if (extractedConcepts.length > 0) {
+          console.log(`[extract-concepts] Partial recovery: ${extractedConcepts.length} begrippen gered uit afgekapte respons`);
+        } else {
+          console.error('[extract-concepts] Partial recovery leverde 0 begrippen op. Raw:', rawContent.slice(0, 300));
+          return res.status(500).json({ error: 'Kon LLM-respons niet verwerken als JSON. De respons was waarschijnlijk te lang — probeer minder documenten tegelijk te selecteren.' });
+        }
+      } catch (recoverErr) {
+        console.error('[extract-concepts] JSON parse + recovery mislukt:', recoverErr, 'raw:', rawContent.slice(0, 200));
+        return res.status(500).json({ error: 'Kon LLM-respons niet verwerken als JSON. Probeer minder documenten tegelijk te selecteren.' });
+      }
     }
 
     if (!Array.isArray(extractedConcepts) || extractedConcepts.length === 0) {
