@@ -4728,14 +4728,17 @@ async function courseRagFolderIds(courseId) {
   return (ragFolders || []).map(f => f.id);
 }
 
-// Fallback-helper: zet een course_persona om naar een project_persona als het
-// project nog geen persona met die naam heeft. Maakt een verse, onafhankelijke
-// kopie (source_persona_id = null) conform het nieuwe sjablonen-model.
+// Fallback-helper voor de persona-chat route: zet een course_persona om naar
+// een project_persona als het project nog geen persona met die naam heeft.
+// Maakt een verse, onafhankelijke kopie (source_persona_id = null) conform het
+// sjablonen-model. Deduplicatie op naam is bewust: in dit chat-pad is dezelfde
+// naam voldoende als sleutel — bij eventuele naambotsingen wordt de bestaande
+// project_persona hergebruikt, zodat studenten hun gesprekshistorie behouden.
 async function ensureProjectPersonaFromCourse(projectId, coursePersonaId) {
   const { data: cp } = await supabaseAdmin
     .from('course_personas').select('*').eq('id', coursePersonaId).maybeSingle();
   if (!cp) return null;
-  // Zoek op naam (niet op source_persona_id — die wordt niet meer ingevuld).
+  // Dedupliceer op naam (source_persona_id wordt niet meer als FK gebruikt).
   const { data: existing } = await supabaseAdmin
     .from('project_personas')
     .select('*')

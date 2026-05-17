@@ -9,6 +9,7 @@ ALTER TABLE project_personas
 -- 2. Verwijder de unieke partiële index op (project_id, source_persona_id).
 DROP INDEX IF EXISTS project_personas_unique_source_idx;
 
--- 3. Ruim test-bibliotheek-persona's op die nooit bedoeld waren voor productie.
+-- 3. Ruim specifieke test-persona op die nooit bedoeld was voor productie.
+--    Exact matchen op naam om onbedoelde verwijderingen te voorkomen.
 DELETE FROM course_personas
-  WHERE name ILIKE '%Ambtenaar%Welzijn%';
+  WHERE name = 'Ambtenaar afdeling Welzijn Gemeente Amsterdam';
