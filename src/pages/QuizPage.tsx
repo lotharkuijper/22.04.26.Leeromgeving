@@ -839,7 +839,7 @@ export function QuizPage() {
                                 </span>
                                 <span
                                   className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-100 text-violet-800"
-                                  title={lang === 'en' ? 'LLM-creative is always available — Groq generates application and transfer questions without an external source' : 'LLM-creatief is altijd beschikbaar — Groq genereert toepassings- en transfervragen zonder externe bron'}
+                                  title={lang === 'en' ? 'LLM-creative is always available — OpenAI generates application and transfer questions without an external source' : 'LLM-creatief is altijd beschikbaar — OpenAI genereert toepassings- en transfervragen zonder externe bron'}
                                   data-testid={`avail-llm-${t.id}`}
                                 >
                                   LLM

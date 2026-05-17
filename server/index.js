@@ -60,7 +60,7 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('[API Server] SUPABASE_SERVICE_ROLE_KEY or SUPABASE_URL missing — admin routes disabled');
 }
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
 const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
@@ -214,15 +214,15 @@ async function detectQuizAttemptsSchema() {
 }
 
 app.post('/api/chat', async (req, res) => {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return res.status(503).json({ error: 'GROQ_API_KEY not configured on server' });
+    return res.status(503).json({ error: 'OPENAI_API_KEY not configured on server' });
   }
 
   const {
     messages = [],
     context,
-    model = 'llama-3.3-70b-versatile',
+    model = 'gpt-4o-mini',
     temperature = 0.7,
     top_p = 1,
     stream = false,
@@ -288,7 +288,7 @@ app.post('/api/chat', async (req, res) => {
     finalMessages = [{ role: 'system', content: systemContent }, ...userMessages];
   }
 
-  const groqBody = {
+  const chatBody = {
     model,
     messages: finalMessages,
     temperature,
@@ -298,25 +298,25 @@ app.post('/api/chat', async (req, res) => {
   };
 
   try {
-    const response = await fetch(GROQ_API_URL, {
+    const response = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(groqBody),
+      body: JSON.stringify(chatBody),
     });
 
     const data = await response.json();
     if (!response.ok) {
       const promptChars = JSON.stringify(finalMessages).length;
       const errCode = data?.error?.code || data?.error?.type || 'unknown';
-      // Log de volledige Groq error-body (afgekapt op 2000 tekens om logs niet
-      // op te blazen) zodat we exact zien wat Groq teruggaf.
+      // Log de volledige OpenAI error-body (afgekapt op 2000 tekens om logs niet
+      // op te blazen) zodat we exact zien wat OpenAI teruggaf.
       const bodyStr = (() => {
         try { return JSON.stringify(data); } catch { return String(data); }
       })();
-      console.error(`[/api/chat] Groq error status=${response.status} code=${errCode} promptChars=${promptChars} body=${bodyStr.length > 2000 ? bodyStr.slice(0, 2000) + '…[truncated]' : bodyStr}`);
+      console.error(`[/api/chat] OpenAI error status=${response.status} code=${errCode} promptChars=${promptChars} body=${bodyStr.length > 2000 ? bodyStr.slice(0, 2000) + '…[truncated]' : bodyStr}`);
       return res.status(response.status).json(data);
     }
     return res.json(data);
@@ -369,7 +369,7 @@ app.post('/api/chat/archive', async (req, res) => {
     let journalEntryId = null;
 
     if (generateSummary) {
-      const apiKey = process.env.GROQ_API_KEY;
+      const apiKey = process.env.OPENAI_API_KEY;
 
       const { data: msgs, error: msgError } = await supabaseAdmin
         .from('messages')
@@ -439,20 +439,20 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
 
         if (apiKey) {
           try {
-            const groqResp = await fetch(GROQ_API_URL, {
+            const chatResp = await fetch(OPENAI_CHAT_URL, {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                model: 'llama-3.3-70b-versatile',
+                model: 'gpt-4o-mini',
                 messages: [{ role: 'user', content: summaryPrompt }],
                 temperature: 0.5,
                 max_tokens: 600,
               }),
             });
 
-            if (groqResp.ok) {
-              const groqData = await groqResp.json();
-              const summaryContent = groqData.choices?.[0]?.message?.content;
+            if (chatResp.ok) {
+              const chatData = await chatResp.json();
+              const summaryContent = chatData.choices?.[0]?.message?.content;
               if (summaryContent) {
                 const { data: entry, error: journalError } = await supabaseAdmin
                   .from('learning_journal_entries')
@@ -473,13 +473,13 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                 }
               }
             } else {
-              console.error('[archive] Groq fout:', groqResp.status, await groqResp.text());
+              console.error('[archive] OpenAI fout:', chatResp.status, await chatResp.text());
             }
-          } catch (groqErr) {
-            console.error('[archive] Groq request mislukt:', groqErr.message);
+          } catch (chatErr) {
+            console.error('[archive] OpenAI request mislukt:', chatErr.message);
           }
         } else {
-          console.warn('[archive] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
+          console.warn('[archive] OPENAI_API_KEY niet beschikbaar — samenvatting overgeslagen');
         }
       }
     }
@@ -1695,9 +1695,9 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
   }
 
-  const groqKey = process.env.GROQ_API_KEY;
-  if (!groqKey) {
-    return res.status(503).json({ error: 'GROQ_API_KEY not configured on server' });
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!openaiKey) {
+    return res.status(503).json({ error: 'OPENAI_API_KEY not configured on server' });
   }
 
   const authHeader = req.headers['authorization'];
@@ -1922,19 +1922,19 @@ Geef UITSLUITEND een JSON-array terug, zonder extra tekst of uitleg:
 CURSUSMATERIAAL:
 ${combinedText}`;
 
-    // Groq heeft een tokens-per-minute-limiet; bij grote cursussen lopen
+    // OpenAI heeft een tokens-per-minute-limiet; bij grote cursussen lopen
     // we daar snel tegenaan. We doen 1 retry met backoff (we lezen de
     // gevraagde wachttijd uit de foutmelding indien aanwezig). Als ook de
     // tweede poging faalt, geven we een Nederlandstalige melding terug
     // — en omdat de replace-stap pas later in deze handler draait,
     // verliest de cursus géén begrippen meer als de extractie crasht.
-    async function callGroq(maxRetries = 1) {
+    async function callOpenAI(maxRetries = 1) {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const resp = await fetch(GROQ_API_URL, {
+        const resp = await fetch(OPENAI_CHAT_URL, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'llama-3.3-70b-versatile',
+            model: 'gpt-4o-mini',
             messages: [{ role: 'user', content: extractionPrompt }],
             temperature: 0.2,
             max_tokens: 8192,
@@ -1947,13 +1947,13 @@ ${combinedText}`;
         const msg = errData?.error?.message || '';
         const m = msg.match(/try again in ([\d.]+)s/i);
         const waitMs = m ? Math.min(60000, Math.ceil(parseFloat(m[1]) * 1000) + 500) : 5000;
-        console.warn(`[extract-concepts] Groq rate-limit, wacht ${waitMs}ms en probeer opnieuw…`);
+        console.warn(`[extract-concepts] OpenAI rate-limit, wacht ${waitMs}ms en probeer opnieuw…`);
         await new Promise((r) => setTimeout(r, waitMs));
       }
       return { resp: null, errData: { error: { message: 'Onbereikbaar' } } };
     }
 
-    const { resp: llmResponse, errData: llmErrData } = await callGroq(1);
+    const { resp: llmResponse, errData: llmErrData } = await callOpenAI(1);
 
     if (!llmResponse || !llmResponse.ok) {
       console.error('[extract-concepts] LLM error:', llmErrData);
@@ -2707,7 +2707,7 @@ app.post('/api/explain/archive', async (req, res) => {
     let summaryFailed = false;
 
     if (generateSummary) {
-      const apiKey = process.env.GROQ_API_KEY;
+      const apiKey = process.env.OPENAI_API_KEY;
       const conceptName = row.concepts?.name || 'Onbekend begrip';
       const conceptDef = row.concepts?.definition || '';
       const keyPoints = Array.isArray(row.concepts?.key_points) ? row.concepts.key_points : [];
@@ -2759,20 +2759,20 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
 
       if (apiKey) {
         try {
-          const groqResp = await fetch(GROQ_API_URL, {
+          const chatResp = await fetch(OPENAI_CHAT_URL, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'llama-3.3-70b-versatile',
+              model: 'gpt-4o-mini',
               messages: [{ role: 'user', content: summaryPrompt }],
               temperature: 0.5,
               max_tokens: 600,
             }),
           });
 
-          if (groqResp.ok) {
-            const groqData = await groqResp.json();
-            const summaryContent = groqData.choices?.[0]?.message?.content;
+          if (chatResp.ok) {
+            const chatData = await chatResp.json();
+            const summaryContent = chatData.choices?.[0]?.message?.content;
             if (summaryContent) {
               const { data: entry, error: journalError } = await supabaseAdmin
                 .from('learning_journal_entries')
@@ -2796,15 +2796,15 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
               summaryFailed = true;
             }
           } else {
-            console.error('[explain/archive] Groq fout:', groqResp.status, await groqResp.text());
+            console.error('[explain/archive] OpenAI fout:', chatResp.status, await chatResp.text());
             summaryFailed = true;
           }
-        } catch (groqErr) {
-          console.error('[explain/archive] Groq request mislukt:', groqErr.message);
+        } catch (chatErr) {
+          console.error('[explain/archive] OpenAI request mislukt:', chatErr.message);
           summaryFailed = true;
         }
       } else {
-        console.warn('[explain/archive] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
+        console.warn('[explain/archive] OPENAI_API_KEY niet beschikbaar — samenvatting overgeslagen');
         summaryFailed = true;
       }
     }
@@ -2988,43 +2988,43 @@ Write the report directly, without a greeting or closing. Be concrete, honest an
   };
 }
 
-// Roept Groq aan met de gegeven prompt en schrijft de notitie weg in
+// Roept OpenAI aan met de gegeven prompt en schrijft de notitie weg in
 // learning_journal_entries. Returnt {journalEntryId, summaryFailed, errorReason}.
 async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qType, maxLines, lang = 'nl' }) {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    console.warn('[quiz/summary] GROQ_API_KEY niet beschikbaar — samenvatting overgeslagen');
-    return { journalEntryId: null, summaryFailed: true, errorReason: 'Geen taalmodel-toegang (GROQ_API_KEY ontbreekt).' };
+    console.warn('[quiz/summary] OPENAI_API_KEY niet beschikbaar — samenvatting overgeslagen');
+    return { journalEntryId: null, summaryFailed: true, errorReason: 'Geen taalmodel-toegang (OPENAI_API_KEY ontbreekt).' };
   }
   // Token-budget evenredig aan maximale regels (≈ 50 tokens/regel marge).
   const maxTokens = Math.min(2000, Math.max(600, maxLines * 60));
 
   let summaryContent;
   try {
-    const groqResp = await fetch(GROQ_API_URL, {
+    const chatResp = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: summaryPrompt }],
         temperature: 0.5,
         max_tokens: maxTokens,
       }),
     });
 
-    if (!groqResp.ok) {
-      const txt = await groqResp.text();
-      console.error('[quiz/summary] Groq fout:', groqResp.status, txt);
-      return { journalEntryId: null, summaryFailed: true, errorReason: `Het taalmodel reageerde met status ${groqResp.status}.` };
+    if (!chatResp.ok) {
+      const txt = await chatResp.text();
+      console.error('[quiz/summary] OpenAI fout:', chatResp.status, txt);
+      return { journalEntryId: null, summaryFailed: true, errorReason: `Het taalmodel reageerde met status ${chatResp.status}.` };
     }
-    const groqData = await groqResp.json();
-    summaryContent = groqData.choices?.[0]?.message?.content;
+    const chatData = await chatResp.json();
+    summaryContent = chatData.choices?.[0]?.message?.content;
     if (!summaryContent) {
       return { journalEntryId: null, summaryFailed: true, errorReason: 'Het taalmodel gaf een leeg antwoord.' };
     }
-  } catch (groqErr) {
-    console.error('[quiz/summary] Groq request mislukt:', groqErr.message);
-    return { journalEntryId: null, summaryFailed: true, errorReason: groqErr.message };
+  } catch (chatErr) {
+    console.error('[quiz/summary] OpenAI request mislukt:', chatErr.message);
+    return { journalEntryId: null, summaryFailed: true, errorReason: chatErr.message };
   }
 
   const titleTopics = topicsLabel.length > 80 ? `${topicsLabel.slice(0, 77)}...` : topicsLabel;
@@ -3065,7 +3065,7 @@ app.post('/api/quiz/save-summary', async (req, res) => {
     return res.status(400).json({ error: 'questions is vereist en mag niet leeg zijn' });
   }
   // Veiligheidsplafond op aantal vragen om abuse op een authenticated
-  // Groq-genererend endpoint te beperken.
+  // OpenAI-genererend endpoint te beperken.
   if (questions.length > 30) {
     return res.status(400).json({ error: 'Te veel vragen (max 30 per samenvatting)' });
   }
@@ -3196,7 +3196,7 @@ app.post('/api/quiz/archive', async (req, res) => {
 });
 
 // /api/projects/save-summary — vat een project (en de bijhorende sessie van
-// de student) samen via Groq en bewaart het resultaat als een
+// de student) samen via OpenAI en bewaart het resultaat als een
 // learning_journal_entries-rij met activity_type='project_reflection'. Werkt
 // los van de status van het project; je kunt een lopend of afgerond project
 // archiveren. De projectsessie zelf blijft bestaan — dit is puur een
@@ -3232,11 +3232,11 @@ app.post('/api/projects/save-summary', async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Projectsessie niet gevonden' });
     if (row.student_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze projectsessie' });
 
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return res.status(503).json({
         error: 'De samenvatting kon niet worden opgesteld.',
-        detail: 'Geen taalmodel-toegang (GROQ_API_KEY ontbreekt).',
+        detail: 'Geen taalmodel-toegang (OPENAI_API_KEY ontbreekt).',
       });
     }
 
@@ -3252,7 +3252,7 @@ app.post('/api/projects/save-summary', async (req, res) => {
     const status = row.completed ? 'afgerond' : 'in uitvoering';
 
     // Voorkom hallucinatie op een lege sessie: als alle drie de werkvelden
-    // leeg zijn, is er niets zinvols om te reflecteren en zou Groq de prompt
+    // leeg zijn, is er niets zinvols om te reflecteren en zou OpenAI de prompt
     // alsnog "creatief" invullen. Geef een duidelijke fout terug zodat de UI
     // de student kan vragen eerst iets in te vullen.
     if (!hypothesis && !analysisNotes && !conclusions) {
@@ -3266,7 +3266,7 @@ app.post('/api/projects/save-summary', async (req, res) => {
     // reflectie voor exact dit project (zelfde titel) in het leerdagboek
     // van deze student staat. Zo ja, en de student heeft niet expliciet
     // bevestigd, vragen we eerst om bevestiging zodat het leerdagboek niet
-    // volloopt en we niet onnodig Groq-tokens verbruiken.
+    // volloopt en we niet onnodig OpenAI-tokens verbruiken.
     const titleProjectShort = projectTitle.length > 80 ? `${projectTitle.slice(0, 77)}...` : projectTitle;
     const journalTitle = `Projectreflectie: ${titleProjectShort}`;
     if (!force) {
@@ -3320,37 +3320,37 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
 
     let summaryContent;
     try {
-      const groqResp = await fetch(GROQ_API_URL, {
+      const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: summaryPrompt }],
           temperature: 0.5,
           max_tokens: 1000,
         }),
       });
-      if (!groqResp.ok) {
-        const txt = await groqResp.text();
-        console.error('[projects/save-summary] Groq fout:', groqResp.status, txt);
+      if (!chatResp.ok) {
+        const txt = await chatResp.text();
+        console.error('[projects/save-summary] OpenAI fout:', chatResp.status, txt);
         return res.status(502).json({
           error: 'De samenvatting kon niet worden opgesteld.',
-          detail: `Het taalmodel reageerde met status ${groqResp.status}.`,
+          detail: `Het taalmodel reageerde met status ${chatResp.status}.`,
         });
       }
-      const groqData = await groqResp.json();
-      summaryContent = groqData.choices?.[0]?.message?.content;
+      const chatData = await chatResp.json();
+      summaryContent = chatData.choices?.[0]?.message?.content;
       if (!summaryContent) {
         return res.status(502).json({
           error: 'De samenvatting kon niet worden opgesteld.',
           detail: 'Het taalmodel gaf een leeg antwoord.',
         });
       }
-    } catch (groqErr) {
-      console.error('[projects/save-summary] Groq request mislukt:', groqErr.message);
+    } catch (chatErr) {
+      console.error('[projects/save-summary] OpenAI request mislukt:', chatErr.message);
       return res.status(502).json({
         error: 'De samenvatting kon niet worden opgesteld.',
-        detail: groqErr.message,
+        detail: chatErr.message,
       });
     }
 
@@ -3439,7 +3439,6 @@ app.get('/api/prompt/explain', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    groq: !!process.env.GROQ_API_KEY,
     openai: !!process.env.OPENAI_API_KEY,
     github: !!process.env.GITHUB_TOKEN,
     supabase: !!process.env.SUPABASE_URL,
@@ -5069,7 +5068,7 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
 });
 
 // POST /api/projects/persona-chat — stuur een bericht naar een persona binnen
-// een groep. Server zoekt/maakt thread, slaat user-bericht op, roept Groq aan
+// een groep. Server zoekt/maakt thread, slaat user-bericht op, roept OpenAI aan
 // (met optionele RAG via project.course_id en persona.rag_folder_ids), slaat
 // assistant-antwoord op, en geeft beide terug.
 app.post('/api/projects/persona-chat', async (req, res) => {
@@ -5261,13 +5260,13 @@ app.post('/api/projects/persona-chat', async (req, res) => {
     const langSuffix = lang === 'en' ? LANG_INSTR_EN : '';
     const systemContent = `${persona.system_prompt}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}${langSuffix}`;
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
-    const groqResp = await fetch(GROQ_API_URL, {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+    const chatResp = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemContent },
           ...history.map(h => ({ role: h.role, content: h.content })),
@@ -5277,12 +5276,12 @@ app.post('/api/projects/persona-chat', async (req, res) => {
         max_tokens: 700,
       }),
     });
-    if (!groqResp.ok) {
-      const txt = await groqResp.text();
-      return res.status(502).json({ error: `Taalmodel-fout (${groqResp.status})`, detail: txt.slice(0, 500) });
+    if (!chatResp.ok) {
+      const txt = await chatResp.text();
+      return res.status(502).json({ error: `Taalmodel-fout (${chatResp.status})`, detail: txt.slice(0, 500) });
     }
-    const groqData = await groqResp.json();
-    const reply = groqData.choices?.[0]?.message?.content || '(Geen antwoord)';
+    const chatData = await chatResp.json();
+    const reply = chatData.choices?.[0]?.message?.content || '(Geen antwoord)';
 
     if (threadId) {
       await supabaseAdmin.from('group_persona_messages').insert({
@@ -5358,8 +5357,8 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
       return res.json({ topics: [], agreements: [] });
     }
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
 
     const conversationText = allMsgs
       .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
@@ -5378,19 +5377,19 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
     let topics = [];
     let agreements = [];
     try {
-      const groqResp = await fetch(GROQ_API_URL, {
+      const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.2,
           max_tokens: 600,
           response_format: { type: 'json_object' },
         }),
       });
-      if (groqResp.ok) {
-        const raw = ((await groqResp.json()).choices?.[0]?.message?.content || '{}').trim();
+      if (chatResp.ok) {
+        const raw = ((await chatResp.json()).choices?.[0]?.message?.content || '{}').trim();
         const parsed = JSON.parse(raw);
         topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
         agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
@@ -5442,7 +5441,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
     let topics = [];
     let agreements = [];
 
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = process.env.OPENAI_API_KEY;
     if (apiKey) {
       const conversationText = allMsgs
         .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
@@ -5457,19 +5456,19 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
         : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
 
       try {
-        const groqResp = await fetch(GROQ_API_URL, {
+        const chatResp = await fetch(OPENAI_CHAT_URL, {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'llama-3.3-70b-versatile',
+            model: 'gpt-4o-mini',
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.2,
             max_tokens: 600,
             response_format: { type: 'json_object' },
           }),
         });
-        if (groqResp.ok) {
-          const raw = ((await groqResp.json()).choices?.[0]?.message?.content || '{}').trim();
+        if (chatResp.ok) {
+          const raw = ((await chatResp.json()).choices?.[0]?.message?.content || '{}').trim();
           const parsed = JSON.parse(raw);
           topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
           agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
@@ -5582,11 +5581,11 @@ async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
     : `Je analyseert gesprekken die een groep studenten heeft gevoerd met verschillende AI-personas in een onderzoeksproject.\n\nGesprekssamenvatting per persona:\n${convText}\n\nGeef je antwoord UITSLUITEND als geldige JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 punten waarover meerdere personas het eens zijn of vergelijkbare informatie gaven.\n- "spanningspunten": 1-3 punten waarover personas duidelijk anders denken of tegenstrijdige informatie gaven. Laat de array leeg als er geen zijn.\n- "suggesties": 2-3 concrete volgende stappen die de groep kan zetten op basis van de gesprekken.\n\nSchrijf in het Nederlands, bondig en concreet. Geen markdown buiten de JSON.`;
 
   try {
-    const resp = await fetch(GROQ_API_URL, {
+    const resp = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: 800,
@@ -5624,8 +5623,8 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
     if (!(await isGroupMember(groupId, auth.user.id))) {
       return res.status(403).json({ error: 'Geen toegang tot deze groep' });
     }
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
 
     // Gebruik berichten ná de laatste checkpoint.
     const { data: prevCps } = await supabaseAdmin
@@ -5661,11 +5660,11 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
       let personaSummary = '';
       try {
         if (userText.trim()) {
-          const r1 = await fetch(GROQ_API_URL, {
+          const r1 = await fetch(OPENAI_CHAT_URL, {
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'llama-3.3-70b-versatile',
+              model: 'gpt-4o-mini',
               messages: [{ role: 'user', content: enMode
                 ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
                 : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
@@ -5675,11 +5674,11 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
           if (r1.ok) studentSummary = ((await r1.json()).choices?.[0]?.message?.content || '').trim();
         }
         if (asstText.trim()) {
-          const r2 = await fetch(GROQ_API_URL, {
+          const r2 = await fetch(OPENAI_CHAT_URL, {
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'llama-3.3-70b-versatile',
+              model: 'gpt-4o-mini',
               messages: [{ role: 'user', content: enMode
                 ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
                 : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
@@ -5689,7 +5688,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
           if (r2.ok) personaSummary = ((await r2.json()).choices?.[0]?.message?.content || '').trim();
         }
       } catch (e) {
-        console.error('[checkpoint-preview] Groq fout:', e.message);
+        console.error('[checkpoint-preview] OpenAI fout:', e.message);
       }
       if (!studentSummary) {
         const first = newMsgs.find(m => m.role === 'user');
@@ -5768,8 +5767,8 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
       .from('projects').select('id, title, briefing_markdown, rubric_criteria, research_question')
       .eq('id', group.project_id).maybeSingle();
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
 
     const rubric = Array.isArray(project?.rubric_criteria) ? project.rubric_criteria : [];
     const rubricText = rubric.length > 0
@@ -5819,21 +5818,21 @@ Geef je antwoord ALLEEN als geldige JSON met deze structuur:
 }
 
 Geen tekst buiten de JSON.`;
-      const groqResp = await fetch(GROQ_API_URL, {
+      const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.4, max_tokens: 1500,
           response_format: { type: 'json_object' },
         }),
       });
-      if (!groqResp.ok) {
-        const txt = await groqResp.text();
+      if (!chatResp.ok) {
+        const txt = await chatResp.text();
         return res.status(502).json({ error: 'Taalmodel-fout', detail: txt.slice(0, 500) });
       }
-      const data = await groqResp.json();
+      const data = await chatResp.json();
       const raw = data.choices?.[0]?.message?.content || '{}';
       try {
         rubricFeedback = JSON.parse(raw);
@@ -5854,20 +5853,20 @@ ${reflection}`
 Project: ${project?.title || '(naamloos)'}
 Reflectie:
 ${reflection}`;
-      const groqResp = await fetch(GROQ_API_URL, {
+      const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.5, max_tokens: 700,
         }),
       });
-      if (!groqResp.ok) {
-        const txt = await groqResp.text();
+      if (!chatResp.ok) {
+        const txt = await chatResp.text();
         return res.status(502).json({ error: 'Taalmodel-fout', detail: txt.slice(0, 500) });
       }
-      const data = await groqResp.json();
+      const data = await chatResp.json();
       aiSummary = data.choices?.[0]?.message?.content || '';
     }
     // hasPersonaSummaries: aiSummary blijft leeg — journalinhoud zit in personaSummaries.
@@ -6040,7 +6039,7 @@ ${reflection}`;
         }
       } else {
         // Pad B: genereer 4-regels-samenvatting per thread (bestaande logica).
-        const apiKey2 = process.env.GROQ_API_KEY;
+        const apiKey2 = process.env.OPENAI_API_KEY;
         const { data: prevCps } = await supabaseAdmin
           .from('group_checkpoints')
           .select('created_at')
@@ -6075,11 +6074,11 @@ ${reflection}`;
               const sumPrompt = lang === 'en'
                 ? `Summarise the following conversation with "${personaName}" in EXACTLY 4 short lines. Address the student as "you". Line 1: core question. Line 2: key insight. Line 3: open point or misconception. Line 4: next step. No bullet points, no heading, only four sentences on separate lines.\n\nConversation:\n${transcript}`
                 : `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
-              const sr = await fetch(GROQ_API_URL, {
+              const sr = await fetch(OPENAI_CHAT_URL, {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${apiKey2}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  model: 'llama-3.3-70b-versatile',
+                  model: 'gpt-4o-mini',
                   messages: [{ role: 'user', content: sumPrompt }],
                   temperature: 0.3, max_tokens: 350,
                 }),
@@ -7142,7 +7141,7 @@ app.delete('/api/projects/:projectId/documents/:docId', async (req, res) => {
 
 // =============================================================================
 // Beoordeling opvragen — voor elke evaluator-persona van het project: rubric
-// + alle persona-gesprekken van de groep + projectdocumenten naar Groq, en
+// + alle persona-gesprekken van de groep + projectdocumenten naar OpenAI, en
 // schrijf één journal-entry per groepslid per evaluator. Alleen leden of staff.
 // =============================================================================
 
@@ -7209,13 +7208,13 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
     const { data: members } = await supabaseAdmin
       .from('project_group_members').select('user_id').eq('group_id', groupId);
 
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'GROQ_API_KEY niet beschikbaar' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
 
     const results = [];
     for (const evalPersona of evaluators) {
       // Idempotency: als deze (groep, persona, requestId)-combinatie al een
-      // journal-entry heeft, sla de Groq-call over — bespaart tokens en tijd
+      // journal-entry heeft, sla de OpenAI-call over — bespaart tokens en tijd
       // bij netwerk-retries van dezelfde knopdruk.
       if (requestId) {
         const sourceRefCandidate = `group_evaluate:${groupId}:${evalPersona.id}:${requestId}`;
@@ -7288,11 +7287,11 @@ Schrijf je beoordeling als markdown met per criterium:
 
 Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exacte rubric-tekst letterlijk en spoiler de criteria niet.`}`;
 
-      const gr = await fetch(GROQ_API_URL, {
+      const gr = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.4, max_tokens: 1800,
         }),

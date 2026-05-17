@@ -53,7 +53,7 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
         title: nl
           ? 'De chatbot is niet (volledig) geconfigureerd.'
           : 'The chatbot is not (fully) configured.',
-        detail: err.rawMessage || (nl ? 'Controleer of de GROQ_API_KEY beschikbaar is.' : 'Check whether the GROQ_API_KEY is available.'),
+        detail: err.rawMessage || (nl ? 'Controleer of de OPENAI_API_KEY beschikbaar is.' : 'Check whether the OPENAI_API_KEY is available.'),
       };
     }
     if (err.status >= 500) {
@@ -121,7 +121,7 @@ export async function sendChatMessage(
     const userMessages = messages.filter(m => m.role !== 'system');
 
     const data = await callChatAPI({
-      model: 'llama-3.3-70b-versatile',
+      model: 'gpt-4o-mini',
       messages: userMessages,
       context,
       temperature: 0.7,
@@ -245,7 +245,7 @@ Geef gestructureerde feedback met:
   }
 
   const data = await callChatAPI({
-    model: 'llama-3.3-70b-versatile',
+    model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: evaluationPrompt }],
     temperature: 0.3,
     max_tokens: 1500,
@@ -576,7 +576,7 @@ ${lang === 'en'
 
   try {
     const data = await callChatAPI({
-      model: 'llama-3.3-70b-versatile',
+      model: 'gpt-4o-mini',
       messages: [{ role: 'user', content: quizPrompt }],
       temperature: 0.7,
       max_tokens: maxTokens,
@@ -641,7 +641,7 @@ Geef je antwoord UITSLUITEND als één JSON-object met deze structuur, zonder ex
 }`;
 
   const data = await callChatAPI({
-    model: 'llama-3.3-70b-versatile',
+    model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
     max_tokens: 1200,

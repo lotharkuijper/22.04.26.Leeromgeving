@@ -356,7 +356,7 @@ export async function checkRAGAvailability(): Promise<{
 }
 
 // Veiligheidsgrenzen voor de prompt naar het taalmodel: boven deze waarden
-// loopt llama-3.3-70b-versatile (Groq) snel tegen context-limieten of TPM-quota
+// loopt gpt-4o-mini (OpenAI) snel tegen context-limieten of TPM-quota
 // aan. De cap geldt naast de gebruiker-instelbare match_count.
 export const RAG_CONTEXT_MAX_CHUNKS = 10;
 export const RAG_CONTEXT_MAX_CHARS = 18000;

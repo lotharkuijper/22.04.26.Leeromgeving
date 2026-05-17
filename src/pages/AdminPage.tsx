@@ -2138,14 +2138,12 @@ const tabGroups = [
                   <p className="text-sm text-gray-600">
                     {lang === 'en' ? (
                       <>Add your API keys as Replit Secrets:<br />
-                      - GROQ_API_KEY for LLM functionality<br />
-                      - OPENAI_API_KEY for embeddings/RAG<br />
+                      - OPENAI_API_KEY for LLM functionality and embeddings/RAG<br />
                       - HUGGINGFACE_API_KEY for alternative embeddings<br />
                       - GITHUB_TOKEN for higher GitHub API limits</>
                     ) : (
                       <>Voeg je API keys toe als Replit Secrets:<br />
-                      - GROQ_API_KEY voor LLM functionaliteit<br />
-                      - OPENAI_API_KEY voor embeddings/RAG<br />
+                      - OPENAI_API_KEY voor LLM functionaliteit en embeddings/RAG<br />
                       - HUGGINGFACE_API_KEY voor alternatieve embeddings<br />
                       - GITHUB_TOKEN voor hogere GitHub API limieten</>
                     )}
