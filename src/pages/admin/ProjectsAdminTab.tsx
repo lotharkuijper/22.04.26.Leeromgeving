@@ -277,6 +277,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   const [rubricDocsMap, setRubricDocsMap] = useState<Record<string, RubricDoc[]>>({});
   const [uploadingRubric, setUploadingRubric] = useState<string | null>(null);
   const [copying, setCopying] = useState<string | null>(null);
+  const [libPersonas, setLibPersonas] = useState<{ id: string; name: string; avatar_emoji: string; persona_type?: string | null }[]>([]);
+  const [selectedLibId, setSelectedLibId] = useState('');
+  const [importingLib, setImportingLib] = useState(false);
 
   const loadPersonas = useCallback(async () => {
     const { data } = await supabase
@@ -312,7 +315,37 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     setRubricDocsMap(prev => ({ ...prev, [personaId]: (data as any) || [] }));
   }, [project.id]);
 
-  useEffect(() => { loadPersonas(); loadProjectDocs(); }, [loadPersonas, loadProjectDocs]);
+  const loadLibPersonas = useCallback(async () => {
+    if (!project.course_id) return;
+    const { data } = await supabase
+      .from('course_personas')
+      .select('id, name, avatar_emoji, persona_type')
+      .eq('course_id', project.course_id)
+      .order('is_default', { ascending: false });
+    setLibPersonas((data as any) || []);
+  }, [project.course_id]);
+
+  const importFromLib = async () => {
+    if (!selectedLibId) return;
+    setImportingLib(true);
+    try {
+      const r = await fetch(`/api/projects/${project.id}/personas/from-library/${selectedLibId}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await r.json();
+      if (!r.ok) { onError(d.error || (lang === 'en' ? 'Import failed' : 'Importeren mislukt')); return; }
+      onInfo(lang === 'en' ? `"${d.persona?.name}" added from library.` : `"${d.persona?.name}" is vanuit de bibliotheek toegevoegd.`);
+      setSelectedLibId('');
+      await loadPersonas();
+    } catch (e: any) {
+      onError(e.message);
+    } finally {
+      setImportingLib(false);
+    }
+  };
+
+  useEffect(() => { loadPersonas(); loadProjectDocs(); loadLibPersonas(); }, [loadPersonas, loadProjectDocs, loadLibPersonas]);
 
   // Lazy-load rubric-lijst per evaluator-persona.
   useEffect(() => {
@@ -580,6 +613,33 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
             <Plus className="w-4 h-4" />{lang === 'en' ? 'New persona' : 'Nieuwe persona'}
           </button>
         </div>
+        {libPersonas.length > 0 && (
+          <div className="flex items-center gap-2 mb-3 p-2 bg-gray-50 border border-gray-200 rounded-lg">
+            <Download className="w-4 h-4 text-gray-500 flex-shrink-0" />
+            <select
+              value={selectedLibId}
+              onChange={e => setSelectedLibId(e.target.value)}
+              className="flex-1 px-2 py-1.5 border border-gray-300 rounded text-sm bg-white"
+              data-testid="select-lib-persona"
+            >
+              <option value="">{lang === 'en' ? '— Add from library —' : '— Haal op uit bibliotheek —'}</option>
+              {libPersonas.map(lp => (
+                <option key={lp.id} value={lp.id}>
+                  {lp.avatar_emoji} {lp.name}{lp.persona_type === 'evaluator' ? (lang === 'en' ? ' (evaluator)' : ' (beoordelaar)') : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={importFromLib}
+              disabled={!selectedLibId || importingLib}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40 flex-shrink-0"
+              data-testid="button-import-from-lib"
+            >
+              {importingLib ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              {lang === 'en' ? 'Add' : 'Voeg toe'}
+            </button>
+          </div>
+        )}
         {personas.length === 0 ? (
           <p className="text-sm text-gray-500">{lang === 'en' ? 'No personas yet. Add one.' : 'Nog geen persona\'s. Voeg er één toe.'}</p>
         ) : (

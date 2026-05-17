@@ -161,10 +161,9 @@ export function PersonaLibraryTab() {
     setFetching(true);
     setFetchMsg(null);
     try {
-      const res = await fetch(`/api/projects/${selectedProjectId}/personas`, {
+      const res = await fetch(`/api/projects/${selectedProjectId}/personas/from-library/${fetchTarget.id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader() },
-        body: JSON.stringify({ coursePersonaId: fetchTarget.id }),
+        headers: { ...authHeader() },
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {

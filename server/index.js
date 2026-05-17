@@ -6251,11 +6251,6 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
       if (project.course_id && cp.course_id !== project.course_id) {
         return res.status(400).json({ error: 'Persona hoort bij een andere cursus' });
       }
-      // Voorkom dubbele kopie (controleer op naam, source_persona_id is niet meer FK).
-      const { data: dup } = await supabaseAdmin
-        .from('project_personas').select('id')
-        .eq('project_id', projectId).eq('name', cp.name).maybeSingle();
-      if (dup) return res.status(409).json({ error: 'Deze persona zit al in het project', personaId: dup.id });
       row = {
         project_id: projectId, source_persona_id: null,
         name: cp.name, avatar_emoji: cp.avatar_emoji,
@@ -6282,6 +6277,51 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
       .from('project_personas').insert(row).select('*').single();
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.json({ persona: inserted });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/:projectId/personas/from-library/:coursePersonaId
+// Maakt altijd een verse, onafhankelijke kopie van een bibliotheek-sjabloon.
+// Geen deduplicatie: meerdere kopieën van hetzelfde sjabloon zijn toegestaan.
+// Toegankelijk voor admin en docent (requireProjectStaff).
+app.post('/api/projects/:projectId/personas/from-library/:coursePersonaId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, coursePersonaId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const project = access.project;
+    const { data: cp } = await supabaseAdmin
+      .from('course_personas').select('*').eq('id', coursePersonaId).maybeSingle();
+    if (!cp) return res.status(404).json({ error: 'Bibliotheek-sjabloon niet gevonden' });
+    if (project.course_id && cp.course_id !== project.course_id) {
+      return res.status(400).json({ error: 'Sjabloon hoort bij een andere cursus' });
+    }
+    const { data: existing } = await supabaseAdmin
+      .from('project_personas').select('sort_order').eq('project_id', projectId)
+      .order('sort_order', { ascending: false }).limit(1);
+    const nextOrder = (existing && existing[0] ? Number(existing[0].sort_order || 0) : -1) + 1;
+    const { data: inserted, error: iErr } = await supabaseAdmin
+      .from('project_personas').insert({
+        project_id: projectId,
+        source_persona_id: null,
+        name: cp.name,
+        avatar_emoji: cp.avatar_emoji,
+        system_prompt: cp.system_prompt,
+        rag_enabled: cp.rag_enabled,
+        rag_folder_ids: cp.rag_folder_ids,
+        visible_from_phase: cp.visible_from_phase,
+        sort_order: nextOrder,
+        persona_type: cp.persona_type || 'conversational',
+      }).select('*').single();
+    if (iErr) return res.status(500).json({ error: iErr.message });
+    return res.status(201).json({ persona: inserted });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
