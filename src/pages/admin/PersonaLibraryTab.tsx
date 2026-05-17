@@ -173,11 +173,7 @@ export function PersonaLibraryTab() {
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (res.status === 409) {
-          setFetchMsg({ ok: false, text: lang === 'en' ? `"${fetchTarget.name}" is already in this project.` : `"${fetchTarget.name}" zit al in dit project.` });
-        } else {
-          setFetchMsg({ ok: false, text: d.error || (lang === 'en' ? 'Could not add persona' : 'Toevoegen mislukt') });
-        }
+        setFetchMsg({ ok: false, text: d.error || (lang === 'en' ? 'Could not add persona' : 'Toevoegen mislukt') });
       } else {
         setFetchMsg({ ok: true, text: lang === 'en' ? `"${fetchTarget.name}" added to project.` : `"${fetchTarget.name}" is aan het project toegevoegd.` });
       }

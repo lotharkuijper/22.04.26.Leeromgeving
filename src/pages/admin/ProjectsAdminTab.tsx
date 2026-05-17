@@ -655,7 +655,6 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                       <div className="font-medium text-gray-900 flex items-center gap-2">
                         {p.name}
                         {isEval && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded flex items-center gap-1"><ShieldAlert className="w-3 h-3" />{lang === 'en' ? 'evaluator' : 'beoordelaar'}</span>}
-                        {p.source_persona_id && <span className="text-[10px] text-gray-400">{lang === 'en' ? 'from library' : 'uit bibliotheek'}</span>}
                       </div>
                       <p className="text-xs text-gray-500 line-clamp-2">{p.system_prompt.slice(0, 200)}</p>
                     </div>
