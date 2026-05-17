@@ -7325,6 +7325,44 @@ app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (
 });
 
 // =============================================================================
+// DELETE /api/admin/course-personas/:personaId — verwijder een cursus-persona
+// uit de bibliotheek. Alleen voor admins en docenten van die cursus.
+// =============================================================================
+
+app.delete('/api/admin/course-personas/:personaId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { personaId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role').eq('id', auth.user.id).maybeSingle();
+    const role = profile?.role || 'student';
+    if (role === 'student') return res.status(403).json({ error: 'Geen toegang' });
+
+    // Controleer dat de persona bestaat en haal course_id op voor autorisatie.
+    const { data: cp } = await supabaseAdmin
+      .from('course_personas').select('id, course_id').eq('id', personaId).maybeSingle();
+    if (!cp) return res.status(404).json({ error: 'Persona niet gevonden' });
+
+    // Docenten mogen alleen persona's verwijderen uit hun eigen cursussen.
+    if (role !== 'admin') {
+      const { data: membership } = await supabaseAdmin
+        .from('course_staff').select('id')
+        .eq('course_id', cp.course_id).eq('user_id', auth.user.id).maybeSingle();
+      if (!membership) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+
+    const { error: delErr } = await supabaseAdmin
+      .from('course_personas').delete().eq('id', personaId);
+    if (delErr) return res.status(500).json({ error: delErr.message });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
 // Serveer de gebouwde Vite-frontend als dist/index.html bestaat (productie).
 const distPath = path.join(__dirname, '..', 'dist');
 if (fs.existsSync(path.join(distPath, 'index.html'))) {

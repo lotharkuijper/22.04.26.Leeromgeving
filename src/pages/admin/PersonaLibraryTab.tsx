@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useActiveCourse } from '../../contexts/ActiveCourseContext';
 import { useLanguage } from '../../i18n';
 import { supabase } from '../../lib/supabase';
-import { Bot, FolderOpen } from 'lucide-react';
+import { Bot, FolderOpen, Trash2 } from 'lucide-react';
 
 interface CoursePersona {
   id: string;
@@ -21,6 +21,7 @@ export function PersonaLibraryTab() {
   const { lang } = useLanguage();
   const [personas, setPersonas] = useState<CoursePersona[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!activeCourseId) { setPersonas([]); return; }
@@ -33,6 +34,34 @@ export function PersonaLibraryTab() {
   }, [activeCourseId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const removePersona = async (p: CoursePersona) => {
+    const confirmed = window.confirm(
+      lang === 'en'
+        ? `Remove "${p.name}" from the library? This does not delete conversations in projects that already use this persona.`
+        : `Verwijder "${p.name}" uit de bibliotheek? Gesprekken in projecten die deze persona al gebruiken blijven bestaan.`
+    );
+    if (!confirmed) return;
+    setDeleting(p.id);
+    setError(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`/api/admin/course-personas/${p.id}`, {
+        method: 'DELETE',
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error || (lang === 'en' ? 'Could not delete persona' : 'Verwijderen mislukt'));
+      } else {
+        await load();
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   if (!activeCourseId) {
     return (
@@ -49,7 +78,7 @@ export function PersonaLibraryTab() {
           <div>
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Bot className="w-5 h-5" /> Persona-bibliotheek</h2>
             <p className="text-sm text-gray-500">
-              Cursus: {activeCourse?.name}. Read-only overzicht — persona's maak je aan binnen <strong>Projecten → Beheer</strong>.
+              Cursus: {activeCourse?.name}. Persona's maak je aan binnen <strong>Projecten → Beheer</strong>.
               Vanuit een project kun je een persona met de knop "Kopieer naar bibliotheek" hierin terugplaatsen voor hergebruik.
             </p>
           </div>
@@ -75,6 +104,15 @@ export function PersonaLibraryTab() {
                   </div>
                   <p className="text-xs text-gray-500 line-clamp-2 mt-0.5">{p.system_prompt.slice(0, 200)}</p>
                 </div>
+                <button
+                  onClick={() => removePersona(p)}
+                  disabled={deleting === p.id}
+                  className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded disabled:opacity-40 flex-shrink-0"
+                  title={lang === 'en' ? 'Remove from library' : 'Verwijder uit bibliotheek'}
+                  data-testid={`button-delete-cp-${p.id}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </li>
             ))}
           </ul>
