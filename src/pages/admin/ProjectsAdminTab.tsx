@@ -264,6 +264,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   project: ProjectRow; token: string;
   onBack: () => void; onError: (m: string) => void; onInfo: (m: string) => void;
 }) {
+  const { isAdmin } = useAuth();
   const { lang } = useLanguage();
   const [personas, setPersonas] = useState<ProjectPersona[]>([]);
   const [adding, setAdding] = useState(false);
@@ -599,9 +600,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                       <p className="text-xs text-gray-500 line-clamp-2">{p.system_prompt.slice(0, 200)}</p>
                     </div>
                     <div className="flex gap-1">
-                      <button onClick={() => copyToLibrary(p)} disabled={copying === p.id} className="px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1 disabled:opacity-40" data-testid={`button-copy-to-lib-${p.id}`}>
-                        <Copy className="w-3 h-3" />{copying === p.id ? (lang === 'en' ? 'Working…' : 'Bezig…') : (lang === 'en' ? 'Copy to library' : 'Kopieer naar bibliotheek')}
-                      </button>
+                      {isAdmin && (
+                        <button onClick={() => copyToLibrary(p)} disabled={copying === p.id} className="px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1 disabled:opacity-40" data-testid={`button-copy-to-lib-${p.id}`}>
+                          <Copy className="w-3 h-3" />{copying === p.id ? (lang === 'en' ? 'Working…' : 'Bezig…') : (lang === 'en' ? 'Copy to library' : 'Kopieer naar bibliotheek')}
+                        </button>
+                      )}
                       <button onClick={() => setEditingPersona(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-pp-${p.id}`}>{lang === 'en' ? 'Edit' : 'Bewerk'}</button>
                       <button onClick={() => removePersona(p)} className="p-2 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-pp-${p.id}`}>
                         <Trash2 className="w-4 h-4" />

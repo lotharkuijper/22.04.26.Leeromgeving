@@ -6137,7 +6137,7 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
 
     const rows = lib.map((p, i) => ({
       project_id: projectId,
-      source_persona_id: p.id,
+      source_persona_id: null,
       name: p.name,
       avatar_emoji: p.avatar_emoji,
       system_prompt: p.system_prompt,
@@ -6251,13 +6251,13 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
       if (project.course_id && cp.course_id !== project.course_id) {
         return res.status(400).json({ error: 'Persona hoort bij een andere cursus' });
       }
-      // Voorkom dubbele kopie.
+      // Voorkom dubbele kopie (controleer op naam, source_persona_id is niet meer FK).
       const { data: dup } = await supabaseAdmin
         .from('project_personas').select('id')
-        .eq('project_id', projectId).eq('source_persona_id', cp.id).maybeSingle();
+        .eq('project_id', projectId).eq('name', cp.name).maybeSingle();
       if (dup) return res.status(409).json({ error: 'Deze persona zit al in het project', personaId: dup.id });
       row = {
-        project_id: projectId, source_persona_id: cp.id,
+        project_id: projectId, source_persona_id: null,
         name: cp.name, avatar_emoji: cp.avatar_emoji,
         system_prompt: cp.system_prompt, rag_enabled: cp.rag_enabled,
         rag_folder_ids: cp.rag_folder_ids, visible_from_phase: cp.visible_from_phase,
@@ -7290,6 +7290,8 @@ app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen persona\'s naar de bibliotheek kopiëren' });
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
     const project = access.project;
@@ -7325,9 +7327,70 @@ app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (
 });
 
 // =============================================================================
-// DELETE /api/admin/course-personas/:personaId — verwijder een cursus-persona
-// uit de bibliotheek. Alleen voor admins en docenten van die cursus.
+// Admin-only CRUD voor de persona-bibliotheek (course_personas).
+// POST   /api/admin/course-personas          — nieuwe sjabloon aanmaken
+// PATCH  /api/admin/course-personas/:id      — sjabloon bewerken
+// DELETE /api/admin/course-personas/:id      — sjabloon verwijderen
+// Alle drie uitsluitend voor admins (en superuser).
 // =============================================================================
+
+app.post('/api/admin/course-personas', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen bibliotheek-persona\'s aanmaken' });
+    const { course_id, name, avatar_emoji, system_prompt, rag_enabled, rag_folder_ids, persona_type } = req.body || {};
+    if (!course_id || !name?.trim()) return res.status(400).json({ error: 'course_id en name zijn verplicht' });
+    const { data: inserted, error: iErr } = await supabaseAdmin
+      .from('course_personas').insert({
+        course_id,
+        name: String(name).trim(),
+        avatar_emoji: avatar_emoji || '🤖',
+        system_prompt: system_prompt || '',
+        rag_enabled: rag_enabled !== false,
+        rag_folder_ids: Array.isArray(rag_folder_ids) ? rag_folder_ids : [],
+        is_default: false,
+        persona_type: persona_type === 'evaluator' ? 'evaluator' : 'conversational',
+        created_by: auth.user.id,
+      }).select('*').single();
+    if (iErr) return res.status(500).json({ error: iErr.message });
+    return res.status(201).json({ persona: inserted });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/admin/course-personas/:personaId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { personaId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen bibliotheek-persona\'s bewerken' });
+    const { name, avatar_emoji, system_prompt, rag_enabled, rag_folder_ids, persona_type } = req.body || {};
+    const patch = {};
+    if (name !== undefined) patch.name = String(name).trim();
+    if (avatar_emoji !== undefined) patch.avatar_emoji = avatar_emoji;
+    if (system_prompt !== undefined) patch.system_prompt = system_prompt;
+    if (rag_enabled !== undefined) patch.rag_enabled = rag_enabled;
+    if (rag_folder_ids !== undefined) patch.rag_folder_ids = Array.isArray(rag_folder_ids) ? rag_folder_ids : [];
+    if (persona_type !== undefined) patch.persona_type = persona_type === 'evaluator' ? 'evaluator' : 'conversational';
+    const { data: updated, error: uErr } = await supabaseAdmin
+      .from('course_personas').update(patch).eq('id', personaId).select('*').single();
+    if (uErr) return res.status(500).json({ error: uErr.message });
+    if (!updated) return res.status(404).json({ error: 'Persona niet gevonden' });
+    return res.json({ persona: updated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 app.delete('/api/admin/course-personas/:personaId', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
@@ -7336,23 +7399,9 @@ app.delete('/api/admin/course-personas/:personaId', async (req, res) => {
   const { personaId } = req.params;
   try {
     const { data: profile } = await supabaseAdmin
-      .from('profiles').select('role').eq('id', auth.user.id).maybeSingle();
-    const role = profile?.role || 'student';
-    if (role === 'student') return res.status(403).json({ error: 'Geen toegang' });
-
-    // Controleer dat de persona bestaat en haal course_id op voor autorisatie.
-    const { data: cp } = await supabaseAdmin
-      .from('course_personas').select('id, course_id').eq('id', personaId).maybeSingle();
-    if (!cp) return res.status(404).json({ error: 'Persona niet gevonden' });
-
-    // Docenten mogen alleen persona's verwijderen uit hun eigen cursussen.
-    if (role !== 'admin') {
-      const { data: membership } = await supabaseAdmin
-        .from('course_staff').select('id')
-        .eq('course_id', cp.course_id).eq('user_id', auth.user.id).maybeSingle();
-      if (!membership) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
-    }
-
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen bibliotheek-persona\'s verwijderen' });
     const { error: delErr } = await supabaseAdmin
       .from('course_personas').delete().eq('id', personaId);
     if (delErr) return res.status(500).json({ error: delErr.message });
