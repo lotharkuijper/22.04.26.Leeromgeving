@@ -22,6 +22,19 @@ type Profile = Database['public']['Tables']['profiles']['Row'];
 type Document = Database['public']['Tables']['documents']['Row'];
 type Concept = Database['public']['Tables']['concepts']['Row'];
 
+function formatBackfillTime(isoString: string): string {
+  const date = new Date(isoString);
+  const now = new Date();
+  const time = date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday.getTime() - 86400000);
+  if (date >= startOfToday) return time;
+  if (date >= startOfYesterday) return `gisteren om ${time}`;
+  const diffDays = Math.floor((startOfToday.getTime() - date.getTime()) / 86400000);
+  if (diffDays < 7) return `${diffDays} dagen geleden om ${time}`;
+  return date.toLocaleDateString('nl-NL', { day: 'numeric', month: 'long' }) + ` om ${time}`;
+}
+
 interface ChatbotPrompt {
   id: string;
   name: string;
@@ -869,7 +882,7 @@ const tabGroups = [
             </p>
             <p className="text-xs text-amber-700 mt-0.5">
               {t('admin.backfill.stats', { total: String(autoBackfillStatus.total ?? '?'), linked: String(autoBackfillStatus.linked ?? 0), skipped: String(autoBackfillStatus.skipped ?? 0), failed: String(autoBackfillStatus.failed) })}
-              {autoBackfillStatus.ranAt && <> · {t('admin.backfill.runAt')} {new Date(autoBackfillStatus.ranAt).toLocaleTimeString(lang === 'en' ? 'en-GB' : 'nl-NL', { hour: '2-digit', minute: '2-digit' })}</>}
+              {autoBackfillStatus.ranAt && <> · {t('admin.backfill.runAt')} {formatBackfillTime(autoBackfillStatus.ranAt)}</>}
             </p>
             {(autoBackfillStatus.errors ?? []).length > 0 && (
               <ul className="mt-1.5 text-xs text-amber-700 list-disc list-inside space-y-0.5">
