@@ -3853,7 +3853,39 @@ async function initChatbotPromptSection() {
         console.warn('[init] Sectie-opschoning via SQL mislukt:', sqlErr.message);
       }
     } else {
-      console.warn('[init] pgPool niet beschikbaar — sectie-opschoning overgeslagen.');
+      // Fallback zonder pgPool: gebruik losse supabase-js calls. Vermijd
+      // .or() met underscore-LIKE en .not('section','in',...) want die zijn
+      // onbetrouwbaar in PostgREST.
+      console.warn('[init] pgPool niet beschikbaar — sectie-opschoning via supabase-js fallback.');
+      try {
+        const quizNames = Object.keys(QUIZ_PROMPT_DEFAULTS);
+        // 1) Interne config-rijen (vier patronen, los uitgevoerd).
+        await supabaseAdmin
+          .from('chatbot_prompts')
+          .update({ section: 'internal' })
+          .eq('name', '__quiz_itembank_config__')
+          .neq('section', 'internal');
+        for (const prefix of ['__doc_mutation_', '__concepts_regen_', '__rag_settings']) {
+          await supabaseAdmin
+            .from('chatbot_prompts')
+            .update({ section: 'internal' })
+            .like('name', `${prefix}%`)
+            .neq('section', 'internal');
+        }
+        // 2) Quiz-prompts → 'quiz'.
+        await supabaseAdmin
+          .from('chatbot_prompts')
+          .update({ section: 'quiz' })
+          .in('name', quizNames)
+          .neq('section', 'quiz');
+        // 3) NULL → 'chat'.
+        await supabaseAdmin
+          .from('chatbot_prompts')
+          .update({ section: 'chat' })
+          .is('section', null);
+      } catch (fallbackErr) {
+        console.warn('[init] Sectie-opschoning fallback mislukt:', fallbackErr.message);
+      }
     }
 
     // Zorg dat er minstens één echte chat-prompt bestaat zodat /api/chat
