@@ -18,6 +18,7 @@ export type Database = {
           university: string | null
           study_year: number | null
           avatar_url: string | null
+          preferred_lang: 'nl' | 'en' | null
           created_at: string
           updated_at: string
         }
@@ -29,6 +30,7 @@ export type Database = {
           university?: string | null
           study_year?: number | null
           avatar_url?: string | null
+          preferred_lang?: 'nl' | 'en' | null
           created_at?: string
           updated_at?: string
         }
@@ -40,6 +42,7 @@ export type Database = {
           university?: string | null
           study_year?: number | null
           avatar_url?: string | null
+          preferred_lang?: 'nl' | 'en' | null
           created_at?: string
           updated_at?: string
         }

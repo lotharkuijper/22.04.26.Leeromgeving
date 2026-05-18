@@ -6,6 +6,7 @@ import { ActiveCourseProvider } from './contexts/ActiveCourseContext';
 import { Layout } from './components/Layout';
 import { LoadingSpinner } from './components/LoadingSpinner';
 import { LanguageProvider } from './i18n';
+import { ProfileLangSync } from './components/ProfileLangSync';
 import ChooseCoursePage from "./pages/ChooseCoursePage";
 import ShareStatsTopicsPage from "./pages/ShareStatsTopicsPage";
 import ShareStatsQuizPage from "./pages/ShareStatsQuizPage";
@@ -190,6 +191,7 @@ function App() {
     <LanguageProvider>
       <BrowserRouter>
         <AuthProvider>
+          <ProfileLangSync />
           <CourseAccessProvider>
             <ActiveCourseProvider>
               <AppRoutes />
