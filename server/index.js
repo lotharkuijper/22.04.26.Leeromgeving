@@ -1314,6 +1314,161 @@ app.post('/api/admin/create-rag-folder', async (req, res) => {
   }
 });
 
+// POST /api/admin/courses — maak een nieuwe cursus aan met bijhorende
+// parent-map ({naam}), RAG-submap en Projectdata-submap (analoog aan MenS1).
+app.post('/api/admin/courses', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen cursussen aanmaken' });
+
+  const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const description = typeof req.body?.description === 'string' ? req.body.description.trim() : '';
+  if (!rawName) return res.status(400).json({ error: 'Cursusnaam is verplicht' });
+  if (rawName.length > 120) return res.status(400).json({ error: 'Cursusnaam is te lang (max 120 tekens)' });
+
+  // Houd aangemaakte ID's bij zodat we bij een mislukking netjes kunnen opruimen
+  // (Supabase JS-client kent geen multi-statement transacties).
+  const createdFolderIds = [];
+  let createdCourseId = null;
+
+  const rollback = async (reason) => {
+    console.warn(`[admin/courses] Rolling back na fout: ${reason}`);
+    for (const fid of [...createdFolderIds].reverse()) {
+      try { await supabaseAdmin.from('document_folders').delete().eq('id', fid); }
+      catch (e) { console.warn('[admin/courses] rollback folder fout (genegeerd):', e?.message); }
+    }
+    if (createdCourseId) {
+      try { await supabaseAdmin.from('courses').delete().eq('id', createdCourseId); }
+      catch (e) { console.warn('[admin/courses] rollback course fout (genegeerd):', e?.message); }
+    }
+  };
+
+  try {
+    // 1) Voorkom dubbele cursusnaam.
+    const { data: existingCourse } = await supabaseAdmin
+      .from('courses').select('id').eq('name', rawName).maybeSingle();
+    if (existingCourse) {
+      return res.status(409).json({ error: `Er bestaat al een cursus met de naam "${rawName}"` });
+    }
+
+    // 2) Zoek de globale root-map (is_root=true). Nodig voor de parent-map.
+    const { data: rootFolder, error: rootErr } = await supabaseAdmin
+      .from('document_folders').select('id').eq('is_root', true).limit(1).maybeSingle();
+    if (rootErr || !rootFolder) {
+      return res.status(500).json({ error: 'Globale root-map (is_root=true) niet gevonden' });
+    }
+
+    // 3) Maak de cursus aan.
+    const { data: newCourse, error: courseErr } = await supabaseAdmin
+      .from('courses')
+      .insert({ name: rawName, description: description || null, is_active: true })
+      .select('id, name, description, is_active')
+      .single();
+    if (courseErr || !newCourse) {
+      return res.status(500).json({ error: `Kon cursus niet aanmaken: ${courseErr?.message}` });
+    }
+    createdCourseId = newCourse.id;
+
+    const insertPerms = async (folderId) => {
+      const { error } = await supabaseAdmin.from('folder_permissions').insert([
+        { folder_id: folderId, role: 'admin',   can_view: true, can_edit: true },
+        { folder_id: folderId, role: 'docent',  can_view: true, can_edit: true },
+        { folder_id: folderId, role: 'student', can_view: true, can_edit: false },
+      ]);
+      if (error) throw new Error(`folder_permissions insert mislukt voor ${folderId}: ${error.message}`);
+    };
+
+    // 4) Parent-cursusmap onder root.
+    const { data: courseFolder, error: cfErr } = await supabaseAdmin
+      .from('document_folders').insert({
+        name: rawName,
+        description: `Cursusmap ${rawName}`,
+        parent_folder_id: rootFolder.id,
+        created_by: r.user.id,
+        folder_type: 'course',
+        is_root: false,
+      }).select('id').single();
+    if (cfErr || !courseFolder) {
+      await rollback(`cursusmap-insert: ${cfErr?.message}`);
+      return res.status(500).json({ error: `Kon cursusmap niet aanmaken: ${cfErr?.message}` });
+    }
+    createdFolderIds.push(courseFolder.id);
+    await insertPerms(courseFolder.id);
+
+    // 5) RAG-submap.
+    const { data: ragFolder, error: ragErr } = await supabaseAdmin
+      .from('document_folders').insert({
+        name: 'RAG',
+        description: `RAG-documenten voor ${rawName}`,
+        parent_folder_id: courseFolder.id,
+        created_by: r.user.id,
+        folder_type: 'rag_sources',
+        is_root: false,
+      }).select('id').single();
+    if (ragErr || !ragFolder) {
+      await rollback(`rag-folder-insert: ${ragErr?.message}`);
+      return res.status(500).json({ error: `Kon RAG-map niet aanmaken: ${ragErr?.message}` });
+    }
+    createdFolderIds.push(ragFolder.id);
+    await insertPerms(ragFolder.id);
+
+    // 6) Projectdata-submap.
+    const { data: dataFolder, error: dataErr } = await supabaseAdmin
+      .from('document_folders').insert({
+        name: 'Projectdata',
+        description: `Projectbestanden voor ${rawName}`,
+        parent_folder_id: courseFolder.id,
+        created_by: r.user.id,
+        folder_type: 'data',
+        is_root: false,
+      }).select('id').single();
+    if (dataErr || !dataFolder) {
+      await rollback(`projectdata-folder-insert: ${dataErr?.message}`);
+      return res.status(500).json({ error: `Kon Projectdata-map niet aanmaken: ${dataErr?.message}` });
+    }
+    createdFolderIds.push(dataFolder.id);
+    await insertPerms(dataFolder.id);
+
+    // 7) Koppel beide submappen aan de cursus (verplicht — anders zien cursus en mappen elkaar niet).
+    const { error: assignErr } = await supabaseAdmin
+      .from('course_folder_assignments').insert([
+        { course_id: createdCourseId, folder_id: ragFolder.id },
+        { course_id: createdCourseId, folder_id: dataFolder.id },
+      ]);
+    if (assignErr) {
+      await rollback(`course_folder_assignments: ${assignErr.message}`);
+      return res.status(500).json({ error: `Kon mappen niet koppelen aan cursus: ${assignErr.message}` });
+    }
+
+    // 8) Activeer RAG-modules voor de RAG-map (analoog aan MenS1). Niet-fataal.
+    const { error: ragAssignErr } = await supabaseAdmin
+      .from('folder_rag_assignments').insert([
+        { folder_id: ragFolder.id, module_type: 'general', is_active: true },
+        { folder_id: ragFolder.id, module_type: 'explain', is_active: true },
+        { folder_id: ragFolder.id, module_type: 'quiz',    is_active: true },
+      ]);
+    if (ragAssignErr) {
+      console.warn('[admin/courses] folder_rag_assignments insert (non-fatal):', ragAssignErr.message);
+    }
+
+    console.log(`[admin/courses] Cursus "${rawName}" aangemaakt (${createdCourseId}) met folders ${courseFolder.id}/${ragFolder.id}/${dataFolder.id}`);
+    return res.status(201).json({
+      course: newCourse,
+      courseFolderId: courseFolder.id,
+      ragFolderId: ragFolder.id,
+      projectdataFolderId: dataFolder.id,
+      ragModulesWarning: ragAssignErr ? ragAssignErr.message : null,
+    });
+  } catch (err) {
+    console.error('[admin/courses] Unexpected error:', err);
+    await rollback(`exception: ${err?.message}`);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
 app.get('/api/rag-enabled-folders', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
