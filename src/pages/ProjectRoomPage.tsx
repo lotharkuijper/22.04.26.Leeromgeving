@@ -175,7 +175,7 @@ export function ProjectRoomPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) {
-        setError((await r.json()).error || (lang === 'en' ? 'Could not load project room' : 'Kon projectruimte niet laden'));
+        setError((await r.json()).error || t('room.couldNotLoadRoom'));
         return;
       }
       const data = await r.json();
@@ -243,16 +243,16 @@ export function ProjectRoomPage() {
 
   const uploadFile = async (file: File) => {
     if (!token || !projectId || !activePersonaId || activePersonaId === '__default__') {
-      setError(lang === 'en' ? 'First add a real persona in the management panel.' : 'Voeg eerst een echte persona toe in het beheerpaneel.');
+      setError(t('room.addPersonaFirst'));
       return;
     }
     const ALLOWED = /\.(txt|md|markdown|csv|tsv|json|log|pdf|docx|pptx|xlsx|odt|ods|odp)$/i;
     if (!ALLOWED.test(file.name)) {
-      setError(lang === 'en' ? 'Supported formats: .txt, .md, .csv, .tsv, .json, .pdf, .docx, .pptx, .xlsx, .odt, .ods, .odp.' : 'Ondersteunde formaten: .txt, .md, .csv, .tsv, .json, .pdf, .docx, .pptx, .xlsx, .odt, .ods, .odp.');
+      setError(t('room.supportedFormats'));
       return;
     }
     if (file.size > 15_000_000) {
-      setError(lang === 'en' ? 'File is larger than 15 MB.' : 'Bestand is groter dan 15 MB.');
+      setError(t('room.fileTooLarge'));
       return;
     }
     setUploadingDoc(true);
@@ -267,7 +267,7 @@ export function ProjectRoomPage() {
         body: fd,
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Upload failed' : 'Upload mislukt'));
+      if (!r.ok) throw new Error(d.error || t('room.uploadFailed'));
       setPersonaDocs(prev => [d.document, ...prev]);
     } catch (e: any) {
       setError(e.message);
@@ -279,14 +279,14 @@ export function ProjectRoomPage() {
 
   const deleteDoc = async (doc: PersonaDoc) => {
     if (!token || !projectId || !activePersonaId) return;
-    if (!confirm(lang === 'en' ? `Delete "${doc.filename}"?` : `Verwijder "${doc.filename}"?`)) return;
+    if (!confirm(t('room.deleteDocConfirm', { filename: doc.filename }))) return;
     try {
       const r = await fetch(`/api/projects/${projectId}/personas/${activePersonaId}/documents/${doc.id}`, {
         method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        throw new Error(d.error || (lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt'));
+        throw new Error(d.error || t('room.deleteFailed'));
       }
       setPersonaDocs(prev => prev.filter(d => d.id !== doc.id));
     } catch (e: any) {
@@ -351,7 +351,7 @@ export function ProjectRoomPage() {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        throw new Error(j.error || (lang === 'en' ? 'Download failed' : 'Download mislukt'));
+        throw new Error(j.error || t('room.downloadFailed'));
       }
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
@@ -363,7 +363,7 @@ export function ProjectRoomPage() {
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e: any) {
-      setError(e.message || (lang === 'en' ? 'Download failed' : 'Download mislukt'));
+      setError(e.message || t('room.downloadFailed'));
     }
   };
 
@@ -384,7 +384,7 @@ export function ProjectRoomPage() {
         body: JSON.stringify({ groupId, personaId: activePersonaId, message: text, lang }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Persona chat failed' : 'Persona-chat mislukt'));
+      if (!r.ok) throw new Error(data.error || t('room.personaChatFailed'));
       if (data.threadId) setActiveThreadId(data.threadId);
       setPersonaMessages(prev => [...prev, {
         id: `reply-${Date.now()}`, role: 'assistant', content: data.reply,
@@ -393,7 +393,7 @@ export function ProjectRoomPage() {
     } catch (e: any) {
       setPersonaMessages(prev => [...prev, {
         id: `err-${Date.now()}`, role: 'assistant',
-        content: `${lang === 'en' ? 'Error' : 'Fout'}: ${e.message}`, created_at: new Date().toISOString(), user_id: null,
+        content: `${t('room.errorPrefix')}: ${e.message}`, created_at: new Date().toISOString(), user_id: null,
       }]);
     } finally {
       setPersonaLoading(false);
@@ -440,7 +440,7 @@ export function ProjectRoomPage() {
           body: JSON.stringify({ lang }),
         });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Failed to load preview' : 'Preview ophalen mislukt'));
+        if (!r.ok) throw new Error(data.error || t('room.previewFailed'));
         setCheckpointPreview(data.threads || []);
         setCheckpointSynthesis(data.synthesis || null);
       } catch (e: any) {
@@ -459,7 +459,7 @@ export function ProjectRoomPage() {
     if (!showCheckpointModal || !groupId || !token) return;
     // kind='final' vereist handmatige reflectie; kind='checkpoint' gebruikt de preview.
     if (showCheckpointModal === 'final' && reflection.trim().length < 20) {
-      setError(lang === 'en' ? 'Write a reflection of at least 20 characters.' : 'Schrijf een reflectie van minimaal 20 tekens.');
+      setError(t('room.reflectionTooShort'));
       return;
     }
     setSubmittingCheckpoint(true);
@@ -478,7 +478,7 @@ export function ProjectRoomPage() {
       } else {
         // kind='checkpoint': altijd personaSummaries sturen; knop is verborgen als preview leeg is.
         if (!checkpointPreview || checkpointPreview.length === 0) {
-          throw new Error(lang === 'en' ? 'No conversations to save.' : 'Geen gesprekken om op te slaan.');
+          throw new Error(t('room.noConversationsToSave'));
         }
         body.personaSummaries = checkpointPreview;
       }
@@ -489,7 +489,7 @@ export function ProjectRoomPage() {
         body: JSON.stringify(body),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Checkpoint failed' : 'Checkpoint mislukt'));
+      if (!r.ok) throw new Error(data.error || t('room.checkpointFailed'));
       setCheckpoints(prev => [data.checkpoint, ...prev]);
       setReflection('');
       setCheckpointPreview(null);
@@ -518,7 +518,7 @@ export function ProjectRoomPage() {
 
   const requestEvaluation = async () => {
     if (!groupId || !token) return;
-    if (!confirm(lang === 'en' ? 'Are you requesting a formative assessment? The assessor will read your conversations and add feedback to each learning journal.' : 'Vraag je een formatieve beoordeling aan? De beoordelaar leest jullie gesprekken en zet feedback in elk leerdagboek.')) return;
+    if (!confirm(t('room.assessmentConfirm'))) return;
     setEvaluating(true);
     setError(null);
     try {
@@ -534,11 +534,11 @@ export function ProjectRoomPage() {
         body: JSON.stringify({ requestId, lang }),
       });
       const data = await r.json();
-      if (!r.ok) throw new Error(data.error || (lang === 'en' ? 'Assessment failed' : 'Beoordeling mislukt'));
+      if (!r.ok) throw new Error(data.error || t('room.assessmentFailed'));
       const okCount = (data.results || []).filter((x: any) => x.ok).length;
       setInfo(okCount > 0
-        ? (lang === 'en' ? `Assessment complete — ${okCount} feedback report(s) are in your learning journals.` : `Beoordeling klaar — ${okCount} feedback-rapport(en) staan in jullie leerdagboeken.`)
-        : (lang === 'en' ? 'Assessment completed but no feedback was returned.' : 'Beoordeling voltooid maar er kwam geen feedback terug.'));
+        ? t('room.assessmentComplete', { count: String(okCount) })
+        : t('room.assessmentNoFeedback'));
       setTimeout(() => setInfo(null), 7000);
       setEvaluateRequestId(null);
     } catch (e: any) {
@@ -591,10 +591,10 @@ export function ProjectRoomPage() {
       });
       const contentType = r.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
-        throw new Error(lang === 'en' ? `Server error (${r.status}): unexpected response. Please try again.` : `Server-fout (${r.status}): onverwachte response. Probeer het opnieuw.`);
+        throw new Error(t('room.serverError', { status: String(r.status) }));
       }
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Failed to load preview' : 'Preview ophalen mislukt'));
+      if (!r.ok) throw new Error(d.error || t('room.previewFailed'));
       setClosePreviewData({ topics: d.topics || [], agreements: d.agreements || [] });
     } catch (e: any) {
       setCloseModalError(e.message);
@@ -614,13 +614,13 @@ export function ProjectRoomPage() {
         body: JSON.stringify({ lang }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Close failed' : 'Afsluiten mislukt'));
+      if (!r.ok) throw new Error(d.error || t('room.closeFailed'));
       setShowCloseModal(false);
       setPersonaMessages([]);
       setActiveThreadId(null);
       setRightPanelTab('logboek');
       await loadConversationLog();
-      setInfo(lang === 'en' ? 'Conversation closed and saved to the logbook.' : 'Gesprek afgesloten en opgeslagen in het logboek.');
+      setInfo(t('room.conversationClosed'));
       setTimeout(() => setInfo(null), 5000);
     } catch (e: any) {
       setCloseModalError(e.message);
@@ -642,13 +642,13 @@ export function ProjectRoomPage() {
   const isFinalized = group?.status === 'finalized';
 
   if (loadingRoom && !project) {
-    return <div className="p-12 text-center text-gray-500">{lang === 'en' ? 'Loading…' : 'Laden…'}</div>;
+    return <div className="p-12 text-center text-gray-500">{t('room.loading')}</div>;
   }
   if (!project || !group) {
     return (
       <div className="p-12 text-center">
-        <p className="text-red-600 mb-4">{error || (lang === 'en' ? 'Project room not found' : 'Projectruimte niet gevonden')}</p>
-        <Link to="/projects" className="text-blue-600 hover:underline">← {lang === 'en' ? 'Back to projects' : 'Terug naar projecten'}</Link>
+        <p className="text-red-600 mb-4">{error || t('room.notFound')}</p>
+        <Link to="/projects" className="text-blue-600 hover:underline">← {t('room.backToProjects')}</Link>
       </div>
     );
   }
@@ -664,7 +664,7 @@ export function ProjectRoomPage() {
           <div className="min-w-0">
             <h1 className="font-bold text-gray-900 truncate" data-testid="text-project-title">{project.title}</h1>
             <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-xs text-gray-500 truncate">{group.name}{isFinalized && (lang === 'en' ? ' · closed' : ' · afgesloten')}</p>
+              <p className="text-xs text-gray-500 truncate">{group.name}{isFinalized && ` · ${t('room.closed')}`}</p>
               {(() => {
                 const lastCp = checkpoints.length > 0
                   ? checkpoints.reduce((a, b) => new Date(a.created_at) > new Date(b.created_at) ? a : b)
@@ -672,11 +672,11 @@ export function ProjectRoomPage() {
                 return lastCp ? (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[10px] rounded border border-blue-100" data-testid="badge-last-checkpoint">
                     <CheckCircle2 className="w-2.5 h-2.5" />
-                    {lang === 'en' ? 'Last checkpoint:' : 'Laatste checkpoint:'} {new Date(lastCp.created_at).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {t('room.lastCheckpoint')} {new Date(lastCp.created_at).toLocaleString(t('common.locale'), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-50 text-gray-400 text-[10px] rounded border border-gray-200" data-testid="badge-no-checkpoint">
-                    {lang === 'en' ? 'No checkpoint yet' : 'Nog geen checkpoint'}
+                    {t('room.noCheckpointYet')}
                   </span>
                 );
               })()}
@@ -684,7 +684,7 @@ export function ProjectRoomPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 text-sm">
-          <button onClick={copyInvite} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs font-mono" title={lang === 'en' ? 'Copy invite code' : 'Kopieer invite-code'} data-testid="button-copy-invite">
+          <button onClick={copyInvite} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs font-mono" title={t('room.copyInviteTitle')} data-testid="button-copy-invite">
             <Copy className="w-3.5 h-3.5" />
             {group.invite_code}
           </button>
@@ -698,14 +698,14 @@ export function ProjectRoomPage() {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-xs font-medium"
                 data-testid="button-open-checkpoint"
               >
-                <CheckCircle2 className="w-4 h-4" /> Checkpoint
+                <CheckCircle2 className="w-4 h-4" /> {t('room.checkpoint')}
               </button>
               <button
                 onClick={() => openCheckpoint('final')}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white hover:bg-green-700 rounded-lg text-xs font-medium"
                 data-testid="button-open-finalize"
               >
-                <Flag className="w-4 h-4" /> {lang === 'en' ? 'Finalise' : 'Afronden'}
+                <Flag className="w-4 h-4" /> {t('room.finalise')}
               </button>
             </>
           )}
@@ -715,10 +715,10 @@ export function ProjectRoomPage() {
               disabled={evaluating}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 rounded-lg text-xs font-medium"
               data-testid="button-request-evaluation"
-              title={lang === 'en' ? 'Ask the assessor for formative feedback on your conversations' : 'Vraag de beoordelaar om formatieve feedback op jullie gesprekken'}
+              title={t('room.assessmentTitle')}
             >
               {evaluating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldAlert className="w-4 h-4" />}
-              {evaluating ? (lang === 'en' ? 'Assessing…' : 'Beoordeelt…') : (lang === 'en' ? 'Request assessment' : 'Beoordeling opvragen')}
+              {evaluating ? t('room.assessing') : t('room.requestAssessment')}
             </button>
           )}
         </div>
@@ -731,7 +731,7 @@ export function ProjectRoomPage() {
           <div className="border-b border-gray-200 p-3 space-y-2">
             <div className="flex items-center gap-2">
               <label htmlFor="persona-select" className="text-xs font-medium text-gray-600 flex items-center gap-1">
-                <Bot className="w-4 h-4" /> Persona
+                <Bot className="w-4 h-4" /> {t('room.personaLabel')}
               </label>
               <select
                 id="persona-select"
@@ -740,7 +740,7 @@ export function ProjectRoomPage() {
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
                 data-testid="select-persona"
               >
-                {personas.length === 0 && <option value="">{lang === 'en' ? "(no personas available)" : "(geen persona's beschikbaar)"}</option>}
+                {personas.length === 0 && <option value="">{t('room.noPersonas')}</option>}
                 {personas.map(p => (
                   <option key={p.id} value={p.id} data-testid={`option-persona-${p.id}`}>
                     {(p.avatar_emoji || '🤖')} {p.name}
@@ -751,13 +751,13 @@ export function ProjectRoomPage() {
             {activePersona && activePersonaId !== '__default__' && (
               <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
                 <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                  <span className="text-gray-500">{lang === 'en' ? 'Documents' : 'Documenten'} ({personaDocs.length}):</span>
-                  {personaDocs.length === 0 && <span className="italic text-gray-400">{lang === 'en' ? 'none' : 'geen'}</span>}
+                  <span className="text-gray-500">{t('room.documents')} ({personaDocs.length}):</span>
+                  {personaDocs.length === 0 && <span className="italic text-gray-400">{t('room.none')}</span>}
                   {personaDocs.map(d => (
                     <span key={d.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded" data-testid={`doc-${d.id}`}>
                       <FileText className="w-3 h-3" />
                       <span className="max-w-[120px] truncate" title={d.filename}>{d.filename}</span>
-                      <button onClick={() => deleteDoc(d)} className="text-red-500 hover:text-red-700" title={lang === 'en' ? 'Delete' : 'Verwijder'} data-testid={`button-delete-doc-${d.id}`}>
+                      <button onClick={() => deleteDoc(d)} className="text-red-500 hover:text-red-700" title={t('room.delete')} data-testid={`button-delete-doc-${d.id}`}>
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </span>
@@ -765,7 +765,7 @@ export function ProjectRoomPage() {
                 </div>
                 <label className={`inline-flex items-center gap-1 px-2 py-1 rounded cursor-pointer ${uploadingDoc ? 'bg-gray-100 text-gray-400' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}`}>
                   {uploadingDoc ? <Loader2 className="w-3 h-3 animate-spin" /> : <Paperclip className="w-3 h-3" />}
-                  Upload
+                  {t('room.upload')}
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -783,7 +783,7 @@ export function ProjectRoomPage() {
             {personaMessages.length === 0 && activePersona && (
               <div className="text-center text-gray-500 text-sm py-8">
                 <Bot className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-                {lang === 'en' ? <>Start a conversation with <strong>{activePersona.name}</strong>.</> : <>Begin een gesprek met <strong>{activePersona.name}</strong>.</>}
+                <>{t('room.chatStartPromptBefore')} <strong>{activePersona.name}</strong>{t('room.chatStartPromptAfter')}</>  
               </div>
             )}
             {personaMessages.map(m => (
@@ -801,7 +801,7 @@ export function ProjectRoomPage() {
             {personaLoading && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 px-4 py-2 rounded-2xl text-sm text-gray-500 flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" /> {lang === 'en' ? 'thinking…' : 'denkt na…'}
+                  <Loader2 className="w-3 h-3 animate-spin" /> {t('room.thinking')}
                 </div>
               </div>
             )}
@@ -818,7 +818,7 @@ export function ProjectRoomPage() {
                     sendPersona();
                   }
                 }}
-                placeholder={activePersona ? (lang === 'en' ? `Ask ${activePersona.name} something… (Shift+Enter = new line)` : `Vraag iets aan ${activePersona.name}… (Shift+Enter = nieuwe regel)`) : (lang === 'en' ? 'Select a persona first' : 'Kies eerst een persona')}
+                placeholder={activePersona ? t('room.chatPlaceholderWith', { name: activePersona.name }) : t('room.chatPlaceholderNoPersona')}
                 disabled={!activePersona || personaLoading || isFinalized}
                 rows={6}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[150px] max-h-[300px]"
@@ -837,7 +837,7 @@ export function ProjectRoomPage() {
                   onClick={openCloseModal}
                   disabled={!activeThreadId || personaLoading || isFinalized}
                   className="px-4 py-2 border border-gray-200 text-gray-400 hover:bg-red-50 hover:border-red-200 hover:text-red-500 rounded-lg disabled:opacity-30 transition-colors"
-                  title={lang === 'en' ? 'Close conversation and save summary' : 'Gesprek afsluiten en neerslag opslaan'}
+                  title={t('room.saveConversationTitle')}
                   data-testid="button-close-conversation"
                 >
                   <LogOut className="w-4 h-4" />
@@ -852,18 +852,18 @@ export function ProjectRoomPage() {
           {/* Groepschat */}
           <div className="flex-1 flex flex-col bg-white rounded-xl border border-gray-200 min-h-0">
             <div className="border-b border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 flex items-center gap-2">
-              <MessageCircle className="w-4 h-4" /> {lang === 'en' ? 'Group chat' : 'Groepschat'}
+              <MessageCircle className="w-4 h-4" /> {t('room.groupChat')}
             </div>
             <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-3 space-y-2">
               {chatMessages.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-6">{lang === 'en' ? 'No messages yet — start the conversation with your group.' : 'Nog geen berichten — start het gesprek met je groep.'}</p>
+                <p className="text-xs text-gray-400 text-center py-6">{t('room.noMessages')}</p>
               )}
               {chatMessages.map(m => {
                 const isMe = m.user_id === profile?.id;
-                const author = m.profiles?.full_name || m.profiles?.email?.split('@')[0] || (lang === 'en' ? 'someone' : 'iemand');
+                const author = m.profiles?.full_name || m.profiles?.email?.split('@')[0] || t('room.someone');
                 return (
                   <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                    <div className="text-[10px] text-gray-400 mb-0.5">{isMe ? (lang === 'en' ? 'you' : 'jij') : author}</div>
+                    <div className="text-[10px] text-gray-400 mb-0.5">{isMe ? t('room.you') : author}</div>
                     <div className={`group max-w-[85%] px-3 py-2 rounded-2xl text-sm ${isMe ? 'bg-blue-100 text-blue-950' : 'bg-gray-100 text-gray-900'}`} data-testid={`msg-chat-${m.id}`}>
                       <div className="whitespace-pre-wrap break-words">{m.body}</div>
                       <div className="flex items-center gap-1 mt-1 opacity-60 group-hover:opacity-100 transition-opacity">
@@ -893,7 +893,7 @@ export function ProjectRoomPage() {
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendChat())}
-                  placeholder={lang === 'en' ? 'Message to your group…' : 'Bericht aan je groep…'}
+                  placeholder={t('room.chatPlaceholder')}
                   disabled={isFinalized}
                   className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50"
                   data-testid="input-group-chat"
@@ -907,7 +907,7 @@ export function ProjectRoomPage() {
                   <Send className="w-4 h-4" />
                 </button>
               </div>
-              <p className="text-[10px] text-gray-400 mt-1">{lang === 'en' ? 'Tip: use your OS emoji picker (Win+. or Cmd+Ctrl+Space).' : 'Tip: gebruik je OS-emoji-picker (Win+. of Cmd+Ctrl+Space).'}</p>
+              <p className="text-[10px] text-gray-400 mt-1">{t('room.emojiTip')}</p>
             </div>
           </div>
 
@@ -920,14 +920,14 @@ export function ProjectRoomPage() {
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${rightPanelTab === 'briefing' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:bg-gray-50'}`}
                 data-testid="tab-briefing"
               >
-                <Clipboard className="w-3 h-3" /> {lang === 'en' ? 'Briefing' : 'Briefing'}
+                <Clipboard className="w-3 h-3" /> {t('room.briefing')}
               </button>
               <button
                 onClick={() => setRightPanelTab('logboek')}
                 className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${rightPanelTab === 'logboek' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:bg-gray-50'}`}
                 data-testid="tab-logboek"
               >
-                <ScrollText className="w-3 h-3" /> {lang === 'en' ? 'Logbook' : 'Logboek'}
+                <ScrollText className="w-3 h-3" /> {t('room.logbook')}
                 {conversationLog.length > 0 && (
                   <span className="ml-0.5 bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5 text-[10px] font-semibold" data-testid="badge-logboek-count">
                     {conversationLog.length}
@@ -943,12 +943,12 @@ export function ProjectRoomPage() {
               <div data-testid="section-logboek">
                 {logbookLoading && (
                   <div className="flex items-center gap-2 text-gray-400 text-xs py-4 justify-center">
-                    <Loader2 className="w-4 h-4 animate-spin" /> {lang === 'en' ? 'Loading logbook…' : 'Logboek laden…'}
+                    <Loader2 className="w-4 h-4 animate-spin" /> {t('room.loadingLogbook')}
                   </div>
                 )}
                 {!logbookLoading && conversationLog.length === 0 && (
                   <p className="text-xs text-gray-400 italic py-4 text-center">
-                    {lang === 'en' ? <>No closed conversations yet. Use the <LogOut className="w-3 h-3 inline" /> button in the chat to close a conversation.</> : <>Nog geen afgesloten gesprekken. Gebruik de <LogOut className="w-3 h-3 inline" />-knop in de chat om een gesprek af te sluiten.</>}
+                    <>{t('room.noClosedConversationsBefore')} <LogOut className="w-3 h-3 inline" />{t('room.noClosedConversationsAfter')}</>  
                   </p>
                 )}
                 {!logbookLoading && conversationLog.length > 0 && (() => {
@@ -1013,11 +1013,11 @@ export function ProjectRoomPage() {
                                           : <ChevronRight className="w-3 h-3 text-gray-400 shrink-0" />)
                                       : <span className="w-3 shrink-0" />}
                                     <span className="text-[11px] text-gray-600 flex-1">
-                                      {new Date(conv.closedAt).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                      {new Date(conv.closedAt).toLocaleString(t('common.locale'), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                                     </span>
                                     {conv.agreements.length > 0 && (
                                       <span className="text-[10px] text-green-600 font-medium shrink-0">
-                                        {conv.agreements.length} {lang === 'en' ? 'agr.' : 'afsprk.'}
+                                        {conv.agreements.length} {t('room.agree')}
                                       </span>
                                     )}
                                   </button>
@@ -1026,7 +1026,7 @@ export function ProjectRoomPage() {
                                     <div className="px-3 pb-3 pt-1 border-t border-gray-100">
                                       {conv.topics.length > 0 && (
                                         <div className="mb-2">
-                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{lang === 'en' ? 'Discussed' : 'Besproken'}</p>
+                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{t('room.discussed')}</p>
                                           <ul className="space-y-0.5">
                                             {conv.topics.map((t, i) => (
                                               <li key={i} className="flex gap-1.5 text-xs text-gray-700">
@@ -1038,7 +1038,7 @@ export function ProjectRoomPage() {
                                       )}
                                       {conv.agreements.length > 0 && (
                                         <div>
-                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{lang === 'en' ? 'Agreed' : 'Afgesproken'}</p>
+                                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{t('room.agreed')}</p>
                                           <ul className="space-y-0.5">
                                             {conv.agreements.map((a, i) => (
                                               <li key={i} className="flex gap-1.5 text-xs text-gray-700">
@@ -1069,7 +1069,7 @@ export function ProjectRoomPage() {
                 {project.briefing_markdown}
               </div>
             ) : (
-              <p className="text-xs text-gray-400 italic">{lang === 'en' ? 'No briefing set.' : 'Geen briefing ingesteld.'}</p>
+              <p className="text-xs text-gray-400 italic">{t('room.noBriefing')}</p>
             )}
             {projectMaterials.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
@@ -1084,7 +1084,7 @@ export function ProjectRoomPage() {
                     const hiddenCount = projectMaterials.length - visibleCount;
                     return (
                       <span className="flex items-center gap-1">
-                        <Download className="w-3 h-3" /> {lang === 'en' ? 'Files from the lecturer' : 'Bestanden van de docent'} ({visibleCount}{isStaff && hiddenCount > 0 ? ` + ${hiddenCount} ${lang === 'en' ? 'hidden' : 'verborgen'}` : ''})
+                        <Download className="w-3 h-3" /> {t('room.filesFromLecturer')} ({visibleCount}{isStaff && hiddenCount > 0 ? ` + ${hiddenCount} ${t('room.hidden')}` : ''})
                       </span>
                     );
                   })()}
@@ -1106,7 +1106,7 @@ export function ProjectRoomPage() {
                             type="button"
                             onClick={() => downloadMaterial(d)}
                             className="truncate text-left text-blue-700 hover:underline"
-                            title={`Download ${d.filename}`}
+                            title={t('room.downloadTitle', { name: d.filename })}
                             data-testid={`button-download-material-${d.id}`}
                           >
                             {d.filename}
@@ -1117,23 +1117,23 @@ export function ProjectRoomPage() {
                           {isStaff && !d.is_visible_to_students && (
                             <span
                               className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-1 shrink-0"
-                              title={lang === 'en' ? 'Hidden from students' : 'Verborgen voor studenten'}
+                              title={t('room.hiddenFromStudents')}
                               data-testid={`badge-hidden-${d.id}`}
                             >
-                              <EyeOff className="w-2.5 h-2.5" /> {lang === 'en' ? 'hidden' : 'verborgen'}
+                              <EyeOff className="w-2.5 h-2.5" /> {t('room.hidden')}
                             </span>
                           )}
                         </li>
                       ))}
                     </ul>
-                    <p className="text-[10px] text-gray-400 mt-1.5">{lang === 'en' ? 'Click a file to download.' : 'Klik een bestand om te downloaden.'}</p>
+                    <p className="text-[10px] text-gray-400 mt-1.5">{t('room.clickToDownload')}</p>
                   </div>
                 )}
               </div>
             )}
             {Array.isArray(project.rubric_criteria) && project.rubric_criteria.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
-                <div className="text-xs font-semibold text-gray-700 mb-1">{lang === 'en' ? 'Rubric' : 'Rubriek'}</div>
+                <div className="text-xs font-semibold text-gray-700 mb-1">{t('room.rubric')}</div>
                 <ul className="text-xs text-gray-600 list-disc list-inside space-y-0.5">
                   {project.rubric_criteria.map((c, i) => (
                     <li key={i}>{typeof c === 'string' ? c : (c.title || c.name || JSON.stringify(c))}</li>
@@ -1144,15 +1144,15 @@ export function ProjectRoomPage() {
             {checkpoints.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
                 <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
-                  <BookOpen className="w-3 h-3" /> Checkpoints ({checkpoints.length})
+                  <BookOpen className="w-3 h-3" /> {t('room.checkpointsCount', { count: String(checkpoints.length) })}
                 </div>
                 <ul className="space-y-1 text-xs">
                   {checkpoints.map(cp => (
                     <li key={cp.id} className="text-gray-600">
                       <span className={`inline-block px-1.5 rounded text-[10px] ${cp.kind === 'final' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                        {cp.kind === 'final' ? (lang === 'en' ? 'final' : 'eind') : (lang === 'en' ? 'interim' : 'tussentijds')}
+                        {cp.kind === 'final' ? t('room.finalCheckpointLabel') : t('room.interimCheckpointLabel')}
                       </span>{' '}
-                      <span className="text-gray-400">{new Date(cp.created_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'nl-NL')}</span>
+                      <span className="text-gray-400">{new Date(cp.created_at).toLocaleDateString(t('common.locale'))}</span>
                     </li>
                   ))}
                 </ul>
@@ -1183,15 +1183,15 @@ export function ProjectRoomPage() {
       {showCloseModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="modal-close-conversation">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 max-h-[80vh] overflow-y-auto">
-            <h2 className="text-lg font-bold text-gray-900 mb-1">{lang === 'en' ? 'Close conversation' : 'Gesprek afsluiten'}</h2>
+            <h2 className="text-lg font-bold text-gray-900 mb-1">{t('room.closeConversationTitle')}</h2>
             <p className="text-sm text-gray-600 mb-4">
-              {lang === 'en' ? 'Below you can see the summary the AI has made of this conversation. Review it and then close.' : 'Hieronder zie je de neerslag die de AI van dit gesprek heeft gemaakt. Controleer het en sluit dan af.'}
+              {t('room.closeConversationSub')}
             </p>
 
             {closeModalLoading && (
               <div className="flex flex-col items-center justify-center py-10 gap-3 text-gray-500">
                 <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
-                <span className="text-sm">{lang === 'en' ? 'Creating summary…' : 'Neerslag wordt gemaakt…'}</span>
+                <span className="text-sm">{t('room.creatingPreview')}</span>
               </div>
             )}
 
@@ -1204,7 +1204,7 @@ export function ProjectRoomPage() {
             {!closeModalLoading && closePreviewData && (
               <div className="space-y-4">
                 <div>
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{lang === 'en' ? 'Topics discussed' : 'Besproken onderwerpen'}</h3>
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('room.topicsDiscussed')}</h3>
                   <ul className="space-y-1.5">
                     {closePreviewData.topics.map((t, i) => (
                       <li key={i} className="flex gap-2 text-sm text-gray-700">
@@ -1215,7 +1215,7 @@ export function ProjectRoomPage() {
                 </div>
                 {closePreviewData.agreements.length > 0 ? (
                   <div>
-                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{lang === 'en' ? 'Agreed' : 'Afgesproken'}</h3>
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('room.agreed')}</h3>
                     <ul className="space-y-1.5">
                       {closePreviewData.agreements.map((a, i) => (
                         <li key={i} className="flex gap-2 text-sm text-gray-700">
@@ -1225,7 +1225,7 @@ export function ProjectRoomPage() {
                     </ul>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-400 italic">{lang === 'en' ? 'No explicit agreements identified in this conversation.' : 'Geen expliciete afspraken herkend in dit gesprek.'}</p>
+                  <p className="text-xs text-gray-400 italic">{t('room.noAgreements')}</p>
                 )}
               </div>
             )}
@@ -1237,7 +1237,7 @@ export function ProjectRoomPage() {
                 className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 data-testid="button-cancel-close-conversation"
               >
-                {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                {t('common.cancel')}
               </button>
               <button
                 onClick={confirmClose}
@@ -1248,7 +1248,7 @@ export function ProjectRoomPage() {
                 {closingConversation
                   ? <Loader2 className="w-4 h-4 animate-spin" />
                   : <LogOut className="w-4 h-4" />}
-                {closingConversation ? (lang === 'en' ? 'Closing…' : 'Afsluiten…') : (lang === 'en' ? 'Close conversation' : 'Gesprek afsluiten')}
+                {closingConversation ? t('room.closing') : t('room.closeConversation')}
               </button>
             </div>
           </div>
@@ -1260,24 +1260,24 @@ export function ProjectRoomPage() {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-1">
-              {showCheckpointModal === 'final' ? (lang === 'en' ? 'Finalise project' : 'Project afronden') : (lang === 'en' ? 'Interim checkpoint' : 'Tussentijdse checkpoint')}
+              {showCheckpointModal === 'final' ? t('room.checkpointTitleFinal') : t('room.checkpointTitleInterim')}
             </h2>
 
             {/* ── kind='final': reflectie-textarea (ongewijzigd) ── */}
             {showCheckpointModal === 'final' && (
               <>
                 <p className="text-sm text-gray-600 mb-4">
-                  {lang === 'en' ? 'Write a joint final reflection. The supervisor gives feedback per rubric criterion and adds it to everyone\'s learning journal.' : 'Schrijf een gezamenlijke eindreflectie. De begeleider geeft per rubriekspunt feedback en zet die in ieders leerdagboek.'}
+                  {t('room.finalReflectionSub')}
                 </p>
                 <textarea
                   value={reflection}
                   onChange={e => setReflection(e.target.value)}
                   rows={10}
-                  placeholder={lang === 'en' ? 'What have you done? What do you still not understand? What is the next step?' : 'Wat hebben jullie gedaan? Wat snappen jullie nog niet? Wat is de volgende stap?'}
+                  placeholder={t('room.reflectionPlaceholder')}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                   data-testid="textarea-reflection"
                 />
-                <div className="text-xs text-gray-400 mt-1">{reflection.trim().length} {lang === 'en' ? 'characters · minimum 20' : 'tekens · minimaal 20'}</div>
+                <div className="text-xs text-gray-400 mt-1">{reflection.trim().length} {t('room.characters')} · {t('room.minimum')} 20</div>
               </>
             )}
 
@@ -1285,13 +1285,13 @@ export function ProjectRoomPage() {
             {showCheckpointModal === 'checkpoint' && (
               <>
                 <p className="text-sm text-gray-600 mb-4">
-                  {lang === 'en' ? 'Below are automatic summaries of your conversations. Adjust them if you wish and save them to your learning journals.' : 'Hieronder staan automatische samenvattingen van jullie gesprekken. Pas ze aan als je dat wilt en sla ze op in jullie leerdagboeken.'}
+                  {t('room.checkpointSub')}
                 </p>
 
                 {checkpointPreviewLoading && (
                   <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-500" data-testid="checkpoint-preview-loading">
                     <Loader2 className="w-7 h-7 animate-spin text-blue-500" />
-                    <span className="text-sm">{lang === 'en' ? 'Creating summaries…' : 'Samenvattingen worden gemaakt…'}</span>
+                    <span className="text-sm">{t('room.creatingSummaries')}</span>
                   </div>
                 )}
 
@@ -1303,33 +1303,33 @@ export function ProjectRoomPage() {
 
                 {!checkpointPreviewLoading && !checkpointPreviewError && checkpointPreview !== null && checkpointPreview.length === 0 && (
                   <p className="text-sm text-gray-500 italic py-4" data-testid="checkpoint-preview-empty">
-                    {lang === 'en' ? 'No conversations found to summarise.' : 'Geen gesprekken gevonden om samen te vatten.'}
+                    {t('room.noConversationsToSummarise')}
                   </p>
                 )}
 
                 {!checkpointPreviewLoading && checkpointPreview && checkpointPreview.length > 0 && (
                   <div className="space-y-5" data-testid="checkpoint-preview-threads">
-                    {checkpointPreview.map(t => (
-                      <div key={t.threadId} className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+                    {checkpointPreview.map(thread => (
+                      <div key={thread.threadId} className="border border-gray-200 rounded-xl p-4 bg-gray-50">
                         <div className="flex items-center gap-2 mb-3">
-                          <span className="text-xl">{t.avatarEmoji}</span>
-                          <span className="font-semibold text-gray-800 text-sm">{t.personaName}</span>
+                          <span className="text-xl">{thread.avatarEmoji}</span>
+                          <span className="font-semibold text-gray-800 text-sm">{thread.personaName}</span>
                         </div>
-                        <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? 'Your questions/input' : 'Jouw vragen/input'}</label>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">{t('room.yourQuestions')}</label>
                         <textarea
-                          value={t.studentSummary}
-                          onChange={e => updatePreviewSummary(t.threadId, 'studentSummary', e.target.value)}
+                          value={thread.studentSummary}
+                          onChange={e => updatePreviewSummary(thread.threadId, 'studentSummary', e.target.value)}
                           rows={3}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white mb-3 resize-none"
-                          data-testid={`textarea-student-summary-${t.threadId}`}
+                          data-testid={`textarea-student-summary-${thread.threadId}`}
                         />
-                        <label className="block text-xs font-medium text-gray-500 mb-1">{lang === 'en' ? `Response from ${t.personaName}` : `Reactie van ${t.personaName}`}</label>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">{t('room.responseFrom', { name: thread.personaName })}</label>
                         <textarea
-                          value={t.personaSummary}
-                          onChange={e => updatePreviewSummary(t.threadId, 'personaSummary', e.target.value)}
+                          value={thread.personaSummary}
+                          onChange={e => updatePreviewSummary(thread.threadId, 'personaSummary', e.target.value)}
                           rows={5}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white resize-none"
-                          data-testid={`textarea-persona-summary-${t.threadId}`}
+                          data-testid={`textarea-persona-summary-${thread.threadId}`}
                         />
                       </div>
                     ))}
@@ -1341,12 +1341,12 @@ export function ProjectRoomPage() {
                   <div className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4" data-testid="checkpoint-synthesis">
                     <div className="flex items-center gap-2 mb-3">
                       <ScrollText className="w-4 h-4 text-indigo-600" />
-                      <h3 className="font-semibold text-indigo-900 text-sm">{lang === 'en' ? 'Overview across all conversations' : 'Overzicht over alle gesprekken'}</h3>
+                      <h3 className="font-semibold text-indigo-900 text-sm">{t('room.overviewAllConversations')}</h3>
                     </div>
 
                     {checkpointSynthesis.overeenstemming.length > 0 && (
                       <div className="mb-3">
-                        <p className="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide mb-1.5">{lang === 'en' ? 'Agreement' : 'Overeenstemming'}</p>
+                        <p className="text-[10px] font-semibold text-indigo-700 uppercase tracking-wide mb-1.5">{t('room.agreement')}</p>
                         <ul className="space-y-1">
                           {checkpointSynthesis.overeenstemming.map((item, i) => (
                             <li key={i} className="flex gap-2 text-xs text-gray-800">
@@ -1359,7 +1359,7 @@ export function ProjectRoomPage() {
 
                     {checkpointSynthesis.spanningspunten.length > 0 && (
                       <div className="mb-3">
-                        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">{lang === 'en' ? 'Tensions' : 'Spanningspunten'}</p>
+                        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">{t('room.tensions')}</p>
                         <ul className="space-y-1">
                           {checkpointSynthesis.spanningspunten.map((item, i) => (
                             <li key={i} className="flex gap-2 text-xs text-gray-800">
@@ -1372,7 +1372,7 @@ export function ProjectRoomPage() {
 
                     {checkpointSynthesis.suggesties.length > 0 && (
                       <div>
-                        <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide mb-1.5">{lang === 'en' ? 'Suggestions for follow-up' : 'Suggesties voor vervolg'}</p>
+                        <p className="text-[10px] font-semibold text-green-700 uppercase tracking-wide mb-1.5">{t('room.suggestionsFollowup')}</p>
                         <ul className="space-y-1">
                           {checkpointSynthesis.suggesties.map((item, i) => (
                             <li key={i} className="flex gap-2 text-xs text-gray-800">
@@ -1391,16 +1391,16 @@ export function ProjectRoomPage() {
             {checkpointSaved && (
               <div className="mt-5 rounded-xl bg-blue-50 border border-blue-200 p-5 text-center" data-testid="checkpoint-saved-confirmation">
                 <CheckCircle2 className="w-10 h-10 text-blue-500 mx-auto mb-3" />
-                <p className="font-semibold text-gray-900 mb-1">{lang === 'en' ? 'Checkpoint saved!' : 'Checkpoint opgeslagen!'}</p>
+                <p className="font-semibold text-gray-900 mb-1">{t('room.checkpointSaved')}</p>
                 <p className="text-sm text-gray-600 mb-4">
-                  {lang === 'en' ? 'The summaries are in your learning journals. The project is still open — you can continue with the conversations.' : 'De samenvattingen staan in jullie leerdagboeken. Het project staat nog open — je kunt gewoon doorgaan met de gesprekken.'}
+                  {t('room.checkpointSavedSub')}
                 </p>
                 <button
                   onClick={() => { setShowCheckpointModal(null); setCheckpointSaved(false); }}
                   className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
                   data-testid="button-continue-after-checkpoint"
                 >
-                  {lang === 'en' ? 'Continue with the project' : 'Ga verder met het project'}
+                  {t('room.continueWithProject')}
                 </button>
               </div>
             )}
@@ -1412,7 +1412,7 @@ export function ProjectRoomPage() {
                   className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg text-sm"
                   data-testid="button-cancel-checkpoint"
                 >
-                  {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                  {t('common.cancel')}
                 </button>
                 {/* Sla-knop: verberg bij lege preview of preview-fout */}
                 {!(showCheckpointModal === 'checkpoint' && (checkpointPreviewError !== null || (checkpointPreview !== null && checkpointPreview.length === 0))) && (
@@ -1426,7 +1426,7 @@ export function ProjectRoomPage() {
                     className={`px-4 py-2 text-white rounded-lg text-sm disabled:opacity-40 ${showCheckpointModal === 'final' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                     data-testid="button-submit-checkpoint"
                   >
-                    {submittingCheckpoint ? (lang === 'en' ? 'Please wait…' : 'Even geduld…') : (showCheckpointModal === 'final' ? (lang === 'en' ? 'Finalise + save' : 'Afronden + opslaan') : (lang === 'en' ? 'Save to learning journal' : 'Opslaan in leerdagboek'))}
+                    {submittingCheckpoint ? t('room.pleaseWait') : (showCheckpointModal === 'final' ? t('room.finaliseAndSave') : t('room.saveToJournal'))}
                   </button>
                 )}
               </div>

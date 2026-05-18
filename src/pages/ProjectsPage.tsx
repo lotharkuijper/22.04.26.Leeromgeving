@@ -48,7 +48,7 @@ export function ProjectsPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Kon projecten niet laden');
+      if (!r.ok) throw new Error(d.error || t('projects.couldNotLoad'));
       setOverview(d.courses || []);
     } catch (e: any) {
       setError(e.message);
@@ -72,7 +72,7 @@ export function ProjectsPage() {
         body: JSON.stringify({ projectId: p.id }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Creation failed' : 'Aanmaken mislukt'));
+      if (!r.ok) throw new Error(d.error || t('projects.creationFailed'));
       // Sessie-record wordt server-side aangemaakt (supabaseAdmin).
       navigate(`/projects/${p.id}/group/${d.group.id}`);
     } catch (e: any) {
@@ -99,7 +99,7 @@ export function ProjectsPage() {
         body: JSON.stringify({ projectId: p.id }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Restart failed' : 'Herstarten mislukt'));
+      if (!r.ok) throw new Error(d.error || t('projects.restartFailed'));
       setRestartConfirm(null);
       await load();
       await startNew(p);
@@ -121,7 +121,7 @@ export function ProjectsPage() {
         body: JSON.stringify({ inviteCode: inviteCode.trim() }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Join failed' : 'Aansluiten mislukt'));
+      if (!r.ok) throw new Error(d.error || t('projects.joinFailed'));
       // Sessie-record wordt server-side aangemaakt (supabaseAdmin).
       setJoinDialog(false); setInviteCode('');
       navigate(`/projects/${d.group.project_id}/group/${d.group.id}`);
@@ -139,7 +139,7 @@ export function ProjectsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-1">{t('projects.title')}</h1>
-          <p className="text-gray-600">{lang === 'en' ? 'Work in groups on a research project. You can start over or continue with your previous work.' : 'Werk in groepen aan een onderzoeksproject. Je kunt opnieuw beginnen of doorgaan met je vorige werk.'}</p>
+          <p className="text-gray-600">{t('projects.subtitle')}</p>
         </div>
         <button onClick={() => setJoinDialog(true)} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg text-sm font-medium" data-testid="button-open-join">
           <Users className="w-4 h-4" /> {t('projects.joinWithCode')}
@@ -156,7 +156,7 @@ export function ProjectsPage() {
       {overview.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-500">
           <FolderOpen className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-          <p>{lang === 'en' ? 'You are not yet linked to a course with projects. Ask your lecturer to add you.' : 'Je bent nog niet aan een cursus met projecten gekoppeld. Vraag je docent om je toe te voegen.'}</p>
+          <p>{t('projects.notLinked')}</p>
         </div>
       ) : (
         overview.map(c => (
@@ -165,11 +165,11 @@ export function ProjectsPage() {
               <h2 className="font-semibold text-gray-900 flex items-center gap-2">
                 <BookOpen className="w-4 h-4" /> {c.course.name}
               </h2>
-              <p className="text-xs text-gray-500">{lang === 'en' ? `${c.projects.length} project${c.projects.length === 1 ? '' : 's'} available` : `${c.projects.length} project${c.projects.length === 1 ? '' : 'en'} beschikbaar`}</p>
+              <p className="text-xs text-gray-500">{c.projects.length === 1 ? t('projects.projectCountSingular', { count: '1' }) : t('projects.projectCountPlural', { count: String(c.projects.length) })}</p>
             </div>
             <div className="p-6">
               {c.projects.length === 0 ? (
-                <p className="text-sm text-gray-500">{lang === 'en' ? 'No active projects in this course yet.' : 'Nog geen actieve projecten in deze cursus.'}</p>
+                <p className="text-sm text-gray-500">{t('projects.noActiveProjects')}</p>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {c.projects.map(p => {
@@ -183,9 +183,9 @@ export function ProjectsPage() {
                           <div className="font-bold text-gray-900">{p.title}</div>
                           <p className="text-xs text-gray-500 line-clamp-2 mt-1">{p.research_question}</p>
                           <div className="text-[10px] text-gray-400 mt-1">
-                            {lang === 'en' ? `group ${p.min_group_size ?? 1}–${p.max_group_size ?? 5}` : `groep ${p.min_group_size ?? 1}–${p.max_group_size ?? 5}`}
-                            {inProgress && <span className="ml-2 inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{lang === 'en' ? 'in progress' : 'bezig'}</span>}
-                            {completed && !inProgress && <span className="ml-2 inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded">{lang === 'en' ? 'previously completed' : 'eerder afgerond'}</span>}
+                            {t('projects.groupSize', { min: String(p.min_group_size ?? 1), max: String(p.max_group_size ?? 5) })}
+                            {inProgress && <span className="ml-2 inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{t('projects.inProgress')}</span>}
+                            {completed && !inProgress && <span className="ml-2 inline-block px-1.5 py-0.5 bg-green-100 text-green-700 rounded">{t('projects.previouslyCompleted')}</span>}
                           </div>
                         </div>
                         <div className="flex flex-col gap-2 mt-auto">
@@ -198,13 +198,13 @@ export function ProjectsPage() {
                               <ArrowRight className="w-4 h-4" />
                               {p.activeGroup?.lastCheckpointAt ? (
                                 <span className="flex flex-col items-start leading-tight">
-                                  <span>{lang === 'en' ? 'Continue' : 'Ga verder'}</span>
+                                  <span>{t('projects.continue2')}</span>
                                   <span className="text-[10px] font-normal opacity-80">
-                                    {lang === 'en' ? 'Last checkpoint:' : 'Laatste checkpoint:'} {new Date(p.activeGroup.lastCheckpointAt).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                    {t('projects.lastCheckpoint')} {new Date(p.activeGroup.lastCheckpointAt).toLocaleString(t('common.locale'), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                                   </span>
                                 </span>
                               ) : (
-                                <span>{lang === 'en' ? 'Continue' : 'Ga verder'}</span>
+                                <span>{t('projects.continue2')}</span>
                               )}
                             </button>
                           )}
@@ -214,7 +214,7 @@ export function ProjectsPage() {
                             className="flex items-center justify-center gap-2 px-3 py-2 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 disabled:opacity-40"
                             data-testid={`button-start-${p.id}`}
                           >
-                            <PlayCircle className="w-4 h-4" /> {lang === 'en' ? 'Start new project' : 'Start nieuw project'}
+                            <PlayCircle className="w-4 h-4" /> {t('projects.startNewProject')}
                           </button>
                           {(inProgress || completed) && (
                             <button
@@ -223,7 +223,7 @@ export function ProjectsPage() {
                               className="flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-40"
                               data-testid={`button-restart-${p.id}`}
                             >
-                              <RefreshCw className="w-4 h-4" /> {lang === 'en' ? 'Start over' : 'Opnieuw beginnen'}
+                              <RefreshCw className="w-4 h-4" /> {t('projects.startOver')}
                             </button>
                           )}
                         </div>
@@ -240,26 +240,18 @@ export function ProjectsPage() {
       {restartConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6">
-            <h3 className="text-lg font-bold mb-2">{lang === 'en' ? 'Start over?' : 'Opnieuw beginnen?'}</h3>
+            <h3 className="text-lg font-bold mb-2">{t('projects.startOverTitle')}</h3>
             <p className="text-sm text-gray-600 mb-3">
-              {lang === 'en'
-                ? <span>Your current session of <strong>"{restartConfirm.title}"</strong> will be left and you will exit the group.</span>
-                : <span>Je huidige sessie van <strong>"{restartConfirm.title}"</strong> wordt verlaten en je stapt uit de groep.</span>}
+              <span>{t('projects.restartConfirmBefore')} <strong>"{restartConfirm.title}"</strong> {t('projects.restartConfirmAfter')}</span>
             </p>
             <ul className="text-sm text-gray-600 mb-4 space-y-1">
-              {lang === 'en' ? <>
-                <li className="flex items-start gap-1.5"><span className="text-green-600 mt-0.5">✓</span> Your checkpoints and learning journal notes are kept.</li>
-                <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> The conversations in the project room will no longer be visible to you — your group members can still access them.</li>
-                <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> A new, empty project room with a new group will then start.</li>
-              </> : <>
-                <li className="flex items-start gap-1.5"><span className="text-green-600 mt-0.5">✓</span> Jullie checkpoints en leerdagboek-notities blijven bewaard.</li>
-                <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> De gesprekken in de projectkamer zijn daarna niet meer zichtbaar voor jou — je groepsgenoten kunnen er nog wel bij.</li>
-                <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> Daarna start een nieuwe, lege projectkamer met een nieuwe groep.</li>
-              </>}
+              <li className="flex items-start gap-1.5"><span className="text-green-600 mt-0.5">✓</span> {t('projects.restartBullet1')}</li>
+              <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> {t('projects.restartBullet2')}</li>
+              <li className="flex items-start gap-1.5"><span className="text-orange-500 mt-0.5">!</span> {t('projects.restartBullet3')}</li>
             </ul>
-            <p className="text-sm font-medium text-gray-800 mb-4">{lang === 'en' ? <span>Do you really want to start over instead of <span className="text-blue-700">"Continue"</span>?</span> : <span>Wil je echt opnieuw beginnen in plaats van <span className="text-blue-700">"Ga verder"</span>?</span>}</p>
+            <p className="text-sm font-medium text-gray-800 mb-4"><span>{t('projects.restartQuestionBefore')} <span className="text-blue-700">"{t('projects.restartQuestionLink')}"</span>{t('projects.restartQuestionAfter')}</span></p>
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setRestartConfirm(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-restart-cancel">{lang === 'en' ? 'Cancel — continue after all' : 'Annuleren — ga toch verder'}</button>
+              <button onClick={() => setRestartConfirm(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-restart-cancel">{t('projects.cancelContinue')}</button>
               <button onClick={() => restart(restartConfirm)} disabled={busyProjectId === restartConfirm.id} className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-40" data-testid="button-restart-confirm">
                 {busyProjectId === restartConfirm.id ? t('common.loading') : t('projects.restart')}
               </button>
@@ -271,12 +263,12 @@ export function ProjectsPage() {
       {joinDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6">
-            <h3 className="text-lg font-bold mb-2">{lang === 'en' ? 'Join a group' : 'Aansluiten bij een groep'}</h3>
-            <p className="text-sm text-gray-600 mb-3">{lang === 'en' ? 'Enter the invite code you received from a group member.' : 'Vul de invite-code in die je van een groepsgenoot hebt gekregen.'}</p>
+            <h3 className="text-lg font-bold mb-2">{t('projects.joinAGroup')}</h3>
+            <p className="text-sm text-gray-600 mb-3">{t('projects.enterInviteCode')}</p>
             <input
               value={inviteCode}
               onChange={e => setInviteCode(e.target.value.toUpperCase())}
-              placeholder={lang === 'en' ? 'e.g. ABC123' : 'bijv. ABC123'}
+              placeholder={t('projects.codeExample')}
               className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono uppercase"
               data-testid="input-invite-code"
             />

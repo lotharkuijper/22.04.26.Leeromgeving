@@ -93,7 +93,7 @@ export function ResourcesPage() {
     const { data, error } = await supabase.storage
       .from(resource.bucket)
       .download(resource.file_path);
-    if (error) { alert(lang === 'en' ? `Download error: ${error.message}` : `Fout bij downloaden: ${error.message}`); return; }
+    if (error) { alert(t('resources.downloadError', { message: error.message })); return; }
     const url = URL.createObjectURL(data);
     const a = document.createElement('a');
     a.href = url;
@@ -133,7 +133,7 @@ export function ResourcesPage() {
             </span>
           )}
           {resource.file_size > 0 && <span>{formatFileSize(resource.file_size)}</span>}
-          <span>{new Date(resource.created_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'nl-NL')}</span>
+          <span>{new Date(resource.created_at).toLocaleDateString(t('common.locale'))}</span>
         </div>
         {resource.description && (
           <p className="text-xs text-gray-500 mt-0.5 truncate">{resource.description}</p>
@@ -145,7 +145,7 @@ export function ResourcesPage() {
         data-testid={`download-btn-${resource.id}`}
       >
         <Download className="w-3.5 h-3.5" />
-        {lang === 'en' ? 'Download' : 'Download'}
+        {t('resources.download')}
       </button>
     </div>
   );
@@ -163,7 +163,7 @@ export function ResourcesPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">{t('resources.title')}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {lang === 'en' ? `Available files for ${activeCourse?.name ?? 'this course'}` : `Beschikbare bestanden voor ${activeCourse?.name ?? 'deze cursus'}`}
+            {t('resources.availableFor', { name: activeCourse?.name ?? t('resources.thisCourse') })}
           </p>
         </div>
         <div className="relative w-60">
@@ -185,11 +185,11 @@ export function ResourcesPage() {
           <BookOpen className="w-5 h-5 text-blue-600 flex-shrink-0" />
           <h2 className="text-base font-semibold text-gray-900">{t('resources.courseFiles')}</h2>
           <span className="ml-auto text-xs text-gray-400 font-medium">
-            {lang === 'en' ? `${filteredRag.length} file${filteredRag.length !== 1 ? 's' : ''}` : `${filteredRag.length} bestand${filteredRag.length !== 1 ? 'en' : ''}`}
+            {filteredRag.length === 1 ? t('resources.fileCountSingular', { count: '1' }) : t('resources.fileCountPlural', { count: String(filteredRag.length) })}
           </span>
         </div>
         <p className="text-xs text-gray-500 mb-4 ml-7">
-          {lang === 'en' ? 'Documents that serve as a knowledge source for Chat, Explain and Quiz.' : 'Documenten die als kennisbron dienen voor Chat, Ik Leg Uit en Quiz.'}
+          {t('resources.courseFilesDesc')}
         </p>
         {filteredRag.length === 0
           ? <EmptyState search={!!searchQuery} />
@@ -203,11 +203,11 @@ export function ResourcesPage() {
           <FileText className="w-5 h-5 text-purple-600 flex-shrink-0" />
           <h2 className="text-base font-semibold text-gray-900">{t('resources.otherFiles')}</h2>
           <span className="ml-auto text-xs text-gray-400 font-medium">
-            {lang === 'en' ? `${filteredOther.length} file${filteredOther.length !== 1 ? 's' : ''}` : `${filteredOther.length} bestand${filteredOther.length !== 1 ? 'en' : ''}`}
+            {filteredOther.length === 1 ? t('resources.fileCountSingular', { count: '1' }) : t('resources.fileCountPlural', { count: String(filteredOther.length) })}
           </span>
         </div>
         <p className="text-xs text-gray-500 mb-4 ml-7">
-          {lang === 'en' ? 'Datasets and other files made available by the lecturer.' : 'Datasets en overige bestanden beschikbaar gesteld door de docent.'}
+          {t('resources.otherFilesDesc')}
         </p>
         {loading ? (
           <div className="flex justify-center py-8">
