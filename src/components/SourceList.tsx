@@ -24,11 +24,12 @@ interface SourceListProps {
   idPrefix?: string;
 }
 
-function dedupeByTitle(items: SourceItem[]): SourceItem[] {
+function dedupeByDocument(items: SourceItem[]): SourceItem[] {
   const best = new Map<string, SourceItem>();
   for (const s of items) {
-    const cur = best.get(s.title);
-    if (!cur || s.similarity > cur.similarity) best.set(s.title, s);
+    const key = s.documentId ? `id:${s.documentId}` : `t:${s.title}`;
+    const cur = best.get(key);
+    if (!cur || s.similarity > cur.similarity) best.set(key, s);
   }
   return Array.from(best.values()).sort((a, b) => b.similarity - a.similarity);
 }
@@ -53,7 +54,7 @@ export function SourceList({
   const idNs = idPrefix ?? headingId.replace(/[:]/g, '');
   if (sources.length === 0) return null;
 
-  const list = dedupe ? dedupeByTitle(sources) : sources;
+  const list = dedupe ? dedupeByDocument(sources) : sources;
   const headingLabel = `${label} (${list.length} uniek)`;
 
   return (

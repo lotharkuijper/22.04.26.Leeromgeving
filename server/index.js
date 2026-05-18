@@ -1112,6 +1112,68 @@ app.delete('/api/admin/folders/:folderId', async (req, res) => {
   }
 });
 
+// GET /api/rag/documents/:documentId/download — student/docent-vriendelijke
+// download van een RAG-bron. Toegang volgt dezelfde folder_permissions-regels
+// als de RAG-zoek: rol moet can_view hebben op de folder van het document.
+app.get('/api/rag/documents/:documentId/download', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const role = auth.profile?.role || 'student';
+  const isAdmin = role === 'admin' || auth.profile?.email === SUPERUSER_EMAIL;
+  const { documentId } = req.params;
+  try {
+    const { data: doc } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
+      .eq('id', documentId)
+      .maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    // Alleen RAG-bron documenten via deze route serveren.
+    if (doc.bucket && doc.bucket !== 'rag_sources') {
+      return res.status(403).json({ error: 'Dit document is geen RAG-bron.' });
+    }
+    if (!isAdmin) {
+      if (!doc.folder_id) return res.status(403).json({ error: 'Geen toegang tot dit document.' });
+      const { data: perm } = await supabaseAdmin
+        .from('folder_permissions')
+        .select('can_view')
+        .eq('folder_id', doc.folder_id)
+        .eq('role', role)
+        .maybeSingle();
+      if (!perm?.can_view) return res.status(403).json({ error: 'Geen toegang tot dit document.' });
+    }
+    const filename = String(doc.filename || doc.title || 'download').replace(/[\r\n"]/g, '_');
+    const mimeType = doc.mime_type || getFileMimeType((doc.file_type || '').toLowerCase());
+    if (!doc.file_path && pgPool) {
+      const result = await pgPool.query(
+        'SELECT file_bytes, mime_type FROM documents WHERE id = $1',
+        [documentId]
+      );
+      const row = result.rows[0];
+      if (row?.file_bytes) {
+        const resolvedMime = row.mime_type || mimeType;
+        res.setHeader('Content-Type', resolvedMime);
+        res.setHeader('Content-Length', row.file_bytes.length);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.end(row.file_bytes);
+      }
+    }
+    if (doc.file_path && doc.bucket) {
+      const { data: signed, error: signErr } = await supabaseAdmin.storage
+        .from(doc.bucket)
+        .createSignedUrl(doc.file_path, 120);
+      if (signErr || !signed?.signedUrl) {
+        return res.status(500).json({ error: 'Kon geen downloadlink aanmaken.' });
+      }
+      return res.redirect(signed.signedUrl);
+    }
+    return res.status(404).json({ error: 'Dit document heeft geen downloadbaar bestand.' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/documents/:documentId/download — download (file_bytes via pgPool én storage, admin only)
 app.get('/api/admin/documents/:documentId/download', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });

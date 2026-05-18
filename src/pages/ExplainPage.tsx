@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, ragDocumentDownloadUrl } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
@@ -54,7 +54,7 @@ function FeedbackBlock({
   t,
 }: {
   feedback: string;
-  retrievedSources: Array<{ title: string; similarity: number }>;
+  retrievedSources: Array<{ title: string; similarity: number; documentId?: string; href?: string }>;
   retrievedStats: { threshold: number; maxSimilarity: number; candidatesConsidered: number; searchPerformed: boolean } | null;
   viewerRole?: string;
   t: (k: string) => string;
@@ -73,7 +73,7 @@ function FeedbackBlock({
       <h3 className="text-xl font-bold text-gray-900 mb-4">{t('explain.feedback')}</h3>
       <MarkdownMessage
         content={feedback}
-        sources={retrievedSources.map((s, i) => ({ index: i + 1, title: s.title }))}
+        sources={retrievedSources.map((s, i) => ({ index: i + 1, title: s.title, href: s.href }))}
         onCitationClick={handleCitationClick}
       />
       {/\(buiten\s+(?:het\s+|dit\s+|de\s+)?cursusmateriaal\)/i.test(feedback) && (
@@ -124,7 +124,7 @@ export function ExplainPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'epidemiologie' | 'biostatistiek'>('all');
   const [profileTimeout, setProfileTimeout] = useState(false);
-  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number }>>([]);
+  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string }>>([]);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [retrievedStats, setRetrievedStats] = useState<{
     threshold: number;
@@ -390,6 +390,8 @@ export function ExplainPage() {
       const allSources = chunks.map(chunk => ({
         title: chunk.documentTitle,
         similarity: chunk.similarity,
+        documentId: chunk.documentId,
+        href: ragDocumentDownloadUrl(chunk.documentId),
       }));
       // Studenten zien per bron-document maximaal de top 3 (de meest relevante
       // hoofdstukken). Alle chunks gaan nog wel mee als context naar het LLM.

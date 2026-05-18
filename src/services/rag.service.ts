@@ -8,6 +8,7 @@ export interface DocumentChunk {
   id: string;
   content: string;
   documentTitle: string;
+  documentId?: string;
   similarity: number;
   metadata: unknown;
 }
@@ -262,6 +263,7 @@ export async function searchRelevantChunksWithStats(
         id: chunk.id,
         content: chunk.content,
         documentTitle: chunk.document_title,
+        documentId: chunk.document_id,
         similarity: chunk.similarity,
         metadata: chunk.metadata,
       })),
@@ -378,21 +380,31 @@ export function formatContextFromChunks(chunks: DocumentChunk[]): string {
 // Reduceer een (mogelijk lange) lijst chunk-niveau bronnen tot maximaal `topN`
 // unieke documenten. Per documentnaam wordt de hoogste similarity behouden,
 // resterende worden verwijderd. Sortering: hoogste similarity eerst.
-export function dedupeSourcesByDocument<T extends { title: string; similarity: number }>(
+export function dedupeSourcesByDocument<T extends { title: string; similarity: number; documentId?: string }>(
   sources: T[],
   topN: number = 3
 ): T[] {
   if (sources.length === 0 || topN <= 0) return [];
   const bestPerDoc = new Map<string, T>();
   for (const src of sources) {
-    const existing = bestPerDoc.get(src.title);
+    // Bij voorkeur dedupliceren op documentId zodat verschillende documenten met
+    // dezelfde titel niet ten onrechte worden samengevoegd; fallback op titel.
+    const key = src.documentId ? `id:${src.documentId}` : `t:${src.title}`;
+    const existing = bestPerDoc.get(key);
     if (!existing || src.similarity > existing.similarity) {
-      bestPerDoc.set(src.title, src);
+      bestPerDoc.set(key, src);
     }
   }
   return Array.from(bestPerDoc.values())
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, topN);
+}
+
+// Bouw een veilig href voor het downloaden van een RAG-document. Geeft undefined
+// terug wanneer er geen documentId beschikbaar is.
+export function ragDocumentDownloadUrl(documentId?: string): string | undefined {
+  if (!documentId) return undefined;
+  return `/api/rag/documents/${encodeURIComponent(documentId)}/download`;
 }
 
 export function buildContextWithCap(
