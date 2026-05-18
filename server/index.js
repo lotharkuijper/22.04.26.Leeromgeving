@@ -1131,7 +1131,7 @@ app.get('/api/rag/documents/:documentId/download', async (req, res) => {
       .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
       .eq('id', documentId)
       .maybeSingle();
-    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    if (!doc) return res.status(404).json({ error: `Document niet gevonden (id=${documentId}). De RAG-chunk verwijst mogelijk naar een verwijderd document — synchroniseer de RAG-index opnieuw.` });
     // Alleen RAG-bron documenten via deze route serveren.
     if (doc.bucket && doc.bucket !== 'rag_sources') {
       return res.status(403).json({ error: 'Dit document is geen RAG-bron.' });
@@ -3812,6 +3812,24 @@ async function initChatbotPromptSection() {
 
     promptsHasSection = true;
 
+    // Forceer quiz-prompts (QUIZ_PROMPT_DEFAULTS) naar section='quiz'. Een
+    // eerdere versie van deze migratie zette álle ongesectioneerde rijen op
+    // 'chat', waardoor bv. `quiz_evaluate_open` per ongeluk als chat-prompt
+    // kon verschijnen.
+    try {
+      const quizNames = Object.keys(QUIZ_PROMPT_DEFAULTS);
+      const { error: quizFixErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ section: 'quiz' })
+        .in('name', quizNames)
+        .neq('section', 'quiz');
+      if (quizFixErr) {
+        console.warn('[init] Quiz-prompts naar sectie "quiz" verplaatsen mislukt:', quizFixErr.message);
+      }
+    } catch (quizFixCatch) {
+      console.warn('[init] Quiz-prompts sectie-fix exception:', quizFixCatch.message);
+    }
+
     // Zet onbekende prompts in sectie 'chat', maar laat interne config-rijen
     // (`__quiz_itembank_config__`, `__doc_mutation_%`, `__concepts_regen_%`)
     // met rust — die zijn géén chat-prompts en mogen niet door /api/chat
@@ -3843,14 +3861,18 @@ async function initChatbotPromptSection() {
 
     // Zorg dat er minstens één echte chat-prompt bestaat zodat /api/chat
     // niet meer naar de hard-coded FALLBACK_SYSTEM_PROMPT valt.
-    const { data: existingChat } = await supabaseAdmin
+    const quizNamesForExclude = Object.keys(QUIZ_PROMPT_DEFAULTS);
+    let existingChatQ = supabaseAdmin
       .from('chatbot_prompts')
       .select('id')
       .eq('section', 'chat')
       .eq('is_active', true)
-      .not('name', 'like', '__%')
-      .limit(1)
-      .maybeSingle();
+      .not('name', 'like', '\\_\\_%')
+      .neq('name', '__quiz_itembank_config__');
+    if (quizNamesForExclude.length > 0) {
+      existingChatQ = existingChatQ.not('name', 'in', `(${quizNamesForExclude.map(n => `"${n}"`).join(',')})`);
+    }
+    const { data: existingChat } = await existingChatQ.limit(1).maybeSingle();
     if (!existingChat) {
       const { error: chatInsertErr } = await supabaseAdmin
         .from('chatbot_prompts')

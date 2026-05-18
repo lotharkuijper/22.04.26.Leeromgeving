@@ -718,7 +718,7 @@ export function AdminPage() {
       content: promptContent,
       updated_at: new Date().toISOString(),
     };
-    if (editingPrompt.section === 'project' && editingPromptName.trim()) {
+    if (editingPromptName.trim() && editingPromptName.trim() !== editingPrompt.name) {
       updateFields.name = editingPromptName.trim();
     }
 
@@ -1488,7 +1488,7 @@ const tabGroups = [
                   </h3>
                   <p className="text-sm text-gray-500 mb-4">{editingPrompt.name}</p>
 
-                  {editingPrompt.section === 'project' && (
+                  {(editingPrompt.section === 'project' || editingPrompt.section === 'chat' || editingPrompt.section === 'explain' || !editingPrompt.section) && (
                     <div className="mb-3">
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.prompts.agentNameLabel')}</label>
                       <input
