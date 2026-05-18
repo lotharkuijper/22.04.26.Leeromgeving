@@ -121,7 +121,7 @@ export async function sendChatMessage(
     const userMessages = messages.filter(m => m.role !== 'system');
 
     const data = await callChatAPI({
-      model: 'gpt-4o-mini',
+      model: undefined,
       messages: userMessages,
       context,
       temperature: 0.7,
@@ -576,7 +576,7 @@ ${lang === 'en'
 
   try {
     const data = await callChatAPI({
-      model: 'gpt-4o-mini',
+      model: undefined,
       messages: [{ role: 'user', content: quizPrompt }],
       temperature: 0.7,
       max_tokens: maxTokens,

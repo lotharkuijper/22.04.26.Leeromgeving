@@ -61,6 +61,7 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
 const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
@@ -222,7 +223,6 @@ app.post('/api/chat', async (req, res) => {
   const {
     messages = [],
     context,
-    model = 'gpt-4o-mini',
     temperature = 0.7,
     top_p = 1,
     stream = false,
@@ -443,7 +443,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
               method: 'POST',
               headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                model: 'gpt-4o-mini',
+                model: OPENAI_MODEL,
                 messages: [{ role: 'user', content: summaryPrompt }],
                 temperature: 0.5,
                 max_tokens: 600,
@@ -1934,7 +1934,7 @@ ${combinedText}`;
           method: 'POST',
           headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'gpt-4o-mini',
+            model: OPENAI_MODEL,
             messages: [{ role: 'user', content: extractionPrompt }],
             temperature: 0.2,
             max_tokens: 8192,
@@ -2763,7 +2763,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
             method: 'POST',
             headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gpt-4o-mini',
+              model: OPENAI_MODEL,
               messages: [{ role: 'user', content: summaryPrompt }],
               temperature: 0.5,
               max_tokens: 600,
@@ -3005,7 +3005,7 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: OPENAI_MODEL,
         messages: [{ role: 'user', content: summaryPrompt }],
         temperature: 0.5,
         max_tokens: maxTokens,
@@ -3324,7 +3324,7 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
+          model: OPENAI_MODEL,
           messages: [{ role: 'user', content: summaryPrompt }],
           temperature: 0.5,
           max_tokens: 1000,
@@ -5266,7 +5266,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: OPENAI_MODEL,
         messages: [
           { role: 'system', content: systemContent },
           ...history.map(h => ({ role: h.role, content: h.content })),
@@ -5381,7 +5381,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
+          model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.2,
           max_tokens: 600,
@@ -5460,7 +5460,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'gpt-4o-mini',
+            model: OPENAI_MODEL,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.2,
             max_tokens: 600,
@@ -5585,7 +5585,7 @@ async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: OPENAI_MODEL,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: 800,
@@ -5664,7 +5664,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gpt-4o-mini',
+              model: OPENAI_MODEL,
               messages: [{ role: 'user', content: enMode
                 ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
                 : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
@@ -5678,7 +5678,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: 'gpt-4o-mini',
+              model: OPENAI_MODEL,
               messages: [{ role: 'user', content: enMode
                 ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
                 : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
@@ -5822,7 +5822,7 @@ Geen tekst buiten de JSON.`;
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
+          model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.4, max_tokens: 1500,
           response_format: { type: 'json_object' },
@@ -5857,7 +5857,7 @@ ${reflection}`;
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
+          model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.5, max_tokens: 700,
         }),
@@ -6078,7 +6078,7 @@ ${reflection}`;
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${apiKey2}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  model: 'gpt-4o-mini',
+                  model: OPENAI_MODEL,
                   messages: [{ role: 'user', content: sumPrompt }],
                   temperature: 0.3, max_tokens: 350,
                 }),
@@ -7291,7 +7291,7 @@ Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exact
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
+          model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.4, max_tokens: 1800,
         }),
@@ -7498,6 +7498,7 @@ if (fs.existsSync(path.join(distPath, 'index.html'))) {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[API Server] Running on port ${PORT}`);
+  console.log(`[API Server] OpenAI model: ${OPENAI_MODEL}`);
   detectConceptsCourseIdColumn();
   detectQuizAttemptsSchema();
   detectQuizSourcesSchema();

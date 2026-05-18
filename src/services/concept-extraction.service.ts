@@ -5,7 +5,7 @@ async function callChatAPI(messages: { role: string; content: string }[], option
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: undefined,
       messages,
       ...options,
     }),
