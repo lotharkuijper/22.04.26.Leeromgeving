@@ -393,6 +393,8 @@ export async function saveShareStatsConfig(config: {
       lastSyncedAt: config.lastSyncedAt,
     }),
     is_active: true,
+    // Interne config-rij — mag nooit als chat-/explain-prompt opgepikt worden.
+    section: 'internal',
   };
 
   // Upsert via select+insert/update. (chatbot_prompts heeft een unique op name.)

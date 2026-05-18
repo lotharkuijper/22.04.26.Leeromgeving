@@ -402,6 +402,7 @@ export function AdminPage() {
       .not('name', 'like', '__rag_settings%')
       .not('name', 'like', '__doc_mutation_%')
       .not('name', 'like', '__concepts_regen_%')
+      .neq('name', '__quiz_itembank_config__')
       .order('created_at', { ascending: false });
 
     if (error) {

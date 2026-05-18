@@ -274,6 +274,9 @@ app.post('/api/chat', async (req, res) => {
           .select('id, name, content')
           .eq('is_active', true)
           .not('name', 'like', '__rag_settings%')
+          .not('name', 'like', '__doc_mutation_%')
+          .not('name', 'like', '__concepts_regen_%')
+          .neq('name', '__quiz_itembank_config__')
           .order('updated_at', { ascending: false })
           .limit(1);
         if (promptsHasSection) {
@@ -3704,7 +3707,10 @@ app.get('/api/debug/active-prompts', async (req, res) => {
       .from('chatbot_prompts')
       .select('id, name')
       .eq('is_active', true)
-      .not('name', 'like', '__rag_settings%');
+      .not('name', 'like', '__rag_settings%')
+      .not('name', 'like', '__doc_mutation_%')
+      .not('name', 'like', '__concepts_regen_%')
+      .neq('name', '__quiz_itembank_config__');
     if (promptsHasSection) chatQuery = chatQuery.eq('section', 'chat');
     const { data } = await chatQuery.maybeSingle();
     result.chat = data
@@ -3806,11 +3812,60 @@ async function initChatbotPromptSection() {
 
     promptsHasSection = true;
 
+    // Zet onbekende prompts in sectie 'chat', maar laat interne config-rijen
+    // (`__quiz_itembank_config__`, `__doc_mutation_%`, `__concepts_regen_%`)
+    // met rust — die zijn géén chat-prompts en mogen niet door /api/chat
+    // worden opgepikt.
     await supabaseAdmin
       .from('chatbot_prompts')
       .update({ section: 'chat' })
       .not('name', 'like', '__rag_settings%')
-      .not('section', 'in', '("explain","project")');
+      .not('name', 'like', '__doc_mutation_%')
+      .not('name', 'like', '__concepts_regen_%')
+      .neq('name', '__quiz_itembank_config__')
+      .not('section', 'in', '("explain","project","quiz")');
+
+    // Verplaats per ongeluk eerder als 'chat' gemarkeerde interne config-
+    // rijen naar een aparte sectie zodat ze nooit meer als chat-prompt
+    // worden gezien.
+    try {
+      await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ section: 'internal' })
+        .or(
+          "name.eq.__quiz_itembank_config__," +
+          "name.like.__doc_mutation_%," +
+          "name.like.__concepts_regen_%"
+        );
+    } catch (cleanupErr) {
+      console.warn('[init] Interne config-rijen verplaatsen mislukt:', cleanupErr.message);
+    }
+
+    // Zorg dat er minstens één echte chat-prompt bestaat zodat /api/chat
+    // niet meer naar de hard-coded FALLBACK_SYSTEM_PROMPT valt.
+    const { data: existingChat } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('id')
+      .eq('section', 'chat')
+      .eq('is_active', true)
+      .not('name', 'like', '__%')
+      .limit(1)
+      .maybeSingle();
+    if (!existingChat) {
+      const { error: chatInsertErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .insert({
+          name: 'Chat evaluatie prompt',
+          content: FALLBACK_SYSTEM_PROMPT,
+          is_active: true,
+          section: 'chat',
+        });
+      if (chatInsertErr) {
+        console.warn('[init] Standaard chat-prompt aanmaken mislukt:', chatInsertErr.message);
+      } else {
+        console.log('[init] Standaard chat-prompt "Chat evaluatie prompt" aangemaakt');
+      }
+    }
 
     const { data: existingExplain } = await supabaseAdmin
       .from('chatbot_prompts')

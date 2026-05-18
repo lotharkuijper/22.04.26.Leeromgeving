@@ -4,6 +4,32 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { CitationText, type CitationSource } from './CitationText';
 
+// LLM-uitvoer gebruikt vaak LaTeX-delimiters \(...\) en \[...\]. remark-math
+// herkent standaard alleen $...$ / $$...$$, dus zetten we eerst de tex-
+// delimiters om. Inhoud binnen fenced of inline code blijft onveranderd.
+function normalizeLatexDelimiters(input: string): string {
+  if (!input) return input;
+  const parts: string[] = [];
+  const fenceRe = /(```[\s\S]*?```|`[^`\n]*`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fenceRe.exec(input)) !== null) {
+    if (m.index > last) parts.push(convertOutsideCode(input.slice(last, m.index)));
+    parts.push(m[0]);
+    last = m.index + m[0].length;
+  }
+  if (last < input.length) parts.push(convertOutsideCode(input.slice(last)));
+  return parts.join('');
+}
+
+function convertOutsideCode(s: string): string {
+  // Block-niveau: \[ ... \] → $$ ... $$
+  let out = s.replace(/\\\[([\s\S]+?)\\\]/g, (_match, body) => `$$${body}$$`);
+  // Inline: \( ... \) → $ ... $
+  out = out.replace(/\\\(([\s\S]+?)\\\)/g, (_match, body) => `$${body}$`);
+  return out;
+}
+
 interface MarkdownMessageProps {
   content: string;
   sources?: CitationSource[];
@@ -50,6 +76,7 @@ export function MarkdownMessage({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
+        skipHtml
         components={{
           p: ({ children }) => <p>{wrap(children)}</p>,
           li: ({ children }) => <li>{wrap(children)}</li>,
@@ -71,7 +98,7 @@ export function MarkdownMessage({
           ),
         }}
       >
-        {content}
+        {normalizeLatexDelimiters(content)}
       </ReactMarkdown>
     </div>
   );
