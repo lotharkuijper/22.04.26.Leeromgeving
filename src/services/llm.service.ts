@@ -115,7 +115,8 @@ async function callChatAPI(body: object): Promise<any> {
 export async function sendChatMessage(
   messages: Message[],
   context?: string,
-  ragStrictMode?: boolean
+  ragStrictMode?: boolean,
+  sources?: Array<{ title: string; similarity: number }>
 ): Promise<LLMResponse> {
   try {
     const userMessages = messages.filter(m => m.role !== 'system');
@@ -128,6 +129,7 @@ export async function sendChatMessage(
       top_p: 1,
       stream: false,
       ragStrictMode: ragStrictMode ?? false,
+      sources: sources && sources.length > 0 ? sources : undefined,
     });
 
     const content = data.choices[0]?.message?.content;

@@ -7,6 +7,7 @@ import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
 import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
+import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import { PromptDebugBadge } from '../components/PromptDebugBadge';
 import type { Database } from '../lib/database.types';
@@ -44,6 +45,71 @@ const RAG_DEFAULTS: RagSettings = {
   quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true,  query_expansion_enabled: false },
   project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false, query_expansion_enabled: false },
 };
+
+function FeedbackBlock({
+  feedback,
+  retrievedSources,
+  retrievedStats,
+  viewerRole,
+  t,
+}: {
+  feedback: string;
+  retrievedSources: Array<{ title: string; similarity: number }>;
+  retrievedStats: { threshold: number; maxSimilarity: number; candidatesConsidered: number; searchPerformed: boolean } | null;
+  viewerRole?: string;
+  t: (k: string) => string;
+}) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const idPrefix = 'explain-feedback';
+  const handleCitationClick = (idx: number) => {
+    setSourcesOpen(true);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`source-${idPrefix}-${idx}`);
+      if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  };
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 p-6">
+      <h3 className="text-xl font-bold text-gray-900 mb-4">{t('explain.feedback')}</h3>
+      <MarkdownMessage
+        content={feedback}
+        sources={retrievedSources.map((s, i) => ({ index: i + 1, title: s.title }))}
+        onCitationClick={handleCitationClick}
+      />
+      {/\(buiten\s+(?:het\s+|dit\s+|de\s+)?cursusmateriaal\)/i.test(feedback) && (
+        <div
+          className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"
+          data-testid="notice-external-knowledge"
+        >
+          <div className="flex items-start gap-2 mb-1">
+            <AlertCircle className="w-4 h-4 text-amber-700 mt-0.5 flex-shrink-0" />
+            <h4 className="text-sm font-semibold text-amber-900">{t('explain.externalKnowledgeTitle')}</h4>
+          </div>
+          <p className="text-sm text-amber-800">{t('explain.externalKnowledgeDesc')}</p>
+        </div>
+      )}
+      <SourceList
+        sources={retrievedSources}
+        showSimilarity={false}
+        open={sourcesOpen}
+        onOpenChange={setSourcesOpen}
+        idPrefix={idPrefix}
+      />
+      {retrievedStats && (
+        <div className="mt-4">
+          <RAGDiagnostics
+            matchCount={retrievedSources.length}
+            threshold={retrievedStats.threshold}
+            maxSimilarity={retrievedStats.maxSimilarity}
+            candidatesConsidered={retrievedStats.candidatesConsidered}
+            searchPerformed={retrievedStats.searchPerformed}
+            viewerRole={viewerRole}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ExplainPage() {
   const { t, lang } = useLanguage();
@@ -769,39 +835,13 @@ export function ExplainPage() {
               )}
 
               {feedback && (
-                <div className="bg-white rounded-2xl border border-gray-200 p-6">
-                  <h3 className="text-xl font-bold text-gray-900 mb-4">{t('explain.feedback')}</h3>
-                  <div className="prose max-w-none text-gray-700 whitespace-pre-wrap">
-                    {feedback}
-                  </div>
-                  {/\(buiten\s+(?:het\s+|dit\s+|de\s+)?cursusmateriaal\)/i.test(feedback) && (
-                    <div
-                      className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"
-                      data-testid="notice-external-knowledge"
-                    >
-                      <div className="flex items-start gap-2 mb-1">
-                        <AlertCircle className="w-4 h-4 text-amber-700 mt-0.5 flex-shrink-0" />
-                        <h4 className="text-sm font-semibold text-amber-900">{t('explain.externalKnowledgeTitle')}</h4>
-                      </div>
-                      <p className="text-sm text-amber-800">
-                        {t('explain.externalKnowledgeDesc')}
-                      </p>
-                    </div>
-                  )}
-                  <SourceList sources={retrievedSources} showSimilarity={false} />
-                  {retrievedStats && (
-                    <div className="mt-4">
-                      <RAGDiagnostics
-                        matchCount={retrievedSources.length}
-                        threshold={retrievedStats.threshold}
-                        maxSimilarity={retrievedStats.maxSimilarity}
-                        candidatesConsidered={retrievedStats.candidatesConsidered}
-                        searchPerformed={retrievedStats.searchPerformed}
-                        viewerRole={profile?.role}
-                      />
-                    </div>
-                  )}
-                </div>
+                <FeedbackBlock
+                  feedback={feedback}
+                  retrievedSources={retrievedSources}
+                  retrievedStats={retrievedStats}
+                  viewerRole={profile?.role}
+                  t={t}
+                />
               )}
             </>
           )}

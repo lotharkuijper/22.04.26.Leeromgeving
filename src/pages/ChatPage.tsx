@@ -4,8 +4,9 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import { sendChatMessage, llmErrorToDutch, type Message } from '../services/llm.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, type DocumentChunk } from '../services/rag.service';
-import { SourceList } from '../components/SourceList';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, type DocumentChunk } from '../services/rag.service';
+import { SourceList, type SourceItem } from '../components/SourceList';
+import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
@@ -44,6 +45,55 @@ const RAG_DEFAULTS: RagSettings = {
   quiz:    { similarity_threshold: 0.65, match_count: 5, rag_strict_mode: true  },
   project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
 };
+
+function AssistantMessageBody({
+  messageId,
+  content,
+  retrievedContext,
+  lang,
+}: {
+  messageId: string;
+  content: string;
+  retrievedContext?: any;
+  lang: 'nl' | 'en';
+}) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const dispRaw: SourceItem[] = (retrievedContext?.displaySources as SourceItem[] | undefined)
+    ?? (retrievedContext?.chunks
+          ? dedupeSourcesByDocument(
+              (retrievedContext.chunks as any[]).map((c) => ({ title: c.documentTitle, similarity: c.similarity })),
+              5
+            )
+          : []);
+  const citationSources = dispRaw.map((s, i) => ({ index: i + 1, title: s.title, href: s.href }));
+  const handleCitationClick = (idx: number) => {
+    setSourcesOpen(true);
+    // Wacht tot SourceList ingeklapt -> uitgeklapt is voordat we scrollen.
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`source-${messageId}-${idx}`);
+      if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  };
+  return (
+    <>
+      <MarkdownMessage
+        content={content}
+        sources={citationSources}
+        onCitationClick={handleCitationClick}
+      />
+      {dispRaw.length > 0 && (
+        <SourceList
+          sources={dispRaw}
+          label={lang === 'en' ? 'Sources from course material' : 'Bronnen uit cursusmateriaal'}
+          showSimilarity={false}
+          open={sourcesOpen}
+          onOpenChange={setSourcesOpen}
+          idPrefix={messageId}
+        />
+      )}
+    </>
+  );
+}
 
 export function ChatPage() {
   const { profile, signOut } = useAuth();
@@ -306,13 +356,22 @@ export function ChatPage() {
         console.log(`[CHAT] Context capped: using ${built.usedChunks}/${built.totalChunks} chunks (${built.context.length} chars)`);
       }
 
+      // Dedupliceer chunks naar maximaal 5 unieke documenten zodat de
+      // [1]…[N] in het antwoord overeenkomen met wat de student ziet in
+      // de inklapbare bronnenlijst onder het bericht.
+      const displaySources: SourceItem[] = dedupeSourcesByDocument(
+        chunks.map((c) => ({ title: c.documentTitle, similarity: c.similarity })),
+        5
+      );
+
       console.log('[CHAT] Sending message to LLM...');
       let response;
       try {
         response = await sendChatMessage(
           history,
           context,
-          ragSettings.chat.rag_strict_mode
+          ragSettings.chat.rag_strict_mode,
+          displaySources.length > 0 ? displaySources : undefined
         );
       } catch (llmErr) {
         console.error('[CHAT] LLM call failed:', llmErr);
@@ -323,6 +382,7 @@ export function ChatPage() {
 
       const retrievedContext = {
         chunks,
+        displaySources,
         stats: {
           threshold: ragStats.threshold,
           maxSimilarity: ragStats.maxSimilarity,
@@ -536,12 +596,15 @@ export function ChatPage() {
                         : 'bg-gray-100 text-gray-900'
                     }`}
                   >
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
-                    {msg.retrievedContext?.chunks && msg.retrievedContext.chunks.length > 0 && (
-                      <SourceList
-                        sources={msg.retrievedContext.chunks.map((c: any) => ({ title: c.documentTitle, similarity: c.similarity }))}
-                        label={lang === 'en' ? 'Sources from course material' : 'Bronnen uit cursusmateriaal'}
+                    {msg.role === 'assistant' ? (
+                      <AssistantMessageBody
+                        messageId={msg.id}
+                        content={msg.content}
+                        retrievedContext={msg.retrievedContext}
+                        lang={lang}
                       />
+                    ) : (
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
                     )}
                     {msg.role === 'assistant' && (() => {
                       const stats = msg.retrievedContext?.stats as

@@ -1,8 +1,11 @@
-import { FileText } from 'lucide-react';
+import { useState, useId } from 'react';
+import { FileText, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 
 export interface SourceItem {
   title: string;
   similarity: number;
+  documentId?: string;
+  href?: string;
 }
 
 interface SourceListProps {
@@ -10,32 +13,105 @@ interface SourceListProps {
   label?: string;
   /** Toon "(NN% relevant)" achter elke bron. Default true voor backwards compat. */
   showSimilarity?: boolean;
+  /** Standaard ingeklapt (default true). */
+  defaultCollapsed?: boolean;
+  /** Dedupe op documenttitel zodat elke bron maximaal één keer voorkomt. */
+  dedupe?: boolean;
+  /** Controlled open-state (overschrijft defaultCollapsed wanneer gezet). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Voorvoegsel voor element-id's (source-{prefix}-{n}); vereist bij meerdere lijsten op één pagina. */
+  idPrefix?: string;
+}
+
+function dedupeByTitle(items: SourceItem[]): SourceItem[] {
+  const best = new Map<string, SourceItem>();
+  for (const s of items) {
+    const cur = best.get(s.title);
+    if (!cur || s.similarity > cur.similarity) best.set(s.title, s);
+  }
+  return Array.from(best.values()).sort((a, b) => b.similarity - a.similarity);
 }
 
 export function SourceList({
   sources,
-  label = 'Gebruikte bronnen uit cursusmateriaal',
+  label = 'Bronnen',
   showSimilarity = true,
+  defaultCollapsed = true,
+  dedupe = true,
+  open: openProp,
+  onOpenChange,
+  idPrefix,
 }: SourceListProps) {
+  const [internalOpen, setInternalOpen] = useState(!defaultCollapsed);
+  const open = openProp ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    if (onOpenChange) onOpenChange(next);
+    if (openProp === undefined) setInternalOpen(next);
+  };
+  const headingId = useId();
+  const idNs = idPrefix ?? headingId.replace(/[:]/g, '');
   if (sources.length === 0) return null;
 
+  const list = dedupe ? dedupeByTitle(sources) : sources;
+  const headingLabel = `${label} (${list.length} uniek)`;
+
   return (
-    <div className="mt-6 pt-6 border-t border-gray-200">
-      <div className="flex items-center gap-2 mb-3">
+    <div className="mt-4 pt-3 border-t border-gray-200" data-testid="source-list">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-controls={headingId}
+        className="flex items-center gap-2 text-sm font-semibold text-gray-800 hover:text-blue-700"
+        data-testid="btn-toggle-sources"
+      >
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         <FileText className="w-4 h-4 text-blue-600" />
-        <h4 className="text-sm font-semibold text-gray-900">{label}</h4>
-      </div>
-      <div className="space-y-2">
-        {sources.map((source, index) => (
-          <div key={index} className="flex items-start gap-2 text-sm text-gray-700" data-testid={`source-item-${index}`}>
-            <span className="font-medium text-blue-600">[{index + 1}]</span>
-            <span className="flex-1 italic">{source.title}</span>
-            {showSimilarity && (
-              <span className="text-gray-500 text-xs">({(source.similarity * 100).toFixed(0)}% relevant)</span>
-            )}
-          </div>
-        ))}
-      </div>
+        <span>{headingLabel}</span>
+      </button>
+      {open && (
+        <ul id={headingId} className="mt-2 space-y-1" data-testid="list-sources">
+          {list.map((source, index) => {
+            const num = index + 1;
+            const meta = showSimilarity ? (
+              <span className="text-gray-500 text-xs ml-2">
+                ({(source.similarity * 100).toFixed(0)}% relevant)
+              </span>
+            ) : null;
+            const inner = (
+              <>
+                <span className="font-medium text-blue-600 mr-1">[{num}]</span>
+                <span className="italic">{source.title}</span>
+                {source.href && <ExternalLink className="w-3 h-3 inline ml-1 text-gray-400" />}
+                {meta}
+              </>
+            );
+            return (
+              <li
+                key={`${source.title}-${index}`}
+                className="text-sm text-gray-700 flex items-start gap-1"
+                data-testid={`source-item-${index}`}
+                id={`source-${idNs}-${num}`}
+              >
+                {source.href ? (
+                  <a
+                    href={source.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:underline"
+                    data-testid={`link-source-${num}`}
+                  >
+                    {inner}
+                  </a>
+                ) : (
+                  <span>{inner}</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

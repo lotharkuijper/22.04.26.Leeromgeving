@@ -236,8 +236,20 @@ app.post('/api/chat', async (req, res) => {
     skipSystemPrompt = false,
     ragStrictMode = false,
     systemPromptOverride,
+    sources,
     lang = 'nl',
   } = req.body;
+
+  // Bouw bron-instructieblok voor [1]/[2]/... citaten in chat-antwoorden.
+  // Spiegel van buildSourcesBlock in src/services/llm.service.ts (Ik Leg Uit).
+  const buildChatSourcesBlock = (srcs) => {
+    if (!Array.isArray(srcs) || srcs.length === 0) return '';
+    const numbered = srcs
+      .map((s, i) => `[${i + 1}] ${(s && s.title) || 'Onbekende bron'}`)
+      .join('\n');
+    return `\n\nBronnen uit het cursusmateriaal die je tot je beschikking hebt:\n${numbered}\n\nVerwijsregels (volg deze STRIKT):\n- Verwijs in je antwoord naar een bron met exact de notatie [1], [2], ... direct na de zin waar je die bron gebruikt.\n- Gebruik géén andere verwijsvormen (geen titels, geen URL's, geen voetnoten, geen DOI's).\n- Als je in je antwoord informatie noemt die NIET uit deze bronnen komt maar uit algemene kennis, markeer die zin dan met "(buiten cursusmateriaal)" aan het einde van die zin.`;
+  };
+  const chatSourcesBlock = buildChatSourcesBlock(sources);
 
   const LANG_INSTRUCTION_EN = '\n\nIMPORTANT: Always respond in English. Use English for all your answers, feedback, and explanations, regardless of the language of the question or course material.';
 
@@ -293,6 +305,7 @@ app.post('/api/chat', async (req, res) => {
         ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${langSuffix}`
         : `${systemPromptContent}${langSuffix}`;
     }
+    if (chatSourcesBlock) systemContent += chatSourcesBlock;
     finalMessages = [{ role: 'system', content: systemContent }, ...userMessages];
   }
 
