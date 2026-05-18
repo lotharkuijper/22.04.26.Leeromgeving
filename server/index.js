@@ -269,6 +269,7 @@ app.post('/api/chat', async (req, res) => {
     let systemPromptContent = FALLBACK_SYSTEM_PROMPT;
     if (supabaseAdmin) {
       try {
+        const quizNamesExclude = Object.keys(QUIZ_PROMPT_DEFAULTS);
         let promptQuery = supabaseAdmin
           .from('chatbot_prompts')
           .select('id, name, content')
@@ -277,6 +278,7 @@ app.post('/api/chat', async (req, res) => {
           .not('name', 'like', '__doc_mutation_%')
           .not('name', 'like', '__concepts_regen_%')
           .neq('name', '__quiz_itembank_config__')
+          .not('name', 'in', `(${quizNamesExclude.map(n => `"${n}"`).join(',')})`)
           .order('updated_at', { ascending: false })
           .limit(1);
         if (promptsHasSection) {
@@ -3701,8 +3703,12 @@ app.get('/api/debug/active-prompts', async (req, res) => {
 
   const result = { chat: null, explain: null, quiz: [] };
 
-  // Chat-prompt: actieve prompt met section='chat'
+  // Chat-prompt: actieve prompt met section='chat'. Spiegel de filters van
+  // /api/chat exact (incl. uitsluiting van quiz_*-namen) en order+limit, zodat
+  // meerdere chat-rijen niet leiden tot een "multiple rows"-fout op
+  // .maybeSingle() en de badge nooit ten onrechte 'fallback' toont.
   try {
+    const quizNamesExclude = Object.keys(QUIZ_PROMPT_DEFAULTS);
     let chatQuery = supabaseAdmin
       .from('chatbot_prompts')
       .select('id, name')
@@ -3710,7 +3716,10 @@ app.get('/api/debug/active-prompts', async (req, res) => {
       .not('name', 'like', '__rag_settings%')
       .not('name', 'like', '__doc_mutation_%')
       .not('name', 'like', '__concepts_regen_%')
-      .neq('name', '__quiz_itembank_config__');
+      .neq('name', '__quiz_itembank_config__')
+      .not('name', 'in', `(${quizNamesExclude.map(n => `"${n}"`).join(',')})`)
+      .order('updated_at', { ascending: false })
+      .limit(1);
     if (promptsHasSection) chatQuery = chatQuery.eq('section', 'chat');
     const { data } = await chatQuery.maybeSingle();
     result.chat = data
@@ -3812,68 +3821,63 @@ async function initChatbotPromptSection() {
 
     promptsHasSection = true;
 
-    // Forceer quiz-prompts (QUIZ_PROMPT_DEFAULTS) naar section='quiz'. Een
-    // eerdere versie van deze migratie zette álle ongesectioneerde rijen op
-    // 'chat', waardoor bv. `quiz_evaluate_open` per ongeluk als chat-prompt
-    // kon verschijnen.
-    try {
-      const quizNames = Object.keys(QUIZ_PROMPT_DEFAULTS);
-      const { error: quizFixErr } = await supabaseAdmin
-        .from('chatbot_prompts')
-        .update({ section: 'quiz' })
-        .in('name', quizNames)
-        .neq('section', 'quiz');
-      if (quizFixErr) {
-        console.warn('[init] Quiz-prompts naar sectie "quiz" verplaatsen mislukt:', quizFixErr.message);
-      }
-    } catch (quizFixCatch) {
-      console.warn('[init] Quiz-prompts sectie-fix exception:', quizFixCatch.message);
-    }
-
-    // Zet onbekende prompts in sectie 'chat', maar laat interne config-rijen
-    // (`__quiz_itembank_config__`, `__doc_mutation_%`, `__concepts_regen_%`)
-    // met rust — die zijn géén chat-prompts en mogen niet door /api/chat
-    // worden opgepikt.
-    await supabaseAdmin
-      .from('chatbot_prompts')
-      .update({ section: 'chat' })
-      .not('name', 'like', '__rag_settings%')
-      .not('name', 'like', '__doc_mutation_%')
-      .not('name', 'like', '__concepts_regen_%')
-      .neq('name', '__quiz_itembank_config__')
-      .not('section', 'in', '("explain","project","quiz")');
-
-    // Verplaats per ongeluk eerder als 'chat' gemarkeerde interne config-
-    // rijen naar een aparte sectie zodat ze nooit meer als chat-prompt
-    // worden gezien.
-    try {
-      await supabaseAdmin
-        .from('chatbot_prompts')
-        .update({ section: 'internal' })
-        .or(
-          "name.eq.__quiz_itembank_config__," +
-          "name.like.__doc_mutation_%," +
-          "name.like.__concepts_regen_%"
+    // Sectie-opschoning via directe SQL (pgPool). PostgREST-filters voor
+    // LIKE-patronen op `__...%` en `.not('section','in', ...)` werken in
+    // supabase-js onbetrouwbaar door underscore-wildcard escaping en
+    // string-literaalafhandeling. Met directe SQL is dit eenduidig en
+    // idempotent.
+    if (pgPool) {
+      try {
+        const quizNames = Object.keys(QUIZ_PROMPT_DEFAULTS);
+        // 1) Interne config-rijen → section='internal'.
+        await pgPool.query(
+          `UPDATE chatbot_prompts SET section = 'internal'
+           WHERE (name = '__quiz_itembank_config__'
+              OR name LIKE E'\\\\_\\\\_doc\\\\_mutation\\\\_%' ESCAPE E'\\\\'
+              OR name LIKE E'\\\\_\\\\_concepts\\\\_regen\\\\_%' ESCAPE E'\\\\'
+              OR name LIKE E'\\\\_\\\\_rag\\\\_settings%' ESCAPE E'\\\\')
+             AND (section IS DISTINCT FROM 'internal')`
         );
-    } catch (cleanupErr) {
-      console.warn('[init] Interne config-rijen verplaatsen mislukt:', cleanupErr.message);
+        // 2) Quiz-prompts → section='quiz' (onvoorwaardelijk overschrijven).
+        await pgPool.query(
+          `UPDATE chatbot_prompts SET section = 'quiz'
+           WHERE name = ANY($1::text[])
+             AND (section IS DISTINCT FROM 'quiz')`,
+          [quizNames]
+        );
+        // 3) Rijen met section IS NULL: standaard 'chat'.
+        await pgPool.query(
+          `UPDATE chatbot_prompts SET section = 'chat' WHERE section IS NULL`
+        );
+      } catch (sqlErr) {
+        console.warn('[init] Sectie-opschoning via SQL mislukt:', sqlErr.message);
+      }
+    } else {
+      console.warn('[init] pgPool niet beschikbaar — sectie-opschoning overgeslagen.');
     }
 
     // Zorg dat er minstens één echte chat-prompt bestaat zodat /api/chat
-    // niet meer naar de hard-coded FALLBACK_SYSTEM_PROMPT valt.
-    const quizNamesForExclude = Object.keys(QUIZ_PROMPT_DEFAULTS);
-    let existingChatQ = supabaseAdmin
-      .from('chatbot_prompts')
-      .select('id')
-      .eq('section', 'chat')
-      .eq('is_active', true)
-      .not('name', 'like', '\\_\\_%')
-      .neq('name', '__quiz_itembank_config__');
-    if (quizNamesForExclude.length > 0) {
-      existingChatQ = existingChatQ.not('name', 'in', `(${quizNamesForExclude.map(n => `"${n}"`).join(',')})`);
+    // niet meer naar de hard-coded FALLBACK_SYSTEM_PROMPT valt. Gebruik
+    // pgPool zodat we niet weer tegen PostgREST-filterquirks aanlopen.
+    let existingChatRow = null;
+    if (pgPool) {
+      try {
+        const quizNames = Object.keys(QUIZ_PROMPT_DEFAULTS);
+        const r = await pgPool.query(
+          `SELECT id FROM chatbot_prompts
+           WHERE section = 'chat'
+             AND is_active = true
+             AND name NOT LIKE '\\_\\_%' ESCAPE '\\'
+             AND NOT (name = ANY($1::text[]))
+           LIMIT 1`,
+          [quizNames]
+        );
+        existingChatRow = r.rows[0] || null;
+      } catch (pgErr) {
+        console.warn('[init] Chat-prompt bestaanscheck via pgPool mislukt:', pgErr.message);
+      }
     }
-    const { data: existingChat } = await existingChatQ.limit(1).maybeSingle();
-    if (!existingChat) {
+    if (!existingChatRow) {
       const { error: chatInsertErr } = await supabaseAdmin
         .from('chatbot_prompts')
         .insert({
