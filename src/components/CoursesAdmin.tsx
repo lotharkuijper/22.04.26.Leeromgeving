@@ -3,6 +3,16 @@ import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check,
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCourseAccess } from '../contexts/CourseAccessContext';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog';
 
 interface CourseRow {
   id: string;
@@ -32,6 +42,11 @@ export default function CoursesAdmin() {
   // Per-rij state voor activeren/deactiveren en verwijderen.
   const [rowBusyId, setRowBusyId] = useState<string | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string | null>>({});
+
+  // Bevestigingsdialoog voor het verwijderen van een cursus.
+  const [deleteTarget, setDeleteTarget] = useState<CourseRow | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteDialogError, setDeleteDialogError] = useState<string | null>(null);
 
   function setRowError(id: string, msg: string | null) {
     setRowErrors((m) => ({ ...m, [id]: msg }));
@@ -140,19 +155,31 @@ export default function CoursesAdmin() {
     }
   }
 
-  async function deleteCourse(c: CourseRow) {
+  function requestDelete(c: CourseRow) {
     setRowError(c.id, null);
+    setDeleteConfirmText('');
+    setDeleteDialogError(null);
+    setDeleteTarget(c);
+  }
+
+  function closeDeleteDialog() {
+    setDeleteTarget(null);
+    setDeleteConfirmText('');
+    setDeleteDialogError(null);
+  }
+
+  async function confirmDeleteCourse() {
+    const c = deleteTarget;
+    if (!c) return;
+    if (deleteConfirmText.trim() !== c.name) return;
     const token = session?.access_token;
     if (!token) {
-      setRowError(c.id, 'Niet ingelogd.');
+      setDeleteDialogError('Niet ingelogd.');
       return;
     }
-    const ok = window.confirm(
-      `Weet je zeker dat je de cursus "${c.name}" definitief wilt verwijderen?\n\n` +
-        `Dit kan alleen als er geen leden, projecten, dagboek-notities of extra mappen/documenten aan de cursus hangen. De standaard cursusmap met submappen RAG en Projectdata wordt automatisch opgeruimd.`
-    );
-    if (!ok) return;
     setRowBusyId(c.id);
+    setDeleteDialogError(null);
+    let success = false;
     try {
       const res = await fetch(`/api/admin/courses/${c.id}`, {
         method: 'DELETE',
@@ -160,15 +187,17 @@ export default function CoursesAdmin() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setRowError(c.id, json.error || `Verwijderen mislukt (${res.status})`);
+        setDeleteDialogError(json.error || `Verwijderen mislukt (${res.status})`);
         return;
       }
       await Promise.all([loadCourses(), refreshCourses()]);
+      success = true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Onbekende fout';
-      setRowError(c.id, msg);
+      setDeleteDialogError(msg);
     } finally {
       setRowBusyId(null);
+      if (success) closeDeleteDialog();
     }
   }
 
@@ -430,7 +459,7 @@ export default function CoursesAdmin() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => deleteCourse(c)}
+                            onClick={() => requestDelete(c)}
                             disabled={rowBusyId === c.id}
                             className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:text-red-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-red-50 transition-colors"
                             title="Verwijder deze cursus definitief"
@@ -458,6 +487,101 @@ export default function CoursesAdmin() {
           </ul>
         )}
       </section>
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && rowBusyId !== deleteTarget?.id) closeDeleteDialog();
+        }}
+      >
+        {deleteTarget && (
+          <AlertDialogContent data-testid="dialog-delete-course">
+            <AlertDialogHeader>
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-red-700" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <AlertDialogTitle>Cursus definitief verwijderen</AlertDialogTitle>
+                  <AlertDialogDescription className="mt-1">
+                    Je staat op het punt de cursus{' '}
+                    <span
+                      className="font-semibold text-gray-900"
+                      data-testid="text-delete-course-name"
+                    >
+                      {deleteTarget.name}
+                    </span>{' '}
+                    te verwijderen. Deze actie kan niet ongedaan worden gemaakt.
+                  </AlertDialogDescription>
+                </div>
+              </div>
+            </AlertDialogHeader>
+
+            <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>
+                Verwijderen kan alleen als er geen leden, projecten, dagboek-notities of extra
+                mappen/documenten aan de cursus hangen. De standaard cursusmap met submappen
+                RAG en Projectdata wordt automatisch opgeruimd.
+              </span>
+            </div>
+
+            <div>
+              <label
+                htmlFor="delete-course-confirm-input"
+                className="block text-sm font-medium text-gray-700"
+              >
+                Typ <span className="font-mono font-semibold">{deleteTarget.name}</span> om te
+                bevestigen
+              </label>
+              <input
+                id="delete-course-confirm-input"
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                disabled={rowBusyId === deleteTarget.id}
+                autoFocus
+                className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 disabled:bg-gray-100"
+                placeholder={deleteTarget.name}
+                data-testid="input-delete-course-confirm"
+              />
+            </div>
+
+            {deleteDialogError && (
+              <div
+                className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+                data-testid="text-delete-course-error"
+              >
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>{deleteDialogError}</span>
+              </div>
+            )}
+
+            <AlertDialogFooter>
+              <AlertDialogCancel
+                disabled={rowBusyId === deleteTarget.id}
+                data-testid="button-cancel-delete-course"
+              >
+                Annuleren
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmDeleteCourse}
+                disabled={
+                  rowBusyId === deleteTarget.id ||
+                  deleteConfirmText.trim() !== deleteTarget.name
+                }
+                data-testid="button-confirm-delete-course"
+              >
+                {rowBusyId === deleteTarget.id && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                <Trash2 className="w-4 h-4" />
+                Definitief verwijderen
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        )}
+      </AlertDialog>
     </div>
   );
 }
