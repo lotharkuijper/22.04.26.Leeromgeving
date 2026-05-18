@@ -10,6 +10,7 @@ import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2 } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { NoticeBanner, useNotice } from '../components/Notice';
+import { PromptDebugBadge } from '../components/PromptDebugBadge';
 
 
 interface ChatMessage extends Message {
@@ -466,6 +467,10 @@ export function ChatPage() {
           <Plus className="w-5 h-5" />
           {t('chat.newChat')}
         </button>
+
+        <div className="mb-3">
+          <PromptDebugBadge section="chat" />
+        </div>
 
         <div className="flex-1 overflow-y-auto space-y-2">
           {conversations.map(conv => (

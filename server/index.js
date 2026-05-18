@@ -253,9 +253,11 @@ app.post('/api/chat', async (req, res) => {
       try {
         let promptQuery = supabaseAdmin
           .from('chatbot_prompts')
-          .select('content')
+          .select('id, name, content')
           .eq('is_active', true)
-          .not('name', 'like', '__rag_settings%');
+          .not('name', 'like', '__rag_settings%')
+          .order('updated_at', { ascending: false })
+          .limit(1);
         if (promptsHasSection) {
           promptQuery = promptQuery.eq('section', 'chat');
         }
@@ -264,7 +266,7 @@ app.post('/api/chat', async (req, res) => {
           console.warn('[/api/chat] Prompt ophalen mislukt, fallback gebruikt:', promptError.message);
         } else if (promptData?.content) {
           systemPromptContent = promptData.content;
-          console.log('[/api/chat] Actieve chat-prompt uit database geladen');
+          console.log(`[/api/chat] Actieve chat-prompt geladen: "${promptData.name}" (id=${promptData.id})`);
         } else {
           console.warn('[/api/chat] Geen actieve chat-prompt in database — fallback gebruikt');
         }
@@ -289,7 +291,7 @@ app.post('/api/chat', async (req, res) => {
   }
 
   const chatBody = {
-    model,
+    model: OPENAI_MODEL,
     messages: finalMessages,
     temperature,
     max_tokens: max_tokens ?? 512,
@@ -3443,6 +3445,74 @@ app.get('/api/health', (req, res) => {
     github: !!process.env.GITHUB_TOKEN,
     supabase: !!process.env.SUPABASE_URL,
   });
+});
+
+// Debug endpoint: geeft per sectie terug welke prompt actief is (naam + bron).
+// Alleen toegankelijk voor admins en docenten.
+app.get('/api/debug/active-prompts', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  if (auth.profile.role !== 'admin' && auth.profile.role !== 'teacher') {
+    return res.status(403).json({ error: 'Alleen beschikbaar voor admins en docenten' });
+  }
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+
+  const result = { chat: null, explain: null, quiz: [] };
+
+  // Chat-prompt: actieve prompt met section='chat'
+  try {
+    let chatQuery = supabaseAdmin
+      .from('chatbot_prompts')
+      .select('id, name')
+      .eq('is_active', true)
+      .not('name', 'like', '__rag_settings%');
+    if (promptsHasSection) chatQuery = chatQuery.eq('section', 'chat');
+    const { data } = await chatQuery.maybeSingle();
+    result.chat = data
+      ? { id: data.id, name: data.name, source: 'database' }
+      : { name: 'FALLBACK_SYSTEM_PROMPT', source: 'fallback' };
+  } catch (err) {
+    result.chat = { name: 'FALLBACK_SYSTEM_PROMPT', source: 'fallback' };
+  }
+
+  // Explain-prompt: actieve prompt met section='explain'
+  try {
+    if (promptsHasSection) {
+      const { data } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('id, name')
+        .eq('section', 'explain')
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      result.explain = data
+        ? { id: data.id, name: data.name, source: 'database' }
+        : { name: 'DEFAULT_EXPLAIN_PROMPT', source: 'fallback' };
+    } else {
+      result.explain = { name: 'DEFAULT_EXPLAIN_PROMPT', source: 'fallback' };
+    }
+  } catch (err) {
+    result.explain = { name: 'DEFAULT_EXPLAIN_PROMPT', source: 'fallback' };
+  }
+
+  // Quiz-prompts: alle bekende quiz-prompts met hun actieve status
+  try {
+    const quizNames = Object.keys(QUIZ_PROMPT_DEFAULTS);
+    if (promptsHasSection) {
+      const { data } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('id, name, is_active')
+        .in('name', quizNames);
+      result.quiz = (data || []).map(r => ({ id: r.id, name: r.name, is_active: r.is_active !== false }));
+    } else {
+      result.quiz = quizNames.map(name => ({ name, is_active: true, source: 'fallback' }));
+    }
+  } catch (err) {
+    result.quiz = [];
+  }
+
+  return res.json(result);
 });
 
 // Oude default — bewaard voor automatische DB-sync naar de nieuwe stijl in

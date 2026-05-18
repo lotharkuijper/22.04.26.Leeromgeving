@@ -22,6 +22,7 @@ import { searchRelevantChunksWithStats, buildContextWithCap, type DocumentChunk 
 import { getQuizTopics, type QuizTopic } from '../services/quiz-topic.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
+import { PromptDebugBadge } from '../components/PromptDebugBadge';
 import {
   Play,
   CheckCircle,
@@ -913,6 +914,10 @@ export function QuizPage() {
 
             <div>
               <RAGStatusIndicator strictMode={ragSettings.quiz.rag_strict_mode} />
+            </div>
+
+            <div>
+              <PromptDebugBadge section="quiz" />
             </div>
 
             {/* Bronnen-mix preview */}

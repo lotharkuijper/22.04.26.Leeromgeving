@@ -8,6 +8,7 @@ import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocu
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
+import { PromptDebugBadge } from '../components/PromptDebugBadge';
 import type { Database } from '../lib/database.types';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { NoticeBanner, useNotice } from '../components/Notice';
@@ -448,6 +449,9 @@ export function ExplainPage() {
       <div>
         <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('explain.title')}</h1>
         <p className="text-gray-600">{t('explain.subtitle')}</p>
+        <div className="mt-2">
+          <PromptDebugBadge section="explain" />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
