@@ -106,6 +106,7 @@ function AssistantMessageBody({
           onOpenChange={setSourcesOpen}
           idPrefix={messageId}
           onOpenSource={handleOpenSource}
+          uniqueLabel={lang === 'en' ? 'unique' : 'uniek'}
         />
       )}
     </>

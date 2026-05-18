@@ -24,6 +24,8 @@ interface SourceListProps {
   idPrefix?: string;
   /** Click-handler voor het openen van een bron; overschrijft default anchor-navigatie. */
   onOpenSource?: (item: SourceItem) => void;
+  /** Achtervoegsel achter het aantal, bv. "uniek"/"unique". Default 'uniek'. */
+  uniqueLabel?: string;
 }
 
 function dedupeByDocument(items: SourceItem[]): SourceItem[] {
@@ -46,6 +48,7 @@ export function SourceList({
   onOpenChange,
   idPrefix,
   onOpenSource,
+  uniqueLabel = 'uniek',
 }: SourceListProps) {
   const [internalOpen, setInternalOpen] = useState(!defaultCollapsed);
   const open = openProp ?? internalOpen;
@@ -58,7 +61,7 @@ export function SourceList({
   if (sources.length === 0) return null;
 
   const list = dedupe ? dedupeByDocument(sources) : sources;
-  const headingLabel = `${label} (${list.length} uniek)`;
+  const headingLabel = `${label} (${list.length} ${uniqueLabel})`;
 
   return (
     <div className="mt-4 pt-3 border-t border-gray-200" data-testid="source-list">
