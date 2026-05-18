@@ -1432,12 +1432,15 @@ app.post('/api/admin/courses', async (req, res) => {
   try {
     // 1) Voorkom dubbele cursusnaam OF dubbele folder_name (beide kolommen
     //    hebben een UNIQUE-constraint en zijn in onze flow altijd gelijk).
-    const { data: existingCourse } = await supabaseAdmin
-      .from('courses')
-      .select('id, name, folder_name')
-      .or(`name.eq.${rawName},folder_name.eq.${rawName}`)
-      .maybeSingle();
-    if (existingCourse) {
+    //    We doen twee aparte gelijkheidsqueries i.p.v. .or() met string-
+    //    interpolatie, omdat namen leestekens kunnen bevatten die de
+    //    PostgREST-or-filter zouden breken. Een unieke index garandeert
+    //    bovendien dat 23505 onder een race-conditie altijd opgevangen wordt.
+    const [{ data: clashByName }, { data: clashByFolder }] = await Promise.all([
+      supabaseAdmin.from('courses').select('id').eq('name', rawName).maybeSingle(),
+      supabaseAdmin.from('courses').select('id').eq('folder_name', rawName).maybeSingle(),
+    ]);
+    if (clashByName || clashByFolder) {
       return res.status(409).json({ error: `Er bestaat al een cursus met de naam "${rawName}"` });
     }
 
@@ -1463,6 +1466,10 @@ app.post('/api/admin/courses', async (req, res) => {
       .select('id, name, folder_name, description, is_active')
       .single();
     if (courseErr || !newCourse) {
+      // 23505 = unique_violation — race-conditie tussen pre-check en insert.
+      if (courseErr && (courseErr.code === '23505' || /duplicate key/i.test(courseErr.message || ''))) {
+        return res.status(409).json({ error: `Er bestaat al een cursus met de naam "${rawName}"` });
+      }
       return res.status(500).json({ error: `Kon cursus niet aanmaken: ${courseErr?.message}` });
     }
     createdCourseId = newCourse.id;
