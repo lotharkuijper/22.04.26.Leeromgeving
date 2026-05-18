@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, Sparkles, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -173,7 +173,28 @@ export function AdminPage() {
   const { profile, isAdmin, isDocent, session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabType>(isAdmin ? 'users' : 'documents');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = (() => {
+    const t = searchParams.get('tab') as TabType | null;
+    const allowed: TabType[] = ['users','documents','rag_beheer','concepts','quiz_validation','sharestats_import','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
+    if (t && allowed.includes(t)) return t;
+    return isAdmin ? 'users' : 'documents';
+  })();
+  const [activeTab, setActiveTabState] = useState<TabType>(initialTab);
+  const setActiveTab = (t: TabType) => {
+    setActiveTabState(t);
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', t);
+    setSearchParams(next, { replace: true });
+  };
+  useEffect(() => {
+    const t = searchParams.get('tab') as TabType | null;
+    if (t && t !== activeTab) {
+      const allowed: TabType[] = ['users','documents','rag_beheer','concepts','quiz_validation','sharestats_import','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
+      if (allowed.includes(t)) setActiveTabState(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const [users, setUsers] = useState<Profile[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [courseConcepts, setCourseConcepts] = useState<Concept[]>([]);

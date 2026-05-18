@@ -1571,6 +1571,34 @@ app.post('/api/admin/courses', async (req, res) => {
   }
 });
 
+// DELETE /api/admin/courses/:id/members — verwijder in één keer alle leden van
+// een cursus. Alleen voor admins. Bedoeld om de "cursus verwijderen"-flow te
+// deblokkeren wanneer er nog gekoppelde leden zijn.
+app.delete('/api/admin/courses/:id/members', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen leden bulk verwijderen' });
+
+  const courseId = req.params.id;
+  if (!courseId) return res.status(400).json({ error: 'Cursus-ID ontbreekt' });
+
+  const { data: course, error: courseErr } = await supabaseAdmin
+    .from('courses').select('id, name').eq('id', courseId).maybeSingle();
+  if (courseErr) return res.status(500).json({ error: courseErr.message });
+  if (!course) return res.status(404).json({ error: 'Cursus niet gevonden' });
+
+  const { error: delErr, count } = await supabaseAdmin
+    .from('course_members')
+    .delete({ count: 'exact' })
+    .eq('course_id', courseId);
+  if (delErr) return res.status(500).json({ error: delErr.message });
+
+  return res.json({ ok: true, removed: count ?? 0, course: { id: course.id, name: course.name } });
+});
+
 // PATCH /api/admin/courses/:id — hernoem en/of werk beschrijving bij van een
 // bestaande cursus. Houdt courses.name, courses.folder_name én de parent-
 // cursusmap-naam in document_folders synchroon, zodat de structuur identiek

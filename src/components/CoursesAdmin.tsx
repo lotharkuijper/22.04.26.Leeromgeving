@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2 } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2, Users, FolderTree, FolderOpen, UserX } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCourseAccess } from '../contexts/CourseAccessContext';
@@ -13,6 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 
 interface CourseRow {
   id: string;
@@ -21,9 +23,20 @@ interface CourseRow {
   is_active: boolean;
 }
 
+interface DeleteCounts {
+  members: number;
+  projects: number;
+  sessions: number;
+  journal_entries: number;
+  extra_folders: number;
+  documents: number;
+}
+
 export default function CoursesAdmin() {
-  const { session } = useAuth();
+  const { session, isAdmin } = useAuth();
   const { refreshCourses } = useCourseAccess();
+  const { setActiveCourse } = useActiveCourse();
+  const navigate = useNavigate();
   const [courses, setCourses] = useState<CourseRow[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [name, setName] = useState('');
@@ -42,6 +55,8 @@ export default function CoursesAdmin() {
   // Per-rij state voor activeren/deactiveren en verwijderen.
   const [rowBusyId, setRowBusyId] = useState<string | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string | null>>({});
+  const [rowCounts, setRowCounts] = useState<Record<string, DeleteCounts | null>>({});
+  const [confirmBulkMembersId, setConfirmBulkMembersId] = useState<string | null>(null);
 
   // Bevestigingsdialoog voor het verwijderen van een cursus.
   const [deleteTarget, setDeleteTarget] = useState<CourseRow | null>(null);
@@ -50,6 +65,53 @@ export default function CoursesAdmin() {
 
   function setRowError(id: string, msg: string | null) {
     setRowErrors((m) => ({ ...m, [id]: msg }));
+  }
+
+  function setRowCount(id: string, counts: DeleteCounts | null) {
+    setRowCounts((m) => ({ ...m, [id]: counts }));
+  }
+
+  async function goToAdminTab(courseId: string, tab: string) {
+    try {
+      await setActiveCourse(courseId);
+    } catch (err) {
+      console.error('[CoursesAdmin] setActiveCourse failed:', err);
+    }
+    navigate(`/admin?tab=${tab}`);
+  }
+
+  async function bulkRemoveMembers(c: CourseRow) {
+    setRowError(c.id, null);
+    const token = session?.access_token;
+    if (!token) {
+      setRowError(c.id, 'Niet ingelogd.');
+      return;
+    }
+    setRowBusyId(c.id);
+    try {
+      const res = await fetch(`/api/admin/courses/${c.id}/members`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRowError(c.id, json.error || `Verwijderen mislukt (${res.status})`);
+        return;
+      }
+      // Update counts: members nu 0.
+      setRowCounts((m) => {
+        const prev = m[c.id];
+        if (!prev) return m;
+        return { ...m, [c.id]: { ...prev, members: 0 } };
+      });
+      setConfirmBulkMembersId(null);
+      await Promise.all([loadCourses(), refreshCourses()]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setRowError(c.id, msg);
+    } finally {
+      setRowBusyId(null);
+    }
   }
 
   async function loadCourses() {
@@ -157,6 +219,7 @@ export default function CoursesAdmin() {
 
   function requestDelete(c: CourseRow) {
     setRowError(c.id, null);
+    setRowCount(c.id, null);
     setDeleteConfirmText('');
     setDeleteDialogError(null);
     setDeleteTarget(c);
@@ -187,7 +250,17 @@ export default function CoursesAdmin() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setDeleteDialogError(json.error || `Verwijderen mislukt (${res.status})`);
+        const message = json.error || `Verwijderen mislukt (${res.status})`;
+        if (res.status === 409 && json.counts) {
+          // Schakel terug naar de rij-weergave zodat de admin de
+          // category-specifieke cleanup-acties (Beheer leden, Open projecten,
+          // Open cursusmap, bulk-leden verwijderen) ziet bij de juiste cursus.
+          setRowError(c.id, message);
+          setRowCount(c.id, json.counts as DeleteCounts);
+          closeDeleteDialog();
+        } else {
+          setDeleteDialogError(message);
+        }
         return;
       }
       await Promise.all([loadCourses(), refreshCourses()]);
@@ -472,11 +545,120 @@ export default function CoursesAdmin() {
                       </div>
                       {rowErrors[c.id] && (
                         <div
-                          className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+                          className="flex flex-col gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
                           data-testid={`text-row-error-${c.id}`}
                         >
-                          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                          <span>{rowErrors[c.id]}</span>
+                          <div className="flex items-start gap-2">
+                            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                            <span>{rowErrors[c.id]}</span>
+                          </div>
+                          {rowCounts[c.id] && (
+                            <div className="pl-6 flex flex-col gap-2" data-testid={`cleanup-actions-${c.id}`}>
+                              {rowCounts[c.id]!.members > 0 && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-gray-700 text-xs">
+                                    {rowCounts[c.id]!.members} lid/leden
+                                  </span>
+                                  {isAdmin && (
+                                    confirmBulkMembersId === c.id ? (
+                                      <span className="inline-flex items-center gap-1.5">
+                                        <span className="text-xs text-amber-800">Alle leden ontkoppelen?</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => bulkRemoveMembers(c)}
+                                          disabled={rowBusyId === c.id}
+                                          className="inline-flex items-center gap-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-300 px-2 py-1 rounded transition-colors"
+                                          data-testid={`button-confirm-bulk-remove-members-${c.id}`}
+                                        >
+                                          {rowBusyId === c.id ? (
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                          ) : (
+                                            <Check className="w-3.5 h-3.5" />
+                                          )}
+                                          Ja, verwijder
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setConfirmBulkMembersId(null)}
+                                          disabled={rowBusyId === c.id}
+                                          className="inline-flex items-center gap-1 text-xs font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 px-2 py-1 rounded transition-colors"
+                                          data-testid={`button-cancel-bulk-remove-members-${c.id}`}
+                                        >
+                                          <X className="w-3.5 h-3.5" />
+                                          Annuleren
+                                        </button>
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmBulkMembersId(c.id)}
+                                        disabled={rowBusyId === c.id}
+                                        className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:text-red-900 disabled:text-gray-400 px-2 py-1 rounded border border-red-200 hover:bg-red-50 transition-colors"
+                                        title="Verwijder alle leden van deze cursus"
+                                        data-testid={`button-bulk-remove-members-${c.id}`}
+                                      >
+                                        <UserX className="w-3.5 h-3.5" />
+                                        Verwijder alle leden
+                                      </button>
+                                    )
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => goToAdminTab(c.id, 'users')}
+                                    className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 px-2 py-1 rounded border border-blue-200 hover:bg-blue-50 transition-colors"
+                                    data-testid={`button-manage-members-${c.id}`}
+                                  >
+                                    <Users className="w-3.5 h-3.5" />
+                                    Beheer leden
+                                  </button>
+                                </div>
+                              )}
+                              {rowCounts[c.id]!.projects > 0 && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-gray-700 text-xs">
+                                    {rowCounts[c.id]!.projects} project(en)
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => goToAdminTab(c.id, 'projects_admin')}
+                                    className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 px-2 py-1 rounded border border-blue-200 hover:bg-blue-50 transition-colors"
+                                    data-testid={`button-open-projects-${c.id}`}
+                                  >
+                                    <FolderTree className="w-3.5 h-3.5" />
+                                    Open projecten
+                                  </button>
+                                </div>
+                              )}
+                              {(rowCounts[c.id]!.extra_folders > 0 || rowCounts[c.id]!.documents > 0) && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-gray-700 text-xs">
+                                    {rowCounts[c.id]!.extra_folders > 0 && `${rowCounts[c.id]!.extra_folders} extra (sub)map(pen)`}
+                                    {rowCounts[c.id]!.extra_folders > 0 && rowCounts[c.id]!.documents > 0 && ', '}
+                                    {rowCounts[c.id]!.documents > 0 && `${rowCounts[c.id]!.documents} document(en)`}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => goToAdminTab(c.id, 'documents')}
+                                    className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 px-2 py-1 rounded border border-blue-200 hover:bg-blue-50 transition-colors"
+                                    data-testid={`button-open-course-folder-${c.id}`}
+                                  >
+                                    <FolderOpen className="w-3.5 h-3.5" />
+                                    Open cursusmap
+                                  </button>
+                                </div>
+                              )}
+                              {rowCounts[c.id]!.sessions > 0 && (
+                                <div className="text-xs text-gray-700">
+                                  {rowCounts[c.id]!.sessions} sessie(s) — worden automatisch opgeruimd als de bijbehorende projecten verdwijnen.
+                                </div>
+                              )}
+                              {rowCounts[c.id]!.journal_entries > 0 && (
+                                <div className="text-xs text-gray-700">
+                                  {rowCounts[c.id]!.journal_entries} dagboek-notitie(s) — worden automatisch opgeruimd als de bijbehorende projecten verdwijnen.
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
