@@ -72,8 +72,9 @@ export default function CoursesAdmin() {
       setName('');
       setDescription('');
       await Promise.all([loadCourses(), refreshCourses()]);
-    } catch (err: any) {
-      setError(err?.message || 'Onbekende fout');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setError(msg);
     } finally {
       setSubmitting(false);
     }
