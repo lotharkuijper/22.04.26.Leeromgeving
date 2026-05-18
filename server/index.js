@@ -1588,12 +1588,14 @@ app.patch('/api/admin/courses/:id', async (req, res) => {
 
   const nameProvided = typeof req.body?.name === 'string';
   const descProvided = typeof req.body?.description === 'string';
-  if (!nameProvided && !descProvided) {
-    return res.status(400).json({ error: 'Geef minstens "name" of "description" mee' });
+  const activeProvided = typeof req.body?.is_active === 'boolean';
+  if (!nameProvided && !descProvided && !activeProvided) {
+    return res.status(400).json({ error: 'Geef minstens "name", "description" of "is_active" mee' });
   }
 
   const newName = nameProvided ? req.body.name.trim() : null;
   const newDesc = descProvided ? req.body.description.trim() : null;
+  const newActive = activeProvided ? req.body.is_active : null;
   if (nameProvided) {
     if (!newName) return res.status(400).json({ error: 'Cursusnaam mag niet leeg zijn' });
     if (newName.length > 120) return res.status(400).json({ error: 'Cursusnaam is te lang (max 120 tekens)' });
@@ -1649,6 +1651,10 @@ app.patch('/api/admin/courses/:id', async (req, res) => {
       setParts.push(`description = $${i++}`);
       params.push(newDesc || null);
     }
+    if (activeProvided) {
+      setParts.push(`is_active = $${i++}`);
+      params.push(newActive);
+    }
     params.push(courseId);
     const updRes = await client.query(
       `UPDATE courses SET ${setParts.join(', ')}
@@ -1699,6 +1705,228 @@ app.patch('/api/admin/courses/:id', async (req, res) => {
       return res.status(409).json({ error: `Naam is al in gebruik door een andere cursus` });
     }
     console.error('[admin/courses PATCH] Unexpected error:', err);
+    return res.status(500).json({ error: err?.message || 'Internal server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// DELETE /api/admin/courses/:id — verwijder een cursus definitief. Alleen
+// toegestaan als er geen gekoppelde leden, projecten of extra mappen/documenten
+// zijn. De drie standaard-stub-folders (course/RAG/Projectdata) en hun
+// koppelingen (course_folder_assignments, folder_permissions,
+// folder_rag_assignments) worden in één transactie meeverwijderd.
+app.delete('/api/admin/courses/:id', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen cursussen verwijderen' });
+
+  const courseId = req.params.id;
+  if (!courseId) return res.status(400).json({ error: 'Cursus-ID ontbreekt' });
+  if (!pgPool) {
+    return res.status(503).json({ error: 'Direct DB-verbinding (SUPABASE_DB_URL) niet beschikbaar voor transactionele delete' });
+  }
+
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1) Cursus ophalen + row-lock.
+    const existingRes = await client.query(
+      'SELECT id, name FROM courses WHERE id = $1 FOR UPDATE',
+      [courseId]
+    );
+    if (existingRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Cursus niet gevonden' });
+    }
+    const existing = existingRes.rows[0];
+
+    // 2) Standaard course-folder + sub-folders identificeren (RAG / Projectdata).
+    const rootRes = await client.query(
+      "SELECT id FROM document_folders WHERE is_root = true LIMIT 1"
+    );
+    const rootId = rootRes.rowCount > 0 ? rootRes.rows[0].id : null;
+    let courseFolderId = null;
+    const subFolderIds = [];
+    if (rootId) {
+      const cfRes = await client.query(
+        `SELECT id FROM document_folders
+         WHERE parent_folder_id = $1 AND folder_type = 'course' AND name = $2
+         LIMIT 1`,
+        [rootId, existing.name]
+      );
+      if (cfRes.rowCount > 0) {
+        courseFolderId = cfRes.rows[0].id;
+        const subRes = await client.query(
+          `SELECT id FROM document_folders
+           WHERE parent_folder_id = $1
+             AND folder_type IN ('rag_sources', 'data')
+             AND name IN ('RAG', 'Projectdata')`,
+          [courseFolderId]
+        );
+        for (const row of subRes.rows) subFolderIds.push(row.id);
+      }
+    }
+    const standardFolderIds = courseFolderId ? [courseFolderId, ...subFolderIds] : [];
+
+    // 3) Tellingen van gekoppelde data die deletion zou blokkeren. We correleren
+    //    sessies en journal-entries strikt aan deze cursus (via projects.course_id
+    //    en via UUID-segmenten in learning_journal_entries.source_ref) zodat de
+    //    tellingen niet per ongeluk globale rijen meenemen.
+    const [
+      membersRes,
+      projectsRes,
+      sessionsRes,
+      journalRes,
+      extraFoldersRes,
+      docsRes,
+    ] = await Promise.all([
+      client.query('SELECT COUNT(*)::int AS n FROM course_members WHERE course_id = $1', [courseId]),
+      client.query('SELECT COUNT(*)::int AS n FROM projects WHERE course_id = $1', [courseId]),
+      client.query(
+        `SELECT COUNT(*)::int AS n
+           FROM student_project_sessions sps
+           JOIN projects p ON p.id = sps.project_id
+          WHERE p.course_id = $1`,
+        [courseId]
+      ),
+      client.query(
+        `SELECT COUNT(*)::int AS n
+           FROM learning_journal_entries lje
+          WHERE lje.source_ref IS NOT NULL
+            AND (
+              (
+                lje.source_ref LIKE 'group_evaluate:%'
+                AND split_part(lje.source_ref, ':', 2) ~ '^[0-9a-fA-F-]{36}$'
+                AND split_part(lje.source_ref, ':', 2)::uuid IN (
+                  SELECT pg.id
+                    FROM project_groups pg
+                    JOIN projects p ON p.id = pg.project_id
+                   WHERE p.course_id = $1
+                )
+              )
+              OR
+              (
+                lje.source_ref LIKE 'group_thread_checkpoint:%'
+                AND split_part(lje.source_ref, ':', 2) ~ '^[0-9a-fA-F-]{36}$'
+                AND split_part(lje.source_ref, ':', 2)::uuid IN (
+                  SELECT cp.id
+                    FROM group_checkpoints cp
+                    JOIN project_groups pg ON pg.id = cp.group_id
+                    JOIN projects p ON p.id = pg.project_id
+                   WHERE p.course_id = $1
+                )
+              )
+            )`,
+        [courseId]
+      ),
+      courseFolderId
+        ? client.query(
+            `WITH RECURSIVE subtree AS (
+               SELECT id FROM document_folders WHERE id = $1
+               UNION ALL
+               SELECT df.id
+                 FROM document_folders df
+                 JOIN subtree s ON df.parent_folder_id = s.id
+             )
+             SELECT COUNT(*)::int AS n FROM subtree
+              WHERE NOT (id = ANY($2::uuid[]))`,
+            [courseFolderId, standardFolderIds]
+          )
+        : Promise.resolve({ rows: [{ n: 0 }] }),
+      courseFolderId
+        ? client.query(
+            `WITH RECURSIVE subtree AS (
+               SELECT id FROM document_folders WHERE id = $1
+               UNION ALL
+               SELECT df.id
+                 FROM document_folders df
+                 JOIN subtree s ON df.parent_folder_id = s.id
+             )
+             SELECT COUNT(*)::int AS n FROM documents
+              WHERE folder_id IN (SELECT id FROM subtree)`,
+            [courseFolderId]
+          )
+        : Promise.resolve({ rows: [{ n: 0 }] }),
+    ]);
+
+    const counts = {
+      members: membersRes.rows[0].n,
+      projects: projectsRes.rows[0].n,
+      sessions: sessionsRes.rows[0].n,
+      journal_entries: journalRes.rows[0].n,
+      extra_folders: extraFoldersRes.rows[0].n,
+      documents: docsRes.rows[0].n,
+    };
+
+    const blocked =
+      counts.members > 0 ||
+      counts.projects > 0 ||
+      counts.sessions > 0 ||
+      counts.journal_entries > 0 ||
+      counts.extra_folders > 0 ||
+      counts.documents > 0;
+
+    if (blocked) {
+      await client.query('ROLLBACK');
+      const parts = [];
+      if (counts.members > 0) parts.push(`${counts.members} lid/leden`);
+      if (counts.projects > 0) parts.push(`${counts.projects} project(en)`);
+      if (counts.sessions > 0) parts.push(`${counts.sessions} sessie(s)`);
+      if (counts.journal_entries > 0) parts.push(`${counts.journal_entries} dagboek-notitie(s)`);
+      if (counts.extra_folders > 0) parts.push(`${counts.extra_folders} extra (sub)map(pen)`);
+      if (counts.documents > 0) parts.push(`${counts.documents} document(en)`);
+      return res.status(409).json({
+        error: `Kan cursus "${existing.name}" niet verwijderen: er is nog gekoppelde data (${parts.join(', ')}). Verwijder die eerst of deactiveer de cursus.`,
+        counts,
+      });
+    }
+
+    // 4) Veilig opruimen: koppelingen → folders → cursus.
+    //    course_folder_assignments cascadet via ON DELETE CASCADE op courses,
+    //    maar we ruimen ze expliciet op zodat de folder-deletes daarna lukken
+    //    zonder weeskoppelingen achter te laten.
+    await client.query('DELETE FROM course_folder_assignments WHERE course_id = $1', [courseId]);
+
+    if (subFolderIds.length > 0) {
+      await client.query(
+        'DELETE FROM folder_rag_assignments WHERE folder_id = ANY($1::uuid[])',
+        [subFolderIds]
+      );
+    }
+    if (standardFolderIds.length > 0) {
+      await client.query(
+        'DELETE FROM folder_permissions WHERE folder_id = ANY($1::uuid[])',
+        [standardFolderIds]
+      );
+      // Eerst sub-folders, dan parent (FK-integriteit).
+      if (subFolderIds.length > 0) {
+        await client.query(
+          'DELETE FROM document_folders WHERE id = ANY($1::uuid[])',
+          [subFolderIds]
+        );
+      }
+      if (courseFolderId) {
+        await client.query('DELETE FROM document_folders WHERE id = $1', [courseFolderId]);
+      }
+    }
+
+    const delRes = await client.query('DELETE FROM courses WHERE id = $1 RETURNING id', [courseId]);
+    if (delRes.rowCount !== 1) {
+      await client.query('ROLLBACK');
+      return res.status(500).json({ error: 'Cursus-rij niet verwijderd (onverwachte rowCount)' });
+    }
+
+    await client.query('COMMIT');
+    console.log(`[admin/courses DELETE] Cursus ${courseId} ("${existing.name}") verwijderd.`);
+    return res.json({ ok: true, id: courseId });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    console.error('[admin/courses DELETE] Unexpected error:', err);
     return res.status(500).json({ error: err?.message || 'Internal server error' });
   } finally {
     client.release();

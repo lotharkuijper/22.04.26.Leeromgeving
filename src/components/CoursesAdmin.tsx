@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCourseAccess } from '../contexts/CourseAccessContext';
@@ -28,6 +28,14 @@ export default function CoursesAdmin() {
   const [editDesc, setEditDesc] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  // Per-rij state voor activeren/deactiveren en verwijderen.
+  const [rowBusyId, setRowBusyId] = useState<string | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string | null>>({});
+
+  function setRowError(id: string, msg: string | null) {
+    setRowErrors((m) => ({ ...m, [id]: msg }));
+  }
 
   async function loadCourses() {
     setLoadingList(true);
@@ -99,6 +107,69 @@ export default function CoursesAdmin() {
     setEditName('');
     setEditDesc('');
     setEditError(null);
+  }
+
+  async function toggleActive(c: CourseRow) {
+    setRowError(c.id, null);
+    const token = session?.access_token;
+    if (!token) {
+      setRowError(c.id, 'Niet ingelogd.');
+      return;
+    }
+    setRowBusyId(c.id);
+    try {
+      const res = await fetch(`/api/admin/courses/${c.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ is_active: !c.is_active }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRowError(c.id, json.error || `Wijzigen mislukt (${res.status})`);
+        return;
+      }
+      await Promise.all([loadCourses(), refreshCourses()]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setRowError(c.id, msg);
+    } finally {
+      setRowBusyId(null);
+    }
+  }
+
+  async function deleteCourse(c: CourseRow) {
+    setRowError(c.id, null);
+    const token = session?.access_token;
+    if (!token) {
+      setRowError(c.id, 'Niet ingelogd.');
+      return;
+    }
+    const ok = window.confirm(
+      `Weet je zeker dat je de cursus "${c.name}" definitief wilt verwijderen?\n\n` +
+        `Dit kan alleen als er geen leden, projecten, dagboek-notities of extra mappen/documenten aan de cursus hangen. De standaard cursusmap met submappen RAG en Projectdata wordt automatisch opgeruimd.`
+    );
+    if (!ok) return;
+    setRowBusyId(c.id);
+    try {
+      const res = await fetch(`/api/admin/courses/${c.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRowError(c.id, json.error || `Verwijderen mislukt (${res.status})`);
+        return;
+      }
+      await Promise.all([loadCourses(), refreshCourses()]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setRowError(c.id, msg);
+    } finally {
+      setRowBusyId(null);
+    }
   }
 
   async function saveEdit(courseId: string) {
@@ -306,36 +377,79 @@ export default function CoursesAdmin() {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium text-gray-900" data-testid={`text-course-name-${c.id}`}>
-                          {c.name}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-900" data-testid={`text-course-name-${c.id}`}>
+                            {c.name}
+                          </div>
+                          {c.description && (
+                            <div className="text-xs text-gray-500 mt-0.5">{c.description}</div>
+                          )}
                         </div>
-                        {c.description && (
-                          <div className="text-xs text-gray-500 mt-0.5">{c.description}</div>
-                        )}
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span
+                            className={
+                              c.is_active
+                                ? 'text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800'
+                                : 'text-xs font-medium px-2 py-0.5 rounded-full bg-gray-200 text-gray-700'
+                            }
+                            data-testid={`status-course-active-${c.id}`}
+                          >
+                            {c.is_active ? 'Actief' : 'Inactief'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => startEdit(c)}
+                            disabled={rowBusyId === c.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                            title="Naam en beschrijving aanpassen"
+                            data-testid={`button-edit-course-${c.id}`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            Bewerken
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleActive(c)}
+                            disabled={rowBusyId === c.id}
+                            className={
+                              c.is_active
+                                ? 'inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:text-amber-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-amber-50 transition-colors'
+                                : 'inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-green-50 transition-colors'
+                            }
+                            title={c.is_active ? 'Deactiveer deze cursus' : 'Activeer deze cursus'}
+                            data-testid={`button-toggle-active-${c.id}`}
+                          >
+                            {rowBusyId === c.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Power className="w-3.5 h-3.5" />
+                            )}
+                            {c.is_active ? 'Deactiveren' : 'Activeren'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteCourse(c)}
+                            disabled={rowBusyId === c.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:text-red-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                            title="Verwijder deze cursus definitief"
+                            data-testid={`button-delete-course-${c.id}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Verwijderen
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <span
-                          className={
-                            c.is_active
-                              ? 'text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800'
-                              : 'text-xs font-medium px-2 py-0.5 rounded-full bg-gray-200 text-gray-700'
-                          }
+                      {rowErrors[c.id] && (
+                        <div
+                          className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+                          data-testid={`text-row-error-${c.id}`}
                         >
-                          {c.is_active ? 'Actief' : 'Inactief'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => startEdit(c)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
-                          title="Naam en beschrijving aanpassen"
-                          data-testid={`button-edit-course-${c.id}`}
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                          Bewerken
-                        </button>
-                      </div>
+                          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                          <span>{rowErrors[c.id]}</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </li>
