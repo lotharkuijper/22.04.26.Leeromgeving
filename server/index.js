@@ -62,6 +62,12 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+// GPT-5 en o1/o3 modellen accepteren geen 'max_tokens' meer; ze vereisen
+// 'max_completion_tokens'. We detecteren dat aan de modelnaam zodat alle
+// fetches automatisch de juiste sleutel meesturen.
+const MAX_TOKENS_PARAM = /^(gpt-5|o1|o3|o4)/i.test(OPENAI_MODEL)
+  ? 'max_completion_tokens'
+  : 'max_tokens';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
 const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
@@ -294,7 +300,7 @@ app.post('/api/chat', async (req, res) => {
     model: OPENAI_MODEL,
     messages: finalMessages,
     temperature,
-    max_tokens: max_tokens ?? 512,
+    [MAX_TOKENS_PARAM]: max_tokens ?? 512,
     top_p,
     stream,
   };
@@ -448,7 +454,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                 model: OPENAI_MODEL,
                 messages: [{ role: 'user', content: summaryPrompt }],
                 temperature: 0.5,
-                max_tokens: 600,
+                [MAX_TOKENS_PARAM]: 600,
               }),
             });
 
@@ -1939,7 +1945,7 @@ ${combinedText}`;
             model: OPENAI_MODEL,
             messages: [{ role: 'user', content: extractionPrompt }],
             temperature: 0.2,
-            max_tokens: 8192,
+            [MAX_TOKENS_PARAM]: 8192,
           }),
         });
         if (resp.ok) return { resp, errData: null };
@@ -2768,7 +2774,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
               model: OPENAI_MODEL,
               messages: [{ role: 'user', content: summaryPrompt }],
               temperature: 0.5,
-              max_tokens: 600,
+              [MAX_TOKENS_PARAM]: 600,
             }),
           });
 
@@ -3010,7 +3016,7 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: summaryPrompt }],
         temperature: 0.5,
-        max_tokens: maxTokens,
+        [MAX_TOKENS_PARAM]: maxTokens,
       }),
     });
 
@@ -3329,7 +3335,7 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: summaryPrompt }],
           temperature: 0.5,
-          max_tokens: 1000,
+          [MAX_TOKENS_PARAM]: 1000,
         }),
       });
       if (!chatResp.ok) {
@@ -5343,7 +5349,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
           { role: 'user', content: message },
         ],
         temperature: 0.7,
-        max_tokens: 700,
+        [MAX_TOKENS_PARAM]: 700,
       }),
     });
     if (!chatResp.ok) {
@@ -5454,7 +5460,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.2,
-          max_tokens: 600,
+          [MAX_TOKENS_PARAM]: 600,
           response_format: { type: 'json_object' },
         }),
       });
@@ -5533,7 +5539,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
             model: OPENAI_MODEL,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.2,
-            max_tokens: 600,
+            [MAX_TOKENS_PARAM]: 600,
             response_format: { type: 'json_object' },
           }),
         });
@@ -5658,7 +5664,7 @@ async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
-        max_tokens: 800,
+        [MAX_TOKENS_PARAM]: 800,
         response_format: { type: 'json_object' },
       }),
     });
@@ -5738,7 +5744,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
               messages: [{ role: 'user', content: enMode
                 ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
                 : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
-              temperature: 0.3, max_tokens: 300,
+              temperature: 0.3, [MAX_TOKENS_PARAM]: 300,
             }),
           });
           if (r1.ok) studentSummary = ((await r1.json()).choices?.[0]?.message?.content || '').trim();
@@ -5752,7 +5758,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
               messages: [{ role: 'user', content: enMode
                 ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
                 : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
-              temperature: 0.3, max_tokens: 600,
+              temperature: 0.3, [MAX_TOKENS_PARAM]: 600,
             }),
           });
           if (r2.ok) personaSummary = ((await r2.json()).choices?.[0]?.message?.content || '').trim();
@@ -5894,7 +5900,7 @@ Geen tekst buiten de JSON.`;
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.4, max_tokens: 1500,
+          temperature: 0.4, [MAX_TOKENS_PARAM]: 1500,
           response_format: { type: 'json_object' },
         }),
       });
@@ -5929,7 +5935,7 @@ ${reflection}`;
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.5, max_tokens: 700,
+          temperature: 0.5, [MAX_TOKENS_PARAM]: 700,
         }),
       });
       if (!chatResp.ok) {
@@ -6150,7 +6156,7 @@ ${reflection}`;
                 body: JSON.stringify({
                   model: OPENAI_MODEL,
                   messages: [{ role: 'user', content: sumPrompt }],
-                  temperature: 0.3, max_tokens: 350,
+                  temperature: 0.3, [MAX_TOKENS_PARAM]: 350,
                 }),
               });
               if (sr.ok) summaryText = ((await sr.json()).choices?.[0]?.message?.content || '').trim();
@@ -7363,7 +7369,7 @@ Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exact
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.4, max_tokens: 1800,
+          temperature: 0.4, [MAX_TOKENS_PARAM]: 1800,
         }),
       });
       if (!gr.ok) {
