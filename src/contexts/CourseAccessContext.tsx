@@ -12,17 +12,20 @@ type Course = {
 interface CourseAccessContextType {
   courses: Course[];
   loadingCourses: boolean;
+  refreshCourses: () => Promise<void>;
 }
 
 const CourseAccessContext = createContext<CourseAccessContextType>({
   courses: [],
   loadingCourses: true,
+  refreshCourses: async () => {},
 });
 
 export function CourseAccessProvider({ children }: { children: ReactNode }) {
   const { user, profile, loading: authLoading } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [loadingCourses, setLoadingCourses] = useState(true);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
 
   useEffect(() => {
     if (user === undefined || authLoading) return;
@@ -95,10 +98,14 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
     };
 
     loadCourses();
-  }, [user?.id, profile?.role, authLoading]);
+  }, [user?.id, profile?.role, authLoading, reloadTrigger]);
+
+  const refreshCourses = async () => {
+    setReloadTrigger((n) => n + 1);
+  };
 
   return (
-    <CourseAccessContext.Provider value={{ courses, loadingCourses }}>
+    <CourseAccessContext.Provider value={{ courses, loadingCourses, refreshCourses }}>
       {children}
     </CourseAccessContext.Provider>
   );

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { useCourseAccess } from '../contexts/CourseAccessContext';
 
 interface CourseRow {
   id: string;
@@ -12,6 +13,7 @@ interface CourseRow {
 
 export default function CoursesAdmin() {
   const { session } = useAuth();
+  const { refreshCourses } = useCourseAccess();
   const [courses, setCourses] = useState<CourseRow[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [name, setName] = useState('');
@@ -69,7 +71,7 @@ export default function CoursesAdmin() {
       setSuccessMsg(`Cursus "${trimmed}" aangemaakt met RAG- en Projectdata-map.`);
       setName('');
       setDescription('');
-      await loadCourses();
+      await Promise.all([loadCourses(), refreshCourses()]);
     } catch (err: any) {
       setError(err?.message || 'Onbekende fout');
     } finally {
