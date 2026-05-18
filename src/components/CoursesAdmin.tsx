@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2, Users, FolderTree, FolderOpen, UserX } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2, Users, FolderTree, FolderOpen, UserX, Flame } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -62,6 +62,13 @@ export default function CoursesAdmin() {
   const [deleteTarget, setDeleteTarget] = useState<CourseRow | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteDialogError, setDeleteDialogError] = useState<string | null>(null);
+
+  // Cascade-dialoog: verwijder cursus inclusief ALLE gekoppelde data.
+  const [cascadeTarget, setCascadeTarget] = useState<CourseRow | null>(null);
+  const [cascadeCounts, setCascadeCounts] = useState<DeleteCounts | null>(null);
+  const [cascadeLoading, setCascadeLoading] = useState(false);
+  const [cascadeConfirmText, setCascadeConfirmText] = useState('');
+  const [cascadeDialogError, setCascadeDialogError] = useState<string | null>(null);
 
   function setRowError(id: string, msg: string | null) {
     setRowErrors((m) => ({ ...m, [id]: msg }));
@@ -229,6 +236,78 @@ export default function CoursesAdmin() {
     setDeleteTarget(null);
     setDeleteConfirmText('');
     setDeleteDialogError(null);
+  }
+
+  async function requestCascadeDelete(c: CourseRow) {
+    setRowError(c.id, null);
+    setRowCount(c.id, null);
+    setCascadeConfirmText('');
+    setCascadeDialogError(null);
+    setCascadeCounts(null);
+    setCascadeTarget(c);
+    const token = session?.access_token;
+    if (!token) {
+      setCascadeDialogError('Niet ingelogd.');
+      return;
+    }
+    setCascadeLoading(true);
+    try {
+      const res = await fetch(`/api/admin/courses/${c.id}?preview=true`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCascadeDialogError(json.error || `Ophalen van tellingen mislukt (${res.status})`);
+        return;
+      }
+      setCascadeCounts((json.counts ?? null) as DeleteCounts | null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setCascadeDialogError(msg);
+    } finally {
+      setCascadeLoading(false);
+    }
+  }
+
+  function closeCascadeDialog() {
+    setCascadeTarget(null);
+    setCascadeCounts(null);
+    setCascadeConfirmText('');
+    setCascadeDialogError(null);
+  }
+
+  async function confirmCascadeDelete() {
+    const c = cascadeTarget;
+    if (!c) return;
+    if (cascadeConfirmText.trim() !== c.name) return;
+    const token = session?.access_token;
+    if (!token) {
+      setCascadeDialogError('Niet ingelogd.');
+      return;
+    }
+    setRowBusyId(c.id);
+    setCascadeDialogError(null);
+    let success = false;
+    try {
+      const res = await fetch(`/api/admin/courses/${c.id}?cascade=true`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCascadeDialogError(json.error || `Verwijderen mislukt (${res.status})`);
+        return;
+      }
+      await Promise.all([loadCourses(), refreshCourses()]);
+      success = true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setCascadeDialogError(msg);
+    } finally {
+      setRowBusyId(null);
+      if (success) closeCascadeDialog();
+    }
   }
 
   async function confirmDeleteCourse() {
@@ -541,6 +620,19 @@ export default function CoursesAdmin() {
                             <Trash2 className="w-3.5 h-3.5" />
                             Verwijderen
                           </button>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => requestCascadeDelete(c)}
+                              disabled={rowBusyId === c.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-white bg-red-700 hover:bg-red-800 disabled:bg-gray-300 disabled:text-gray-100 px-2 py-1 rounded transition-colors"
+                              title="Verwijder deze cursus inclusief leden, projecten, dagboek-notities en de hele cursusmap"
+                              data-testid={`button-cascade-delete-course-${c.id}`}
+                            >
+                              <Flame className="w-3.5 h-3.5" />
+                              Verwijder cursus + alle data
+                            </button>
+                          )}
                         </div>
                       </div>
                       {rowErrors[c.id] && (
@@ -759,6 +851,146 @@ export default function CoursesAdmin() {
                 )}
                 <Trash2 className="w-4 h-4" />
                 Definitief verwijderen
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        )}
+      </AlertDialog>
+
+      <AlertDialog
+        open={cascadeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && rowBusyId !== cascadeTarget?.id) closeCascadeDialog();
+        }}
+      >
+        {cascadeTarget && (
+          <AlertDialogContent data-testid="dialog-cascade-delete-course">
+            <AlertDialogHeader>
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <Flame className="w-5 h-5 text-red-700" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <AlertDialogTitle>Cursus inclusief alle data verwijderen</AlertDialogTitle>
+                  <AlertDialogDescription className="mt-1">
+                    Je staat op het punt de cursus{' '}
+                    <span
+                      className="font-semibold text-gray-900"
+                      data-testid="text-cascade-course-name"
+                    >
+                      {cascadeTarget.name}
+                    </span>{' '}
+                    én alles wat eraan hangt definitief te verwijderen. Deze actie kan
+                    niet ongedaan worden gemaakt.
+                  </AlertDialogDescription>
+                </div>
+              </div>
+            </AlertDialogHeader>
+
+            <div
+              className="flex flex-col gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+              data-testid="cascade-counts-summary"
+            >
+              <div className="flex items-start gap-2 font-medium">
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>
+                  In één transactie worden de volgende gekoppelde gegevens verwijderd:
+                </span>
+              </div>
+              {cascadeLoading ? (
+                <div className="flex items-center gap-2 text-gray-700 pl-6">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Tellingen ophalen…
+                </div>
+              ) : cascadeCounts ? (
+                <ul className="list-disc pl-10 space-y-0.5 text-gray-800">
+                  <li data-testid="cascade-count-members">
+                    {cascadeCounts.members} lid/leden
+                  </li>
+                  <li data-testid="cascade-count-projects">
+                    {cascadeCounts.projects} project(en) inclusief al hun groepen,
+                    persona-gesprekken en checkpoints
+                  </li>
+                  <li data-testid="cascade-count-sessions">
+                    {cascadeCounts.sessions} student-sessie(s)
+                  </li>
+                  <li data-testid="cascade-count-journal">
+                    {cascadeCounts.journal_entries} dagboek-notitie(s) (alleen die aan
+                    deze cursus hangen)
+                  </li>
+                  <li data-testid="cascade-count-extra-folders">
+                    {cascadeCounts.extra_folders} extra (sub)map(pen) in de cursusmap
+                  </li>
+                  <li data-testid="cascade-count-documents">
+                    {cascadeCounts.documents} document(en) in de cursusmap
+                  </li>
+                  <li>
+                    De standaard cursusmap met submappen <strong>RAG</strong> en{' '}
+                    <strong>Projectdata</strong> en alle koppelingen
+                  </li>
+                </ul>
+              ) : (
+                <div className="text-gray-700 pl-6 text-xs">
+                  Geen tellingen beschikbaar — bevestiging blijft uitgeschakeld tot de
+                  preview is geladen.
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="cascade-course-confirm-input"
+                className="block text-sm font-medium text-gray-700"
+              >
+                Typ <span className="font-mono font-semibold">{cascadeTarget.name}</span>{' '}
+                om te bevestigen
+              </label>
+              <input
+                id="cascade-course-confirm-input"
+                type="text"
+                value={cascadeConfirmText}
+                onChange={(e) => setCascadeConfirmText(e.target.value)}
+                disabled={rowBusyId === cascadeTarget.id}
+                autoFocus
+                className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 disabled:bg-gray-100"
+                placeholder={cascadeTarget.name}
+                data-testid="input-cascade-delete-confirm"
+              />
+            </div>
+
+            {cascadeDialogError && (
+              <div
+                className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+                data-testid="text-cascade-delete-error"
+              >
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span>{cascadeDialogError}</span>
+              </div>
+            )}
+
+            <AlertDialogFooter>
+              <AlertDialogCancel
+                disabled={rowBusyId === cascadeTarget.id}
+                data-testid="button-cancel-cascade-delete"
+              >
+                Annuleren
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={confirmCascadeDelete}
+                disabled={
+                  rowBusyId === cascadeTarget.id ||
+                  cascadeLoading ||
+                  !cascadeCounts ||
+                  cascadeConfirmText.trim() !== cascadeTarget.name
+                }
+                className="bg-red-700 hover:bg-red-800 text-white"
+                data-testid="button-confirm-cascade-delete"
+              >
+                {rowBusyId === cascadeTarget.id && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                <Flame className="w-4 h-4" />
+                Cursus + alle data definitief verwijderen
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

@@ -1744,6 +1744,16 @@ app.patch('/api/admin/courses/:id', async (req, res) => {
 // zijn. De drie standaard-stub-folders (course/RAG/Projectdata) en hun
 // koppelingen (course_folder_assignments, folder_permissions,
 // folder_rag_assignments) worden in één transactie meeverwijderd.
+//
+// Query-parameters:
+//   ?preview=true  — voert geen delete uit, geeft alleen de tellingen terug.
+//   ?cascade=true  — verwijdert in één transactie ALLES dat aan de cursus
+//                    hangt (leden, projecten + hun sessies/threads/messages/
+//                    persona's/groep-data/checkpoints, dagboek-notities die
+//                    via source_ref aan de groepen/checkpoints hangen, en de
+//                    volledige cursusmap-subtree inclusief extra mappen en
+//                    documenten). Alleen voor admins, dubbele bevestiging
+//                    aan de client-kant.
 app.delete('/api/admin/courses/:id', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
@@ -1757,6 +1767,9 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
   if (!pgPool) {
     return res.status(503).json({ error: 'Direct DB-verbinding (SUPABASE_DB_URL) niet beschikbaar voor transactionele delete' });
   }
+
+  const preview = req.query?.preview === 'true' || req.query?.preview === '1';
+  const cascade = req.query?.cascade === 'true' || req.query?.cascade === '1';
 
   const client = await pgPool.connect();
   try {
@@ -1899,7 +1912,18 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
       counts.extra_folders > 0 ||
       counts.documents > 0;
 
-    if (blocked) {
+    // Preview-modus: alleen tellingen teruggeven, niets verwijderen.
+    if (preview) {
+      await client.query('ROLLBACK');
+      return res.json({
+        ok: true,
+        preview: true,
+        course: { id: existing.id, name: existing.name },
+        counts,
+      });
+    }
+
+    if (blocked && !cascade) {
       await client.query('ROLLBACK');
       const parts = [];
       if (counts.members > 0) parts.push(`${counts.members} lid/leden`);
@@ -1912,6 +1936,122 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
         error: `Kan cursus "${existing.name}" niet verwijderen: er is nog gekoppelde data (${parts.join(', ')}). Verwijder die eerst of deactiveer de cursus.`,
         counts,
       });
+    }
+
+    // 3b) Cascade-modus: ruim eerst alle gekoppelde data op die niet via
+    //     FK-cascades verdwijnt zodra de cursus weg is. Volgorde:
+    //       a. learning_journal_entries (geen FK naar projects/courses;
+    //          gekoppeld via source_ref) — alleen entries die strikt aan
+    //          deze cursus hangen, identiek aan de counts-query hierboven.
+    //       b. projects (cascade: project_personas, project_groups,
+    //          project_group_members, group_chat_messages,
+    //          group_persona_threads, group_persona_messages,
+    //          group_checkpoints, project_documents,
+    //          project_persona_documents, student_project_sessions,
+    //          project_analyses).
+    //       c. course_members (zou ook via courses-cascade gaan; expliciet
+    //          zodat de teruggegeven 'deleted'-tellingen kloppen).
+    //       d. documents in de hele cursusmap-subtree (documents.folder_id
+    //          is ON DELETE SET NULL, dus zonder expliciete delete blijven
+    //          ze als wezen achter).
+    //       e. folder_permissions / folder_rag_assignments voor de hele
+    //          subtree.
+    //       f. document_folders subtree (top-folder verwijderen cascadet
+    //          dankzij parent_folder_id ON DELETE CASCADE de rest mee).
+    //       g. courses-rij (cascadet course_folder_assignments,
+    //          quiz_sources/itembank-mapping/rag-mix-instellingen).
+    let deleted = null;
+    if (cascade && blocked) {
+      // a. journal-notities verwijderen — exact dezelfde filter als de
+      //    counts-query, zodat we niets meer of minder raken dan getoond.
+      const journalDelRes = await client.query(
+        `DELETE FROM learning_journal_entries lje
+          WHERE lje.source_ref IS NOT NULL
+            AND (
+              (
+                lje.source_ref LIKE 'group_evaluate:%'
+                AND split_part(lje.source_ref, ':', 2) ~ '^[0-9a-fA-F-]{36}$'
+                AND split_part(lje.source_ref, ':', 2)::uuid IN (
+                  SELECT pg.id
+                    FROM project_groups pg
+                    JOIN projects p ON p.id = pg.project_id
+                   WHERE p.course_id = $1
+                )
+              )
+              OR
+              (
+                lje.source_ref LIKE 'group_thread_checkpoint:%'
+                AND split_part(lje.source_ref, ':', 2) ~ '^[0-9a-fA-F-]{36}$'
+                AND split_part(lje.source_ref, ':', 2)::uuid IN (
+                  SELECT cp.id
+                    FROM group_checkpoints cp
+                    JOIN project_groups pg ON pg.id = cp.group_id
+                    JOIN projects p ON p.id = pg.project_id
+                   WHERE p.course_id = $1
+                )
+              )
+            )`,
+        [courseId]
+      );
+
+      // b. Projecten — cascadet alle project-sub-tabellen mee.
+      const projectsDelRes = await client.query(
+        'DELETE FROM projects WHERE course_id = $1',
+        [courseId]
+      );
+
+      // c. Cursus-leden expliciet.
+      const membersDelRes = await client.query(
+        'DELETE FROM course_members WHERE course_id = $1',
+        [courseId]
+      );
+
+      // d/e/f. Volledige folder-subtree onder de cursusmap.
+      let documentsDeleted = 0;
+      let extraFoldersDeleted = 0;
+      if (courseFolderId) {
+        // Documenten in elke folder onder de cursusmap.
+        const docsDelRes = await client.query(
+          `WITH RECURSIVE subtree AS (
+             SELECT id FROM document_folders WHERE id = $1
+             UNION ALL
+             SELECT df.id
+               FROM document_folders df
+               JOIN subtree s ON df.parent_folder_id = s.id
+           )
+           DELETE FROM documents
+            WHERE folder_id IN (SELECT id FROM subtree)`,
+          [courseFolderId]
+        );
+        documentsDeleted = docsDelRes.rowCount || 0;
+
+        // Aantal niet-standaard mappen tellen vóór de cascade-delete.
+        const extraRes = await client.query(
+          `WITH RECURSIVE subtree AS (
+             SELECT id FROM document_folders WHERE id = $1
+             UNION ALL
+             SELECT df.id
+               FROM document_folders df
+               JOIN subtree s ON df.parent_folder_id = s.id
+           )
+           SELECT COUNT(*)::int AS n FROM subtree
+            WHERE NOT (id = ANY($2::uuid[]))`,
+          [courseFolderId, standardFolderIds]
+        );
+        extraFoldersDeleted = extraRes.rows[0].n;
+      }
+
+      // De expliciete folder-cleanup hieronder (course_folder_assignments,
+      // folder_rag_assignments, folder_permissions en document_folders) is
+      // gedeeld met het niet-cascade-pad en wordt zo dadelijk uitgevoerd.
+
+      deleted = {
+        journal_entries: journalDelRes.rowCount || 0,
+        projects: projectsDelRes.rowCount || 0,
+        members: membersDelRes.rowCount || 0,
+        documents: documentsDeleted,
+        extra_folders: extraFoldersDeleted,
+      };
     }
 
     // 4) Veilig opruimen: koppelingen → folders → cursus.
@@ -1950,6 +2090,14 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    if (cascade && deleted) {
+      console.log(
+        `[admin/courses DELETE cascade] Cursus ${courseId} ("${existing.name}") verwijderd ` +
+        `+ ${deleted.members} leden, ${deleted.projects} projecten, ${deleted.journal_entries} dagboek-notities, ` +
+        `${deleted.documents} documenten, ${deleted.extra_folders} extra (sub)map(pen).`
+      );
+      return res.json({ ok: true, id: courseId, cascade: true, deleted });
+    }
     console.log(`[admin/courses DELETE] Cursus ${courseId} ("${existing.name}") verwijderd.`);
     return res.json({ ok: true, id: courseId });
   } catch (err) {
