@@ -67,7 +67,7 @@ const PROMPT_LABELS: Record<string, string> = {
 export function QuizSourcesAdminPanel() {
   const { session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
-  const { lang } = useLanguage();
+  const { t } = useLanguage();
 
   const [loading, setLoading] = useState(false);
   const [savingMix, setSavingMix] = useState(false);
@@ -213,11 +213,11 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify(mix),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
+      if (!res.ok) throw new Error(data.error || t('admin.quizSources.saveFailed'));
       if (data.mix) setMix(data.mix);
-      showMsg('success', lang === 'en' ? 'Source mix saved.' : 'Bronnen-mix opgeslagen.');
+      showMsg('success', t('admin.quizSources.mixSaved'));
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.unknownError'));
     }
     setSavingMix(false);
   }
@@ -232,10 +232,10 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify({ mappings }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
-      showMsg('success', lang === 'en' ? `Mappings saved (${data.saved}).` : `Koppelingen opgeslagen (${data.saved}).`);
+      if (!res.ok) throw new Error(data.error || t('admin.quizSources.saveFailed'));
+      showMsg('success', t('admin.quizSources.mappingsSaved', { saved: String(data.saved) }));
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.unknownError'));
     }
     setSavingMappings(false);
   }
@@ -250,10 +250,10 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify({ sources: ragSources.filter(s => s.folder_id) }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
-      showMsg('success', lang === 'en' ? `RAG links saved (${data.saved}).` : `RAG-koppelingen opgeslagen (${data.saved}).`);
+      if (!res.ok) throw new Error(data.error || t('admin.quizSources.saveFailed'));
+      showMsg('success', t('admin.quizSources.ragLinksSaved', { saved: String(data.saved) }));
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.unknownError'));
     }
     setSavingRag(false);
   }
@@ -267,10 +267,10 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify({ content: promptDrafts[name] || '', is_active: true }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
-      showMsg('success', lang === 'en' ? `Prompt "${PROMPT_LABELS[name] || name}" saved.` : `Prompt "${PROMPT_LABELS[name] || name}" opgeslagen.`);
+      if (!res.ok) throw new Error(data.error || t('admin.quizSources.saveFailed'));
+      showMsg('success', t('admin.quizSources.promptSaved', { label: PROMPT_LABELS[name] || name }));
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.unknownError'));
     }
     setSavingPromptName(null);
   }
@@ -307,10 +307,10 @@ export function QuizSourcesAdminPanel() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || (lang === 'en' ? 'Fetching suggestions failed' : 'Suggesties ophalen mislukt'));
+      if (!res.ok) throw new Error(data.error || t('admin.quizSources.suggestFailed'));
       setSuggestionsByConcept(prev => ({ ...prev, [concept.id]: data.suggestions || [] }));
     } catch (err) {
-      showMsg('error', err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error fetching suggestions' : 'Onbekende fout bij suggesties'));
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.suggestError'));
     }
     setSuggestingConceptId(null);
   }
@@ -334,7 +334,7 @@ export function QuizSourcesAdminPanel() {
   if (!activeCourseId) {
     return (
       <div className="p-6 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
-        Selecteer eerst een actieve cursus om quiz-bronnen te beheren.
+        {t('admin.quizSources.selectCourseFirst')}
       </div>
     );
   }
@@ -344,17 +344,13 @@ export function QuizSourcesAdminPanel() {
   return (
     <div className="space-y-8" data-testid="panel-quiz-sources">
       <div className="bg-white border border-gray-200 rounded-xl p-5">
-        <h2 className="text-lg font-bold text-gray-900 mb-1">Quiz-bronnen voor {activeCourse?.name || 'cursus'}</h2>
-        <p className="text-sm text-gray-600">
-          Bepaal waar quizvragen vandaan komen: cursusmateriaal (RAG), de ShareStats-itembank, of vrij door het LLM gegenereerd.
-          De mix-percentages, koppelingen aan begrippen en de prompts beheer je hier.
-        </p>
+        <h2 className="text-lg font-bold text-gray-900 mb-1">{t('admin.quizSources.title', { name: activeCourse?.name || '' })}</h2>
+        <p className="text-sm text-gray-600">{t('admin.quizSources.desc')}</p>
       </div>
 
       {!schemaReady && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl text-sm text-yellow-900">
-          De database-migratie <code>20260430160000_quiz_sources_management.sql</code> is nog niet toegepast.
-          Voer deze uit in het Supabase SQL-dashboard om quiz-bronnenbeheer te activeren.
+          {t('admin.quizSources.schemaNotReady')}
         </div>
       )}
 
@@ -373,19 +369,17 @@ export function QuizSourcesAdminPanel() {
       {/* Mix-sliders */}
       <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-source-mix">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <Sparkles className="w-4 h-4" /> Bronnen-mix per cursus
+          <Sparkles className="w-4 h-4" /> {t('admin.quizSources.mix.title')}
         </h3>
-        <p className="text-xs text-gray-600">
-          Geef voor elke bron het percentage vragen in een quiz. De server normaliseert naar totaal 100%.
-        </p>
+        <p className="text-xs text-gray-600">{t('admin.quizSources.mix.desc')}</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MixField label="RAG (cursusmateriaal)" value={mix.pct_rag} onChange={v => setMixField('pct_rag', v)} testId="input-mix-rag" />
+          <MixField label={t('admin.quizSources.mix.rag')} value={mix.pct_rag} onChange={v => setMixField('pct_rag', v)} testId="input-mix-rag" />
           <MixField label="ItemBank" value={mix.pct_itembank} onChange={v => setMixField('pct_itembank', v)} testId="input-mix-itembank" />
-          <MixField label="LLM-creatief" value={mix.pct_llm} onChange={v => setMixField('pct_llm', v)} testId="input-mix-llm" />
+          <MixField label={t('admin.quizSources.mix.llm')} value={mix.pct_llm} onChange={v => setMixField('pct_llm', v)} testId="input-mix-llm" />
         </div>
         <div className="flex items-center justify-between">
           <span className={`text-sm ${mixSum === 100 ? 'text-gray-500' : 'text-amber-700'}`} data-testid="text-mix-sum">
-            Som: {mixSum}% {mixSum !== 100 && '(wordt genormaliseerd bij opslaan)'}
+            {t('admin.quizSources.mix.sum', { sum: String(mixSum) })} {mixSum !== 100 && t('admin.quizSources.mix.normalized')}
           </span>
           <button
             onClick={handleSaveMix}
@@ -394,7 +388,7 @@ export function QuizSourcesAdminPanel() {
             data-testid="button-save-mix"
           >
             <Save className="w-4 h-4" />
-            {savingMix ? 'Opslaan...' : 'Mix opslaan'}
+            {savingMix ? t('admin.quizSources.mix.saving') : t('admin.quizSources.mix.save')}
           </button>
         </div>
       </section>
@@ -402,28 +396,25 @@ export function QuizSourcesAdminPanel() {
       {/* ItemBank-mappings */}
       <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-itembank-mappings">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <Database className="w-4 h-4" /> Koppeling begrip → ItemBank-sectie
+          <Database className="w-4 h-4" /> {t('admin.quizSources.itembank.title')}
         </h3>
-        <p className="text-xs text-gray-600">
-          Per begrip kun je één of meerdere itembank-secties (exsection-paden) koppelen. Vragen worden geselecteerd
-          op exact prefix-match, dus een hoger niveau dekt automatisch alle onderliggende paden.
-        </p>
+        <p className="text-xs text-gray-600">{t('admin.quizSources.itembank.desc')}</p>
         {sections.length === 0 ? (
           <p className="text-sm text-gray-500 italic">
-            Geen itembank-secties beschikbaar. Importeer eerst items via "ShareStats Import".
+            {t('admin.quizSources.itembank.noSections')}
           </p>
         ) : (
           <>
             <div className="border border-gray-200 rounded-lg overflow-hidden" data-testid="table-itembank-sections-overview">
               <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-700">
-                Beschikbare ItemBank-secties ({sections.length})
+                {t('admin.quizSources.itembank.available', { count: String(sections.length) })}
               </div>
               <div className="max-h-64 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50 text-gray-600 sticky top-0">
                     <tr>
-                      <th className="text-left px-3 py-2 font-medium">Sectie</th>
-                      <th className="text-right px-3 py-2 font-medium w-16">Totaal</th>
+                      <th className="text-left px-3 py-2 font-medium">{t('admin.quizSources.itembank.sectionCol')}</th>
+                      <th className="text-right px-3 py-2 font-medium w-16">{t('admin.quizSources.itembank.totalCol')}</th>
                       <th className="text-right px-3 py-2 font-medium w-16">MCQ</th>
                       <th className="text-right px-3 py-2 font-medium w-16">Open</th>
                     </tr>
@@ -469,7 +460,7 @@ export function QuizSourcesAdminPanel() {
                         ) : (
                           <Lightbulb className="w-3 h-3" />
                         )}
-                        Stel mapping voor
+                        {t('admin.quizSources.itembank.suggestMapping')}
                       </button>
                       <select
                         onChange={e => {
@@ -483,7 +474,7 @@ export function QuizSourcesAdminPanel() {
                         defaultValue=""
                         data-testid={`select-section-${concept.id}`}
                       >
-                        <option value="">+ koppel sectie...</option>
+                        <option value="">{t('admin.quizSources.itembank.linkSection')}</option>
                         {sections.map((s, idx) => {
                           const mcq = s.mcq_count ?? 0;
                           const open = s.open_count ?? 0;
@@ -497,7 +488,7 @@ export function QuizSourcesAdminPanel() {
                     </div>
                   </div>
                   {conceptMappings.length === 0 ? (
-                    <p className="text-xs text-gray-400 italic">Nog geen secties gekoppeld</p>
+                    <p className="text-xs text-gray-400 italic">{t('admin.quizSources.itembank.noSectionsLinked')}</p>
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {conceptMappings.map(m => {
@@ -512,7 +503,6 @@ export function QuizSourcesAdminPanel() {
                             <button
                               onClick={() => removeMapping(concept.id, key)}
                               className="hover:text-red-600"
-                              aria-label="Verwijder"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
@@ -526,19 +516,18 @@ export function QuizSourcesAdminPanel() {
                     <div className="mt-3 p-2 bg-amber-50 border border-amber-200 rounded" data-testid={`suggestions-${concept.id}`}>
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-semibold text-amber-900 inline-flex items-center gap-1">
-                          <Lightbulb className="w-3 h-3" /> Voorgestelde secties (op semantische gelijkenis)
+                          <Lightbulb className="w-3 h-3" /> {t('admin.quizSources.itembank.suggestionsTitle')}
                         </span>
                         <button
                           type="button"
                           onClick={() => dismissSuggestions(concept.id)}
                           className="text-xs text-amber-700 hover:text-amber-900"
-                          aria-label="Sluit suggesties"
                         >
-                          sluiten
+                          {t('admin.quizSources.itembank.suggestionsClose')}
                         </button>
                       </div>
                       {suggestionsByConcept[concept.id].length === 0 ? (
-                        <p className="text-xs text-amber-800 italic">Geen suggesties beschikbaar.</p>
+                        <p className="text-xs text-amber-800 italic">{t('admin.quizSources.itembank.suggestionsNone')}</p>
                       ) : (
                         <ul className="space-y-1">
                           {suggestionsByConcept[concept.id].map(s => {
@@ -555,7 +544,7 @@ export function QuizSourcesAdminPanel() {
                                 <span className="text-amber-900 flex-1 truncate">
                                   {s.exsection_path.join(' / ')}
                                   <span className="ml-2 text-amber-700">
-                                    ({s.count} vragen · gelijkenis {(s.similarity * 100).toFixed(0)}%)
+                                    ({t('admin.quizSources.itembank.suggestionInfo', { count: String(s.count), pct: (s.similarity * 100).toFixed(0) })})
                                   </span>
                                 </span>
                                 <button
@@ -566,7 +555,7 @@ export function QuizSourcesAdminPanel() {
                                   data-testid={`button-add-suggestion-${concept.id}-${pathKey}`}
                                 >
                                   <Plus className="w-3 h-3" />
-                                  {already ? 'al gekoppeld' : 'voeg toe'}
+                                  {already ? t('admin.quizSources.itembank.alreadyLinked') : t('admin.quizSources.itembank.addSuggestion')}
                                 </button>
                               </li>
                             );
@@ -588,19 +577,16 @@ export function QuizSourcesAdminPanel() {
           data-testid="button-save-mappings"
         >
           <Save className="w-4 h-4" />
-          {savingMappings ? 'Opslaan...' : 'Koppelingen opslaan'}
+          {savingMappings ? t('admin.quizSources.itembank.saving') : t('admin.quizSources.itembank.save')}
         </button>
       </section>
 
       {/* RAG-folder mapping */}
       <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-rag-folder-mapping">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <FolderOpen className="w-4 h-4" /> Primaire RAG-folder per begrip
+          <FolderOpen className="w-4 h-4" /> {t('admin.quizSources.rag.title')}
         </h3>
-        <p className="text-xs text-gray-600">
-          Koppel ieder begrip aan één primaire folder met cursusmateriaal. De RAG-bron van de quizgenerator zoekt eerst
-          binnen deze folder; als er geen koppeling is, valt de zoekopdracht terug op de algemene RAG-instellingen van de cursus.
-        </p>
+        <p className="text-xs text-gray-600">{t('admin.quizSources.rag.desc')}</p>
         <div className="space-y-2 max-h-96 overflow-y-auto">
           {concepts.map(concept => {
             const current = ragSources.find(s => s.concept_id === concept.id);
@@ -613,7 +599,7 @@ export function QuizSourcesAdminPanel() {
                   className="text-xs border border-gray-300 rounded px-2 py-1 max-w-xs"
                   data-testid={`select-rag-folder-${concept.id}`}
                 >
-                  <option value="">— geen folder —</option>
+                  <option value="">{t('admin.quizSources.rag.noFolder')}</option>
                   {folders.map(f => (
                     <option key={f.id} value={f.id}>{f.name}</option>
                   ))}
@@ -629,21 +615,19 @@ export function QuizSourcesAdminPanel() {
           data-testid="button-save-rag-sources"
         >
           <Save className="w-4 h-4" />
-          {savingRag ? 'Opslaan...' : 'RAG-koppelingen opslaan'}
+          {savingRag ? t('admin.quizSources.rag.saving') : t('admin.quizSources.rag.save')}
         </button>
       </section>
 
       {/* Quiz prompts */}
       <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-quiz-prompts">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <FileText className="w-4 h-4" /> Quiz-prompts
+          <FileText className="w-4 h-4" /> {t('admin.quizSources.prompts.title')}
         </h3>
-        <p className="text-xs text-gray-600">
-          Vier prompts sturen hoe de LLM-bron quizvragen genereert en hoe open antwoorden worden beoordeeld.
-        </p>
+        <p className="text-xs text-gray-600">{t('admin.quizSources.prompts.desc')}</p>
         {prompts.length === 0 && !loading && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 inline-flex items-center gap-1">
-            <Plus className="w-3 h-3" /> Quiz-prompts worden bij eerste server-start automatisch aangemaakt — herstart de server als ze niet verschijnen.
+            <Plus className="w-3 h-3" /> {t('admin.quizSources.prompts.noPrompts')}
           </p>
         )}
         {prompts.map(p => (
@@ -657,7 +641,7 @@ export function QuizSourcesAdminPanel() {
                 data-testid={`button-save-prompt-${p.name}`}
               >
                 <Save className="w-3 h-3" />
-                {savingPromptName === p.name ? 'Opslaan...' : 'Opslaan'}
+                {savingPromptName === p.name ? t('admin.quizSources.prompts.saving') : t('admin.quizSources.prompts.save')}
               </button>
             </div>
             <textarea

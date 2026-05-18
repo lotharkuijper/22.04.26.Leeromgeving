@@ -33,7 +33,7 @@ const EMPTY_FORM = {
 export function PersonaLibraryTab() {
   const { isAdmin, session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
-  const { lang } = useLanguage();
+  const { lang, t } = useLanguage();
   const [personas, setPersonas] = useState<CoursePersona[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -187,7 +187,7 @@ export function PersonaLibraryTab() {
   if (!activeCourseId) {
     return (
       <div className="p-8 text-center text-gray-500 bg-white rounded-2xl border border-gray-200">
-        Kies eerst een actieve cursus om de bibliotheek te bekijken.
+        {t('admin.personaLib.selectCourse')}
       </div>
     );
   }
@@ -197,14 +197,9 @@ export function PersonaLibraryTab() {
       <div className="bg-white rounded-2xl border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <Bot className="w-5 h-5" /> Persona-bibliotheek
-            </h2>
+            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Bot className="w-5 h-5" /> {t('admin.personaLib.title')}</h2>
             <p className="text-sm text-gray-500">
-              Cursus: {activeCourse?.name}.{' '}
-              {isAdmin
-                ? 'Beheer hier de sjabloon-persona\'s. Docenten kunnen ze via "Gebruik in project" als kopie toevoegen.'
-                : 'Alleen-lezen. Gebruik "Gebruik in project" om een sjabloon als onafhankelijke kopie aan een project toe te voegen.'}
+              {t('admin.personaLib.courseLabel')}: {activeCourse?.name}. {t('admin.personaLib.descPre')} <strong>{t('admin.personaLib.descProjectNav')}</strong>. {t('admin.personaLib.descPost')}
             </p>
           </div>
           {isAdmin && (
@@ -220,15 +215,7 @@ export function PersonaLibraryTab() {
 
         <div className="bg-blue-50 border border-blue-100 text-blue-800 px-3 py-2 rounded text-xs flex items-start gap-2 mb-3">
           <FolderOpen className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>
-            {isAdmin
-              ? (lang === 'en'
-                ? 'Admins can create and edit templates here. Teachers can copy them into projects — copies are independent and can be modified freely.'
-                : 'Admins maken en bewerken sjablonen. Docenten kunnen ze naar projecten kopiëren — die kopieën zijn volledig onafhankelijk.')
-              : (lang === 'en'
-                ? 'Read-only view. Use "Use in project" to copy a template into a project as an independent persona.'
-                : 'Alleen-lezen. Gebruik "Gebruik in project" om een sjabloon als zelfstandige persona in een project te plaatsen.')}
-          </span>
+          <span>{t('admin.personaLib.readOnlyHint')}</span>
         </div>
 
         {error && (
@@ -236,9 +223,7 @@ export function PersonaLibraryTab() {
         )}
 
         {personas.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            {lang === 'en' ? 'No personas in this library yet.' : 'Nog geen persona\'s in deze bibliotheek.'}
-          </p>
+          <p className="text-sm text-gray-500">{t('admin.personaLib.empty')}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {personas.map(p => (
@@ -247,21 +232,9 @@ export function PersonaLibraryTab() {
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-gray-900 flex items-center gap-2">
                     {p.name}
-                    {p.persona_type === 'evaluator' && (
-                      <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
-                        {lang === 'en' ? 'evaluator' : 'beoordelaar'}
-                      </span>
-                    )}
-                    {p.is_default && (
-                      <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
-                        {lang === 'en' ? 'default' : 'standaard'}
-                      </span>
-                    )}
-                    {!p.rag_enabled && (
-                      <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
-                        {lang === 'en' ? 'RAG off' : 'RAG uit'}
-                      </span>
-                    )}
+                    {p.persona_type === 'evaluator' && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">{t('admin.personaLib.badge.evaluator')}</span>}
+                    {p.is_default && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">{t('admin.personaLib.badge.default')}</span>}
+                    {!p.rag_enabled && <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{t('admin.personaLib.badge.ragOff')}</span>}
                   </div>
                   <p className="text-xs text-gray-500 line-clamp-2 mt-0.5">{p.system_prompt.slice(0, 200)}</p>
                 </div>

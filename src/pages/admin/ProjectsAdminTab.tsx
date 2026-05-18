@@ -62,7 +62,7 @@ const PROJECT_DOC_ACCEPT = UPLOAD_ACCEPT + ',.omv,.omt,.sav,.jasp,.rdata,.rds,.s
 export function ProjectsAdminTab() {
   const { session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
-  const { lang } = useLanguage();
+  const { lang, t } = useLanguage();
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [editing, setEditing] = useState<Partial<ProjectRow> | null>(null);
   const [rubricLines, setRubricLines] = useState('');
@@ -98,7 +98,7 @@ export function ProjectsAdminTab() {
   const save = async () => {
     if (!editing) return;
     if (!editing.title?.trim() || !editing.research_question?.trim()) {
-      setError('Titel en onderzoeksvraag zijn verplicht');
+      setError(t('admin.projects.errorTitleRequired'));
       return;
     }
     setSaving(true);
@@ -118,7 +118,7 @@ export function ProjectsAdminTab() {
       status: editing.status || 'active',
     };
     if ((payload.min_group_size as number) > (payload.max_group_size as number)) {
-      setError('Minimum groepsgrootte mag niet groter zijn dan het maximum');
+      setError(t('admin.projects.errorMinMax'));
       setSaving(false); return;
     }
     try {
@@ -139,7 +139,7 @@ export function ProjectsAdminTab() {
   };
 
   const remove = async (id: string) => {
-    if (!confirm(lang === 'en' ? 'Delete this project? Groups, chats and checkpoints will also be deleted.' : 'Verwijder dit project? Groepen, chats en checkpoints worden ook verwijderd.')) return;
+    if (!confirm(t('admin.projects.deleteConfirm'))) return;
     const { error: e } = await supabase.from('projects').delete().eq('id', id);
     if (e) setError(e.message); else await load();
   };
@@ -159,17 +159,17 @@ export function ProjectsAdminTab() {
       <div className="bg-white rounded-2xl border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><FolderOpen className="w-5 h-5" />{lang === 'en' ? 'Projects' : 'Projecten'}</h2>
-            <p className="text-sm text-gray-500">{activeCourse ? `${lang === 'en' ? 'Course' : 'Cursus'}: ${activeCourse.name}` : (lang === 'en' ? 'All courses' : 'Alle cursussen')}.</p>
+            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><FolderOpen className="w-5 h-5" />{t('admin.projects.title')}</h2>
+            <p className="text-sm text-gray-500">{activeCourse ? t('admin.projects.courseLabel', { name: activeCourse.name }) : t('admin.projects.allCourses')}.</p>
           </div>
           <button onClick={() => startEdit(null)} className="flex items-center gap-1.5 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700" data-testid="button-add-project">
-            <Plus className="w-4 h-4" />{lang === 'en' ? 'New project' : 'Nieuw project'}
+            <Plus className="w-4 h-4" />{t('admin.projects.addBtn')}
           </button>
         </div>
         {error && <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm mb-3">{error}</div>}
         {info && <div className="bg-green-50 border border-green-200 text-green-700 px-3 py-2 rounded text-sm mb-3">{info}</div>}
         {projects.length === 0 ? (
-          <p className="text-sm text-gray-500">{lang === 'en' ? 'No projects in this course yet.' : 'Nog geen projecten in deze cursus.'}</p>
+          <p className="text-sm text-gray-500">{t('admin.projects.noProjects')}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {projects.map(p => (
@@ -178,17 +178,14 @@ export function ProjectsAdminTab() {
                   <div className="font-medium text-gray-900">{p.title}</div>
                   <p className="text-xs text-gray-500 line-clamp-1">{p.research_question}</p>
                   <div className="text-[10px] text-gray-400 mt-1">
-                    {lang === 'en'
-                      ? `group size ${p.min_group_size ?? 1}–${p.max_group_size ?? 5} · ${Array.isArray(p.rubric_criteria) ? `${p.rubric_criteria.length} rubric points` : 'no rubric'}`
-                      : `groepsgrootte ${p.min_group_size ?? 1}–${p.max_group_size ?? 5} · ${Array.isArray(p.rubric_criteria) ? `${p.rubric_criteria.length} rubriekspunten` : 'geen rubriek'}`
-                    }
+                    {t('admin.projects.groupSize', { min: String(p.min_group_size ?? 1), max: String(p.max_group_size ?? 5) })} · {Array.isArray(p.rubric_criteria) ? t('admin.projects.rubricPoints', { count: String(p.rubric_criteria.length) }) : t('admin.projects.noRubric')}
                   </div>
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => setDetailProject(p)} className="flex items-center gap-1 px-2 py-1 text-sm text-blue-700 hover:bg-blue-50 rounded" data-testid={`button-detail-project-${p.id}`}>
-                    <Settings className="w-4 h-4" />{lang === 'en' ? 'Manage' : 'Beheer'}
+                    <Settings className="w-4 h-4" />{t('admin.projects.manageBtn')}
                   </button>
-                  <button onClick={() => startEdit(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-project-${p.id}`}>{lang === 'en' ? 'Edit' : 'Bewerk'}</button>
+                  <button onClick={() => startEdit(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-project-${p.id}`}>{t('admin.projects.editBtn')}</button>
                   <button onClick={() => remove(p.id)} className="p-2 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-project-${p.id}`}>
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -203,54 +200,54 @@ export function ProjectsAdminTab() {
       {editing && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-bold mb-3">{editing.id ? 'Project bewerken' : 'Nieuw project'}</h3>
+            <h3 className="text-lg font-bold mb-3">{editing.id ? t('admin.projects.editTitle') : t('admin.projects.newTitle')}</h3>
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-gray-700">Titel</label>
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldTitle')}</label>
                 <input value={editing.title || ''} onChange={e => setEditing({ ...editing, title: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="input-project-title" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">Onderzoeksvraag</label>
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldQuestion')}</label>
                 <input value={editing.research_question || ''} onChange={e => setEditing({ ...editing, research_question: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="input-project-question" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">Beschrijving (kort)</label>
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldDesc')}</label>
                 <textarea value={editing.description || ''} onChange={e => setEditing({ ...editing, description: e.target.value })} rows={2} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="textarea-project-description" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">Doelen / leerdoelen</label>
-                <textarea value={editing.goals || ''} onChange={e => setEditing({ ...editing, goals: e.target.value })} rows={3} placeholder="Wat moeten studenten kunnen na dit project?" className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="textarea-project-goals" />
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldGoals')}</label>
+                <textarea value={editing.goals || ''} onChange={e => setEditing({ ...editing, goals: e.target.value })} rows={3} placeholder={t('admin.projects.fieldGoalsPlaceholder')} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="textarea-project-goals" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">Briefing (markdown)</label>
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldBriefing')}</label>
                 <textarea value={editing.briefing_markdown || ''} onChange={e => setEditing({ ...editing, briefing_markdown: e.target.value })} rows={6} className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono" data-testid="textarea-project-briefing" />
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">Rubriekspunten (één per regel — zichtbaar voor studenten)</label>
-                <textarea value={rubricLines} onChange={e => setRubricLines(e.target.value)} rows={4} placeholder="Methode is helder onderbouwd&#10;Resultaten worden correct geïnterpreteerd&#10;..." className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="textarea-project-rubric" />
-                <p className="text-[10px] text-gray-400 mt-1">Wil je een verborgen rubric? Maak in het beheer een "beoordelaar"-persona en koppel daar een rubric-bestand aan.</p>
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldRubric')}</label>
+                <textarea value={rubricLines} onChange={e => setRubricLines(e.target.value)} rows={4} placeholder={t('admin.projects.rubricPlaceholder')} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="textarea-project-rubric" />
+                <p className="text-[10px] text-gray-400 mt-1">{t('admin.projects.rubricHint')}</p>
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-gray-700">Min groepsgrootte</label>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldMinSize')}</label>
                   <input type="number" min={1} max={20} value={editing.min_group_size ?? 1} onChange={e => setEditing({ ...editing, min_group_size: parseInt(e.target.value) || 1 })} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="input-project-minsize" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-700">Max groepsgrootte</label>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.projects.fieldMaxSize')}</label>
                   <input type="number" min={1} max={20} value={editing.max_group_size ?? 5} onChange={e => setEditing({ ...editing, max_group_size: parseInt(e.target.value) || 5 })} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="input-project-maxsize" />
                 </div>
                 <div className="flex items-end">
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={editing.allow_self_signup ?? true} onChange={e => setEditing({ ...editing, allow_self_signup: e.target.checked })} data-testid="checkbox-project-selfsignup" />
-                    Self-signup
+                    {t('admin.projects.fieldSelfSignup')}
                   </label>
                 </div>
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => setEditing(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-cancel-project">Annuleren</button>
+              <button onClick={() => setEditing(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-cancel-project">{t('admin.projects.cancelBtn')}</button>
               <button onClick={save} disabled={saving} className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40" data-testid="button-save-project">
-                <Save className="w-4 h-4" /> {saving ? 'Opslaan…' : 'Opslaan'}
+                <Save className="w-4 h-4" /> {saving ? t('admin.projects.saving') : t('admin.projects.saveBtn')}
               </button>
             </div>
           </div>
@@ -264,8 +261,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   project: ProjectRow; token: string;
   onBack: () => void; onError: (m: string) => void; onInfo: (m: string) => void;
 }) {
-  const { isAdmin } = useAuth();
-  const { lang } = useLanguage();
+  const { t } = useLanguage();
   const [personas, setPersonas] = useState<ProjectPersona[]>([]);
   const [adding, setAdding] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Partial<ProjectPersona> | null>(null);
@@ -334,8 +330,8 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
-      if (!r.ok) { onError(d.error || (lang === 'en' ? 'Import failed' : 'Importeren mislukt')); return; }
-      onInfo(lang === 'en' ? `"${d.persona?.name}" added from library.` : `"${d.persona?.name}" is vanuit de bibliotheek toegevoegd.`);
+      if (!r.ok) { onError(d.error || t('admin.projects.personas.importFailed')); return; }
+      onInfo(t('admin.projects.personas.addedFromLib', { name: d.persona?.name || '' }));
       setSelectedLibId('');
       await loadPersonas();
     } catch (e: any) {
@@ -356,7 +352,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   }, [personas]);
 
   const savePersona = async () => {
-    if (!editingPersona || !editingPersona.name?.trim()) { onError('Naam is verplicht'); return; }
+    if (!editingPersona || !editingPersona.name?.trim()) { onError(t('admin.projects.personas.errorNameRequired')); return; }
     setAdding(true);
     try {
       const isNew = !editingPersona.id;
@@ -375,7 +371,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Mislukt');
+      if (!r.ok) throw new Error(d.error || t('admin.projects.personas.saveFailed'));
       setEditingPersona(null);
       await loadPersonas();
     } catch (e: any) {
@@ -386,13 +382,13 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const removePersona = async (p: ProjectPersona) => {
-    if (!confirm(lang === 'en' ? `Delete "${p.name}" from this project? All conversations with this persona will be lost.` : `Verwijder "${p.name}" uit dit project? Alle gesprekken met deze persona gaan verloren.`)) return;
+    if (!confirm(t('admin.projects.personas.deleteConfirm', { name: p.name }))) return;
     const r = await fetch(`/api/projects/${project.id}/personas/${p.id}`, {
       method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      onError(d.error || (lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt')); return;
+      onError(d.error || t('admin.projects.personas.deleteFailed')); return;
     }
     await loadPersonas();
   };
@@ -404,10 +400,10 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Copy failed' : 'Kopiëren mislukt'));
+      if (!r.ok) throw new Error(d.error || t('admin.projects.personas.copyFailed'));
       onInfo(d.alreadyExists
-        ? (lang === 'en' ? `"${p.name}" was already in the library.` : `"${p.name}" stond al in de bibliotheek.`)
-        : (lang === 'en' ? `"${p.name}" copied to the library.` : `"${p.name}" is gekopieerd naar de bibliotheek.`));
+        ? t('admin.projects.personas.alreadyInLib', { name: p.name })
+        : t('admin.projects.personas.copiedToLib', { name: p.name }));
     } catch (e: any) {
       onError(e.message);
     } finally {
@@ -416,7 +412,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const uploadProjectDoc = async (file: File) => {
-    if (file.size > 15_000_000) { setLocalError('Bestand is groter dan 15 MB.'); return; }
+    if (file.size > 15_000_000) { setLocalError(t('admin.projects.docs.tooLarge')); return; }
     setUploadingPDoc(true);
     setLocalError(null);
     setLocalInfo(null);
@@ -427,11 +423,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Upload failed' : 'Upload mislukt'));
+      if (!r.ok) throw new Error(d.error || t('admin.projects.docs.uploadFailed'));
       setProjectDocs(prev => [d.document, ...prev]);
       setLocalInfo(d.warning
-        ? (lang === 'en' ? `"${file.name}" uploaded. Note: ${d.warning}` : `"${file.name}" geüpload. Let op: ${d.warning}`)
-        : (lang === 'en' ? `"${file.name}" uploaded.` : `"${file.name}" geüpload.`));
+        ? t('admin.projects.docs.uploadedNote', { name: file.name, warning: d.warning })
+        : t('admin.projects.docs.uploaded', { name: file.name }));
     } catch (e: any) {
       setLocalError(e.message);
     } finally {
@@ -441,11 +437,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const deleteProjectDoc = async (doc: ProjectDoc) => {
-    if (!confirm(lang === 'en' ? `Delete "${doc.filename}"?` : `Verwijder "${doc.filename}"?`)) return;
+    if (!confirm(t('admin.projects.docs.deleteConfirm', { name: doc.filename }))) return;
     const r = await fetch(`/api/projects/${project.id}/documents/${doc.id}`, {
       method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
     });
-    if (!r.ok) { onError(lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt'); return; }
+    if (!r.ok) { onError(t('admin.projects.docs.deleteFailed')); return; }
     setProjectDocs(prev => prev.filter(d => d.id !== doc.id));
   };
 
@@ -459,12 +455,12 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     });
     if (!r.ok) {
       setProjectDocs(prev => prev.map(d => d.id === doc.id ? { ...d, is_visible_to_students: !next } : d));
-      onError(lang === 'en' ? 'Visibility change failed' : 'Zichtbaarheid wijzigen mislukt');
+      onError(t('admin.projects.docs.visibilityFailed'));
     }
   };
 
   const uploadRubric = async (personaId: string, file: File) => {
-    if (file.size > 15_000_000) { onError(lang === 'en' ? 'File is larger than 15 MB.' : 'Bestand is groter dan 15 MB.'); return; }
+    if (file.size > 15_000_000) { onError(t('admin.projects.personas.rubric.tooLarge')); return; }
     setUploadingRubric(personaId);
     try {
       // Verborgen rubrics zijn project/persona-scoped — geen groep nodig.
@@ -475,9 +471,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || (lang === 'en' ? 'Rubric upload failed' : 'Rubric-upload mislukt'));
+      if (!r.ok) throw new Error(d.error || t('admin.projects.personas.rubric.uploadFailed'));
       await loadRubricDocs(personaId);
-      onInfo(lang === 'en' ? `Hidden rubric "${file.name}" linked.` : `Verborgen rubric "${file.name}" gekoppeld.`);
+      onInfo(t('admin.projects.personas.rubric.linked', { name: file.name }));
     } catch (e: any) {
       onError(e.message);
     } finally {
@@ -486,7 +482,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   };
 
   const deleteRubric = async (personaId: string, doc: RubricDoc) => {
-    if (!confirm(lang === 'en' ? `Delete hidden rubric "${doc.filename}"?` : `Verwijder verborgen rubric "${doc.filename}"?`)) return;
+    if (!confirm(t('admin.projects.personas.rubric.deleteConfirm', { name: doc.filename }))) return;
     // Direct supabase.delete is geblokkeerd door ppd_modify=false; gebruik
     // het server-endpoint dat de juiste autorisatie afhandelt.
     const r = await fetch(
@@ -495,7 +491,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     );
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      onError(d.error || (lang === 'en' ? 'Delete failed' : 'Verwijderen mislukt'));
+      onError(d.error || t('admin.projects.docs.deleteFailed'));
       return;
     }
     await loadRubricDocs(personaId);
@@ -511,7 +507,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
             </button>
             <div>
               <h2 className="text-lg font-bold text-gray-900">{project.title}</h2>
-              <p className="text-xs text-gray-500">{lang === 'en' ? 'Manage personas, documents and rubrics for this project.' : 'Beheer persona\'s, documenten en rubrics voor dit project.'}</p>
+              <p className="text-xs text-gray-500">{t('admin.projects.detail.subtitle')}</p>
             </div>
           </div>
         </div>
@@ -536,12 +532,12 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       <div className="bg-white rounded-2xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="font-semibold text-gray-900 flex items-center gap-2"><FolderOpen className="w-4 h-4" /> Projectdocumenten</h3>
-            <p className="text-xs text-gray-500">{lang === 'en' ? 'Datasets, assignment and source material. Text files are used as context by all personas; binary datasets (e.g. Jamovi .omv) can only be downloaded by students.' : 'Datasets, opdracht- en bronmateriaal. Tekstbestanden gebruiken alle persona\'s als context; binaire datasets (zoals Jamovi .omv) kunnen studenten alleen downloaden.'}</p>
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2"><FolderOpen className="w-4 h-4" /> {t('admin.projects.docs.title')}</h3>
+            <p className="text-xs text-gray-500">{t('admin.projects.docs.desc')}</p>
           </div>
           <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm cursor-pointer ${uploadingPDoc ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
             {uploadingPDoc ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
-            {lang === 'en' ? 'Upload file' : 'Upload bestand'}
+            {t('admin.projects.docs.uploadBtn')}
             <input
               ref={pdocFileRef}
               type="file" accept={PROJECT_DOC_ACCEPT} className="hidden"
@@ -552,7 +548,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
           </label>
         </div>
         {projectDocs.length === 0 ? (
-          <p className="text-xs text-gray-500">{lang === 'en' ? 'No project documents yet.' : 'Nog geen projectdocumenten.'}</p>
+          <p className="text-xs text-gray-500">{t('admin.projects.docs.noDocs')}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {projectDocs.map(d => (
@@ -560,15 +556,15 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                 {d.document_ref_id ? <Database className="w-4 h-4 text-blue-500" /> : <FileText className="w-4 h-4 text-gray-500" />}
                 <div className="flex-1 min-w-0 truncate text-sm">{d.filename}</div>
                 {d.document_ref_id && (
-                  <span className="text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">Projectdata</span>
+                  <span className="text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">{t('admin.projects.docs.projectdata')}</span>
                 )}
                 <div className="text-xs text-gray-400">{d.byte_size ? `${Math.round(d.byte_size / 1024)} KB` : ''}</div>
                 <button
                   onClick={() => toggleDocVisibility(d)}
                   className={`p-1 rounded ${d.is_visible_to_students ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-100'}`}
                   title={d.is_visible_to_students
-                    ? (lang === 'en' ? 'Visible to students — click to hide' : 'Zichtbaar voor studenten — klik om te verbergen')
-                    : (lang === 'en' ? 'Hidden from students — click to show' : 'Verborgen voor studenten — klik om zichtbaar te maken')}
+                    ? t('admin.projects.docs.visibleTitle')
+                    : t('admin.projects.docs.hiddenTitle')}
                   data-testid={`button-toggle-visibility-${d.id}`}
                 >
                   {d.is_visible_to_students ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
@@ -579,7 +575,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                       const r = await fetch(`/api/projects/${project.id}/documents/${d.id}/download`, {
                         headers: { Authorization: `Bearer ${token}` },
                       });
-                      if (!r.ok) { const j = await r.json().catch(() => ({})); setLocalError(j.error || (lang === 'en' ? 'Download failed' : 'Download mislukt')); return; }
+                      if (!r.ok) { const j = await r.json().catch(() => ({})); setLocalError(j.error || t('admin.projects.docs.downloadFailed')); return; }
                       const blob = await r.blob();
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a'); a.href = url; a.download = d.filename;
@@ -606,11 +602,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       <div className="bg-white rounded-2xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="font-semibold text-gray-900">{lang === 'en' ? `Personas in this project (${personas.length})` : `Persona's in dit project (${personas.length})`}</h3>
-            <p className="text-xs text-gray-500">{lang === 'en' ? 'Create conversation partners or evaluators. Evaluators do not appear in the student chat.' : 'Maak gespreksparters of beoordelaars. Beoordelaars verschijnen niet in de student-chat.'}</p>
+            <h3 className="font-semibold text-gray-900">{t('admin.projects.personas.title', { count: String(personas.length) })}</h3>
+            <p className="text-xs text-gray-500">{t('admin.projects.personas.desc')}</p>
           </div>
           <button onClick={() => setEditingPersona({ name: '', system_prompt: '', avatar_emoji: '🤖', rag_enabled: true, persona_type: 'conversational' })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg" data-testid="button-add-custom-persona">
-            <Plus className="w-4 h-4" />{lang === 'en' ? 'New persona' : 'Nieuwe persona'}
+            <Plus className="w-4 h-4" />{t('admin.projects.personas.addBtn')}
           </button>
         </div>
         {libPersonas.length > 0 && (
@@ -622,10 +618,10 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
               className="flex-1 px-2 py-1.5 border border-gray-300 rounded text-sm bg-white"
               data-testid="select-lib-persona"
             >
-              <option value="">{lang === 'en' ? '— Add from library —' : '— Haal op uit bibliotheek —'}</option>
+              <option value="">{t('admin.projects.personas.libPlaceholder')}</option>
               {libPersonas.map(lp => (
                 <option key={lp.id} value={lp.id}>
-                  {lp.avatar_emoji} {lp.name}{lp.persona_type === 'evaluator' ? (lang === 'en' ? ' (evaluator)' : ' (beoordelaar)') : ''}
+                  {lp.avatar_emoji} {lp.name}{lp.persona_type === 'evaluator' ? ` (${t('admin.projects.personas.typeEvaluator').toLowerCase()})` : ''}
                 </option>
               ))}
             </select>
@@ -636,12 +632,12 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
               data-testid="button-import-from-lib"
             >
               {importingLib ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-              {lang === 'en' ? 'Add' : 'Voeg toe'}
+              {t('admin.projects.personas.addBtn')}
             </button>
           </div>
         )}
         {personas.length === 0 ? (
-          <p className="text-sm text-gray-500">{lang === 'en' ? 'No personas yet. Add one.' : 'Nog geen persona\'s. Voeg er één toe.'}</p>
+          <p className="text-sm text-gray-500">{t('admin.projects.personas.noPersonas')}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {personas.map(p => {
@@ -654,17 +650,16 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-gray-900 flex items-center gap-2">
                         {p.name}
-                        {isEval && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded flex items-center gap-1"><ShieldAlert className="w-3 h-3" />{lang === 'en' ? 'evaluator' : 'beoordelaar'}</span>}
+                        {isEval && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded flex items-center gap-1"><ShieldAlert className="w-3 h-3" />{t('admin.projects.personas.badge.evaluator')}</span>}
+                        {p.source_persona_id && <span className="text-[10px] text-gray-400">{t('admin.projects.personas.fromLib')}</span>}
                       </div>
                       <p className="text-xs text-gray-500 line-clamp-2">{p.system_prompt.slice(0, 200)}</p>
                     </div>
                     <div className="flex gap-1">
-                      {isAdmin && (
-                        <button onClick={() => copyToLibrary(p)} disabled={copying === p.id} className="px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1 disabled:opacity-40" data-testid={`button-copy-to-lib-${p.id}`}>
-                          <Copy className="w-3 h-3" />{copying === p.id ? (lang === 'en' ? 'Working…' : 'Bezig…') : (lang === 'en' ? 'Copy to library' : 'Kopieer naar bibliotheek')}
-                        </button>
-                      )}
-                      <button onClick={() => setEditingPersona(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-pp-${p.id}`}>{lang === 'en' ? 'Edit' : 'Bewerk'}</button>
+                      <button onClick={() => copyToLibrary(p)} disabled={copying === p.id} className="px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1 disabled:opacity-40" data-testid={`button-copy-to-lib-${p.id}`}>
+                        <Copy className="w-3 h-3" />{copying === p.id ? t('admin.projects.personas.copying') : t('admin.projects.personas.copyBtn')}
+                      </button>
+                      <button onClick={() => setEditingPersona(p)} className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded" data-testid={`button-edit-pp-${p.id}`}>{t('admin.projects.personas.editBtn')}</button>
                       <button onClick={() => removePersona(p)} className="p-2 text-red-500 hover:bg-red-50 rounded" data-testid={`button-delete-pp-${p.id}`}>
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -673,10 +668,10 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                   {isEval && (
                     <div className="mt-2 ml-10 bg-purple-50/40 border border-purple-100 rounded-lg p-3">
                       <div className="flex items-center justify-between mb-2">
-                        <div className="text-xs font-medium text-purple-900 flex items-center gap-1"><ShieldAlert className="w-3 h-3" />{lang === 'en' ? `Hidden rubric (${rubricList.length})` : `Verborgen rubric (${rubricList.length})`}</div>
+                        <div className="text-xs font-medium text-purple-900 flex items-center gap-1"><ShieldAlert className="w-3 h-3" />{t('admin.projects.personas.rubric.title', { count: String(rubricList.length) })}</div>
                         <label className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded cursor-pointer ${uploadingRubric === p.id ? 'bg-gray-100 text-gray-400' : 'bg-purple-600 text-white hover:bg-purple-700'}`}>
                           {uploadingRubric === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Paperclip className="w-3 h-3" />}
-                          Upload rubric
+                          {t('admin.projects.personas.rubric.uploadBtn')}
                           <input
                             type="file" accept={UPLOAD_ACCEPT} className="hidden"
                             onChange={e => { const f = e.target.files?.[0]; if (f) uploadRubric(p.id, f); }}
@@ -686,7 +681,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                         </label>
                       </div>
                       {rubricList.length === 0 ? (
-                        <p className="text-[11px] text-purple-700/70">{lang === 'en' ? 'No rubric file linked yet. Without a file the evaluator uses only the project learning goals.' : 'Nog geen rubric-bestand gekoppeld. Zonder bestand gebruikt de beoordelaar alleen de leerdoelen van het project.'}</p>
+                        <p className="text-[11px] text-purple-700/70">{t('admin.projects.personas.rubric.noFile')}</p>
                       ) : (
                         <ul className="space-y-1">
                           {rubricList.map(r => (
@@ -713,48 +708,48 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold">{editingPersona.id ? 'Persona bewerken' : 'Nieuwe persona'}</h3>
+              <h3 className="font-bold">{editingPersona.id ? t('admin.projects.personas.editTitle') : t('admin.projects.personas.newTitle')}</h3>
               <button onClick={() => setEditingPersona(null)} className="p-1 hover:bg-gray-100 rounded"><X className="w-4 h-4" /></button>
             </div>
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
-                  <label className="text-xs font-medium text-gray-700">Naam</label>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.fieldName')}</label>
                   <input value={editingPersona.name || ''} onChange={e => setEditingPersona({ ...editingPersona, name: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="input-pp-name" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-700">Emoji</label>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.fieldEmoji')}</label>
                   <input value={editingPersona.avatar_emoji || ''} onChange={e => setEditingPersona({ ...editingPersona, avatar_emoji: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded text-sm" data-testid="input-pp-emoji" />
                 </div>
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">Type</label>
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.fieldType')}</label>
                 <select
                   value={editingPersona.persona_type || 'conversational'}
                   onChange={e => setEditingPersona({ ...editingPersona, persona_type: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
                   data-testid="select-pp-type"
                 >
-                  <option value="conversational">Gesprekspartner — zichtbaar voor studenten in de chat</option>
-                  <option value="evaluator">Beoordelaar — verborgen, geeft formatieve beoordeling bij afronden</option>
+                  <option value="conversational">{t('admin.projects.personas.typeConversational')}</option>
+                  <option value="evaluator">{t('admin.projects.personas.typeEvaluator')}</option>
                 </select>
                 {editingPersona.persona_type === 'evaluator' && (
-                  <p className="text-[11px] text-purple-700 mt-1">Beoordelaars verschijnen niet in de chattabs. Een verborgen rubric kun je na opslaan koppelen via de persona-rij.</p>
+                  <p className="text-[11px] text-purple-700 mt-1">{t('admin.projects.personas.evaluatorHint')}</p>
                 )}
               </div>
               <div>
-                <label className="text-xs font-medium text-gray-700">System prompt</label>
+                <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.fieldPrompt')}</label>
                 <textarea value={editingPersona.system_prompt || ''} onChange={e => setEditingPersona({ ...editingPersona, system_prompt: e.target.value })} rows={8} className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono" data-testid="textarea-pp-prompt" />
               </div>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={editingPersona.rag_enabled ?? true} onChange={e => setEditingPersona({ ...editingPersona, rag_enabled: e.target.checked })} data-testid="checkbox-pp-rag" />
-                RAG aan (gebruikt cursusmateriaal)
+                {t('admin.projects.personas.ragEnabled')}
               </label>
             </div>
             <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => setEditingPersona(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">Annuleren</button>
+              <button onClick={() => setEditingPersona(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">{t('admin.projects.personas.cancelBtn')}</button>
               <button onClick={savePersona} disabled={adding} className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40" data-testid="button-save-pp">
-                <Save className="w-4 h-4" /> {adding ? 'Opslaan…' : 'Opslaan'}
+                <Save className="w-4 h-4" /> {adding ? t('admin.projects.personas.saving') : t('admin.projects.personas.saveBtn')}
               </button>
             </div>
           </div>

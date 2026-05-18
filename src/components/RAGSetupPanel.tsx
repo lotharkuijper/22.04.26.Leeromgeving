@@ -79,7 +79,7 @@ function formatBytes(bytes: number): string {
 
 export function RAGSetupPanel() {
   const { profile, session } = useAuth();
-  const { lang } = useLanguage();
+  const { lang, t } = useLanguage();
   const { activeCourseId, activeCourse, activeCourseRagFolderIds, refreshActiveCourse, loading: courseLoading } = useActiveCourse();
 
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -132,7 +132,7 @@ export function RAGSetupPanel() {
     return (
       <div className="flex items-center gap-3 py-10 justify-center text-gray-500">
         <Loader2 className="w-5 h-5 animate-spin" />
-        <span>{lang === 'en' ? 'Loading course data...' : 'Cursusgegevens laden...'}</span>
+        <span>{t('admin.ragSetup.loadingCourse')}</span>
       </div>
     );
   }
@@ -141,8 +141,8 @@ export function RAGSetupPanel() {
     return (
       <div className="text-center py-12 text-gray-500">
         <Info className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-        <p className="font-medium">{lang === 'en' ? 'No active course' : 'Geen actieve cursus'}</p>
-        <p className="text-sm mt-1">{lang === 'en' ? 'Choose a course via the course bar at the top.' : 'Kies een cursus via de cursusbalk bovenaan.'}</p>
+        <p className="font-medium">{t('admin.ragSetup.noActiveCourse')}</p>
+        <p className="text-sm mt-1">{t('admin.ragSetup.noActiveCourseHint')}</p>
       </div>
     );
   }
@@ -171,7 +171,7 @@ export function RAGSetupPanel() {
 
       await refreshActiveCourse();
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Onbekende fout');
+      setCreateError(err instanceof Error ? err.message : t('common.unknownError'));
     } finally {
       setCreatingFolder(false);
     }
@@ -207,7 +207,7 @@ export function RAGSetupPanel() {
       setExtractResult({
         count: 0,
         skipped: 0,
-        message: err instanceof Error ? err.message : 'Onbekende fout',
+        message: err instanceof Error ? err.message : t('common.unknownError'),
       });
     } finally {
       setExtracting(false);
@@ -221,20 +221,10 @@ export function RAGSetupPanel() {
           <FolderPlus className="w-8 h-8 text-amber-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
             <h3 className="font-semibold text-gray-900 mb-2">
-              {lang === 'en'
-                ? <>{lang === 'en' ? 'Course' : 'Cursus'} <strong>{activeCourse.name}</strong> has no RAG configuration yet</>
-                : <>Cursus <strong>{activeCourse.name}</strong> heeft nog geen RAG-configuratie</>}
+              {t('admin.ragSetup.noConfig.headingPre')} <strong>{activeCourse.name}</strong> {t('admin.ragSetup.noConfig.headingPost')}
             </h3>
-            <p className="text-sm text-gray-700 mb-2">
-              {lang === 'en'
-                ? <>Note: this is <em>not</em> about a folder in file management. Files may already be there (e.g. <code className="bg-amber-100 px-1 rounded text-xs">{activeCourse.name}/RAG/</code>), but they are <strong>not</strong> yet searchable by the chatbot.</>
-                : <>Let op: dit gaat <em>niet</em> over een map in het bestandsbeheer. In het bestandsbeheer kunnen al bestanden staan (bijv. <code className="bg-amber-100 px-1 rounded text-xs">{activeCourse.name}/RAG/</code>), maar die zijn nog <strong>niet</strong> doorzoekbaar voor de chatbot.</>}
-            </p>
-            <p className="text-sm text-gray-700 mb-4">
-              {lang === 'en'
-                ? <>The button below creates a <strong>database configuration</strong> that tells the chatbot which documents it may use. You can then import existing files from file management via the <em>Import</em> tab, or add new files via <em>Upload</em>.</>
-                : <>Met de knop hieronder wordt een <strong>database-configuratie</strong> aangemaakt die de chatbot vertelt welke documenten hij mag gebruiken. Daarna kun je via de <em>Importeren</em>-tab bestaande bestanden uit het bestandsbeheer inladen, of via <em>Uploaden</em> nieuwe bestanden toevoegen.</>}
-            </p>
+            <p className="text-sm text-gray-700 mb-2">{t('admin.ragSetup.noConfig.note')}</p>
+            <p className="text-sm text-gray-700 mb-4">{t('admin.ragSetup.noConfig.hint')}</p>
             {createError && (
               <div className="mb-3 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
                 <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -248,9 +238,9 @@ export function RAGSetupPanel() {
               className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors"
             >
               {creatingFolder ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> {lang === 'en' ? 'Creating...' : 'Aanmaken...'}</>
+                <><Loader2 className="w-4 h-4 animate-spin" /> {t('admin.ragSetup.noConfig.creating')}</>
               ) : (
-                <><Database className="w-4 h-4" /> {lang === 'en' ? `Set up RAG configuration for ${activeCourse.name}` : `RAG-configuratie instellen voor ${activeCourse.name}`}</>
+                <><Database className="w-4 h-4" /> {t('admin.ragSetup.noConfig.createBtn', { name: activeCourse.name })}</>
               )}
             </button>
           </div>
@@ -264,9 +254,7 @@ export function RAGSetupPanel() {
       <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 flex items-center gap-3">
         <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
         <div className="text-sm text-emerald-800">
-          {lang === 'en'
-            ? <><strong>RAG folder active</strong> for course <strong>{activeCourse.name}</strong> — upload new documents below or import existing files.</>
-            : <><strong>RAG-map actief</strong> voor cursus <strong>{activeCourse.name}</strong> — upload hieronder nieuwe documenten of importeer bestaande bestanden.</>}
+          {t('admin.ragSetup.active', { name: activeCourse.name })}
         </div>
       </div>
 
@@ -282,7 +270,7 @@ export function RAGSetupPanel() {
             }`}
           >
             <Upload className="w-4 h-4" />
-            {lang === 'en' ? 'Upload new files' : 'Nieuwe bestanden uploaden'}
+            {t('admin.ragSetup.upload.tab')}
           </button>
           <button
             onClick={() => setActiveSection('import')}
@@ -294,7 +282,7 @@ export function RAGSetupPanel() {
             }`}
           >
             <Download className="w-4 h-4" />
-            {lang === 'en' ? 'Import from file management' : 'Importeren uit bestandsbeheer'}
+            {t('admin.ragSetup.import.tab')}
           </button>
         </div>
 
@@ -316,22 +304,18 @@ export function RAGSetupPanel() {
         <div className="flex items-start gap-3">
           <Sparkles className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 text-sm">{lang === 'en' ? 'Extract concepts from course material' : 'Onderwerpen extraheren uit cursusmateriaal'}</h3>
-            <p className="text-xs text-gray-600 mt-0.5 mb-1">
-              {lang === 'en'
-                ? 'Let the AI automatically identify key terms from the imported documents — even when they appear implicitly — and add them to the list in "I Explain".'
-                : 'Laat de AI automatisch vaktermen identificeren uit de geïmporteerde documenten — ook als ze impliciet in de tekst voorkomen — en voeg ze toe aan de lijst in "Ik leg uit".'}
-            </p>
+            <h3 className="font-semibold text-gray-900 text-sm">{t('admin.ragSetup.extract.title')}</h3>
+            <p className="text-xs text-gray-600 mt-0.5 mb-1">{t('admin.ragSetup.extract.desc')}</p>
             <div className="flex flex-wrap gap-3 text-xs text-gray-500 mb-3">
-              <span>{processedDocs.length} {lang === 'en' ? `processed document${processedDocs.length !== 1 ? 's' : ''}` : `verwerkt document${processedDocs.length !== 1 ? 'en' : ''}`}</span>
+              <span>{t('admin.ragSetup.extract.docCount', { count: String(processedDocs.length), s: processedDocs.length !== 1 ? (lang === 'en' ? 's' : 'en') : '' })}</span>
               <span>·</span>
-              <span>{existingConceptCount} {lang === 'en' ? 'existing concepts for this course' : 'bestaande begrippen voor deze cursus'}</span>
+              <span>{t('admin.ragSetup.extract.conceptCount', { count: String(existingConceptCount) })}</span>
             </div>
 
             {processedDocs.length > 0 && (
               <div className="mb-3 border border-gray-200 rounded-lg overflow-hidden bg-white">
                 <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
-                  <span className="text-xs font-medium text-gray-700">{lang === 'en' ? 'Select documents for extraction' : 'Selecteer documenten voor extractie'}</span>
+                  <span className="text-xs font-medium text-gray-700">{t('admin.ragSetup.extract.selectDocs')}</span>
                   {processedDocs.length > 3 && (
                     <button
                       onClick={() => {
@@ -344,7 +328,7 @@ export function RAGSetupPanel() {
                       className="text-xs text-blue-600 hover:underline"
                       data-testid="button-toggle-all-docs"
                     >
-                      {selectedDocIds.size === processedDocs.length ? (lang === 'en' ? 'Deselect all' : 'Niets selecteren') : (lang === 'en' ? 'Select all' : 'Alles selecteren')}
+                      {selectedDocIds.size === processedDocs.length ? t('admin.ragSetup.extract.deselectAll') : t('admin.ragSetup.extract.selectAll')}
                     </button>
                   )}
                 </div>
@@ -390,7 +374,7 @@ export function RAGSetupPanel() {
               }`}>
                 {extractResult.message}
                 {extractResult.skipped > 0 && (
-                  <span className="ml-1 text-gray-500">({extractResult.skipped} {lang === 'en' ? 'already present' : 'al aanwezig'})</span>
+                  <span className="ml-1 text-gray-500">({extractResult.skipped} {t('admin.ragSetup.extract.alreadyPresent')})</span>
                 )}
               </div>
             )}
@@ -403,7 +387,7 @@ export function RAGSetupPanel() {
                   data-testid="checkbox-replace-concepts"
                   className="w-4 h-4 rounded accent-purple-600"
                 />
-                {lang === 'en' ? 'Replace existing concepts (removes current course list before re-extracting)' : 'Bestaande begrippen vervangen (verwijdert huidige cursuslijst voor opnieuw extraheren)'}
+                {t('admin.ragSetup.extract.replace')}
               </label>
               <button
                 onClick={handleExtractConcepts}
@@ -412,11 +396,11 @@ export function RAGSetupPanel() {
                 className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors self-start"
               >
                 {extracting ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> {lang === 'en' ? 'Extracting...' : 'Extraheren...'}</>
+                  <><Loader2 className="w-4 h-4 animate-spin" /> {t('admin.ragSetup.extract.extracting')}</>
                 ) : selectedDocIds.size > 0 && selectedDocIds.size < processedDocs.length ? (
-                  <><Sparkles className="w-4 h-4" /> {lang === 'en' ? `Extract from ${selectedDocIds.size} selected document${selectedDocIds.size !== 1 ? 's' : ''}` : `Extraheren uit ${selectedDocIds.size} geselecteerde document${selectedDocIds.size !== 1 ? 'en' : ''}`}</>
+                  <><Sparkles className="w-4 h-4" /> {t('admin.ragSetup.extract.extractSelected', { count: String(selectedDocIds.size), s: selectedDocIds.size !== 1 ? (lang === 'en' ? 's' : 'en') : '' })}</>
                 ) : (
-                  <><Sparkles className="w-4 h-4" /> {lang === 'en' ? `Extract from all ${processedDocs.length} document${processedDocs.length !== 1 ? 's' : ''}` : `Extraheren uit alle ${processedDocs.length} document${processedDocs.length !== 1 ? 'en' : ''}`}</>
+                  <><Sparkles className="w-4 h-4" /> {t('admin.ragSetup.extract.extractAll', { count: String(processedDocs.length), s: processedDocs.length !== 1 ? (lang === 'en' ? 's' : 'en') : '' })}</>
                 )}
               </button>
               {selectedDocIds.size > 0 && (
@@ -439,7 +423,7 @@ export function RAGSetupPanel() {
                           })}
                           className="ml-0.5 text-purple-600 hover:text-purple-900 flex-shrink-0"
                           data-testid={`chip-remove-doc-${id}`}
-                          aria-label={lang === 'en' ? `Deselect ${doc.filename}` : `${doc.filename} deselecteren`}
+                          aria-label={t('admin.ragSetup.extract.deselectFile', { name: doc.filename })}
                         >
                           <X className="w-3 h-3" />
                         </button>
@@ -454,7 +438,7 @@ export function RAGSetupPanel() {
       </div>
 
       <div>
-        <h3 className="font-semibold text-gray-800 mb-3">{lang === 'en' ? 'Document processing status' : 'Verwerkingsstatus documenten'}</h3>
+        <h3 className="font-semibold text-gray-800 mb-3">{t('admin.ragSetup.docStatus')}</h3>
         <RAGDocumentStatusPanel />
       </div>
     </div>
@@ -462,6 +446,7 @@ export function RAGSetupPanel() {
 }
 
 function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: string; userId: string; courseId?: string; accessToken?: string }) {
+  const { t, lang } = useLanguage();
   const [items, setItems] = useState<FileUploadItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -551,8 +536,8 @@ function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: 
         }`}
       >
         <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-        <p className="text-sm font-medium text-gray-700">{(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Drag files here or click to choose' : 'Sleep bestanden hierheen of klik om te kiezen'}</p>
-        <p className="text-xs text-gray-500 mt-1">{(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'PDF, DOCX, PPTX, TXT — max 20 MB per file' : 'PDF, DOCX, PPTX, TXT — max 20 MB per bestand'}</p>
+        <p className="text-sm font-medium text-gray-700">{t('admin.ragSetup.upload.dropzone')}</p>
+        <p className="text-xs text-gray-500 mt-1">{t('admin.ragSetup.upload.hint')}</p>
         <input
           ref={fileInputRef}
           type="file"
@@ -598,7 +583,7 @@ function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: 
                   </div>
                 )}
                 {item.status === 'done' && (
-                  <p className="text-xs text-emerald-700 mt-0.5">{(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Successfully processed' : 'Succesvol verwerkt'}</p>
+                  <p className="text-xs text-emerald-700 mt-0.5">{t('admin.ragSetup.upload.done')}</p>
                 )}
                 {item.status === 'error' && (
                   <p className="text-xs text-red-600 mt-0.5">{item.error}</p>
@@ -625,8 +610,8 @@ function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: 
 
           <div className="flex items-center justify-between pt-2">
             <p className="text-sm text-gray-600">
-              {pendingCount > 0 && ((localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? `${pendingCount} ready to upload` : `${pendingCount} klaar om te uploaden`)}
-              {isProcessing && ((localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? `${uploadingCount} uploading...` : `${uploadingCount} bezig...`)}
+              {pendingCount > 0 && t('admin.ragSetup.upload.readyCount', { count: String(pendingCount) })}
+              {isProcessing && t('admin.ragSetup.upload.uploadingCount', { count: String(uploadingCount) })}
             </p>
             <button
               onClick={uploadAll}
@@ -635,11 +620,9 @@ function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: 
               className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {isProcessing ? (
-                <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Uploading...' : 'Bezig...'}</span>
+                <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> {t('admin.ragSetup.upload.uploadingBtn')}</span>
               ) : (
-                (localStorage.getItem('lair-vu-lang') || 'nl') === 'en'
-                  ? `Upload ${pendingCount} file${pendingCount !== 1 ? 's' : ''}`
-                  : `${pendingCount} bestand${pendingCount !== 1 ? 'en' : ''} uploaden`
+                t('admin.ragSetup.upload.uploadBtn', { count: String(pendingCount), s: pendingCount !== 1 ? (lang === 'en' ? 's' : 'en') : '' })
               )}
             </button>
           </div>
@@ -658,6 +641,7 @@ function ImportSection({
   userId: string;
   courseName: string;
 }) {
+  const { t } = useLanguage();
   const [storageFiles, setStorageFiles] = useState<StorageFile[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
@@ -772,7 +756,7 @@ function ImportSection({
     return (
       <div className="flex items-center gap-3 py-8 justify-center text-gray-500">
         <Loader2 className="w-5 h-5 animate-spin" />
-        <span className="text-sm">{(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? `Searching files in ${courseName}...` : `Bestanden zoeken in ${courseName}...`}</span>
+        <span className="text-sm">{t('admin.ragSetup.import.loading', { name: courseName })}</span>
       </div>
     );
   }
@@ -781,17 +765,13 @@ function ImportSection({
     return (
       <div className="text-center py-8 text-gray-500">
         <FolderOpen className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-        <p className="font-medium text-gray-700">{(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'No compatible files found' : 'Geen compatibele bestanden gevonden'}</p>
-        <p className="text-sm mt-1 text-gray-500">
-          {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en'
-            ? <>No PDF, DOCX, PPTX or TXT files found in the <strong>{courseName}</strong> folder in file management.</>
-            : <>Geen PDF, DOCX, PPTX of TXT-bestanden gevonden in de map <strong>{courseName}</strong> van het bestandsbeheer.</>}
-        </p>
+        <p className="font-medium text-gray-700">{t('admin.ragSetup.import.noFiles')}</p>
+        <p className="text-sm mt-1 text-gray-500">{t('admin.ragSetup.import.noFilesHint', { name: courseName })}</p>
         <button
           onClick={loadFiles}
           className="mt-3 text-sm text-blue-600 hover:underline inline-flex items-center gap-1"
         >
-          <RefreshCw className="w-3 h-3" /> {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Reload' : 'Opnieuw laden'}
+          <RefreshCw className="w-3 h-3" /> {t('admin.ragSetup.import.reload')}
         </button>
       </div>
     );
@@ -802,13 +782,11 @@ function ImportSection({
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm text-gray-700">
-            {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en'
-            ? <><strong>{storageFiles.length}</strong> file(s) found in file management for <strong>{courseName}</strong></>
-            : <><strong>{storageFiles.length}</strong> bestand(en) gevonden in het bestandsbeheer van <strong>{courseName}</strong></>}
+            {t('admin.ragSetup.import.filesFound', { count: String(storageFiles.length), name: courseName })}
           </p>
           {notImported.length > 0 && (
             <p className="text-xs text-amber-700 mt-0.5">
-              {notImported.length} {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'not yet imported into the RAG pipeline' : 'nog niet geïmporteerd in de RAG-pipeline'}
+              {t('admin.ragSetup.import.notImported', { count: String(notImported.length) })}
             </p>
           )}
         </div>
@@ -817,7 +795,7 @@ function ImportSection({
             onClick={loadFiles}
             disabled={loadingFiles}
             className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
-            title={(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Refresh' : 'Vernieuwen'}
+            title={t('admin.ragSetup.import.refresh')}
           >
             <RefreshCw className={`w-4 h-4 ${loadingFiles ? 'animate-spin' : ''}`} />
           </button>
@@ -829,27 +807,27 @@ function ImportSection({
               className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {bulkImporting ? (
-                <><Loader2 className="w-3 h-3 animate-spin" /> {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Importing...' : 'Importeren...'}</>
+                <><Loader2 className="w-3 h-3 animate-spin" /> {t('admin.ragSetup.import.importing')}</>
               ) : (
-                <><Download className="w-3 h-3" /> {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? `Import all (${notImported.length})` : `Alles importeren (${notImported.length})`}</>
+                <><Download className="w-3 h-3" /> {t('admin.ragSetup.import.importAll', { count: String(notImported.length) })}</>
               )}
             </button>
           )}
           {confirmBulkImport && (
             <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-sm">
-              <span className="text-amber-800">{(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? `Import ${notImported.length} file(s)?` : `${notImported.length} bestand(en) importeren?`}</span>
+              <span className="text-amber-800">{t('admin.ragSetup.import.confirmQuestion', { count: String(notImported.length) })}</span>
               <button
                 onClick={importAll}
                 className="px-2 py-0.5 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 text-xs"
                 data-testid="button-confirm-import-all"
               >
-                {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Yes' : 'Ja'}
+                {t('admin.ragSetup.import.confirmYes')}
               </button>
               <button
                 onClick={() => setConfirmBulkImport(false)}
                 className="px-2 py-0.5 bg-gray-200 text-gray-700 rounded font-medium hover:bg-gray-300 text-xs"
               >
-                {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Cancel' : 'Annuleren'}
+                {t('admin.ragSetup.import.confirmCancel')}
               </button>
             </div>
           )}
@@ -858,8 +836,8 @@ function ImportSection({
 
       {importResults && (
         <div className={`rounded-lg p-3 text-sm ${importResults.fail.length === 0 ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-amber-50 border border-amber-200 text-amber-800'}`}>
-          {importResults.ok.length > 0 && <p>✓ {importResults.ok.length} {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? `file(s) successfully imported` : `bestand(en) succesvol geïmporteerd`}</p>}
-          {importResults.fail.length > 0 && <p>✗ {importResults.fail.length} {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? `file(s) failed` : `bestand(en) mislukt`}</p>}
+          {importResults.ok.length > 0 && <p>✓ {t('admin.ragSetup.import.resultOk', { count: String(importResults.ok.length) })}</p>}
+          {importResults.fail.length > 0 && <p>✗ {t('admin.ragSetup.import.resultFail', { count: String(importResults.fail.length) })}</p>}
         </div>
       )}
 
@@ -887,11 +865,11 @@ function ImportSection({
                 )}
                 {isImported ? (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                    <CheckCircle2 className="w-3 h-3" /> {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Imported' : 'Geïmporteerd'}
+                    <CheckCircle2 className="w-3 h-3" /> {t('admin.ragSetup.import.imported')}
                   </span>
                 ) : isImporting ? (
                   <span className="inline-flex items-center gap-1 text-xs text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
-                    <Loader2 className="w-3 h-3 animate-spin" /> {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Importing...' : 'Bezig...'}
+                    <Loader2 className="w-3 h-3 animate-spin" /> {t('admin.ragSetup.import.importingFile')}
                   </span>
                 ) : (
                   <button
@@ -900,7 +878,7 @@ function ImportSection({
                     data-testid={`button-import-${sf.name}`}
                     className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors"
                   >
-                    <Download className="w-3 h-3" /> {(localStorage.getItem('lair-vu-lang') || 'nl') === 'en' ? 'Import' : 'Importeren'}
+                    <Download className="w-3 h-3" /> {t('admin.ragSetup.import.importBtn')}
                   </button>
                 )}
               </div>

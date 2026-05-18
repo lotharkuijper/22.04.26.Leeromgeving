@@ -88,6 +88,7 @@ interface ConceptCardProps {
 }
 
 function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deletingConceptId, onDeleteRequest, onDeleteConfirm, onDeleteCancel, isSelected, onToggleSelect, lang }: ConceptCardProps) {
+  const { t } = useLanguage();
   return (
     <div
       className={`p-4 border rounded-lg transition-colors ${isSelected ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
@@ -117,27 +118,27 @@ function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deleting
             <div className="flex items-center gap-1 ml-2 flex-shrink-0">
               {deleteConfirmId === concept.id ? (
                 <div className="flex items-center gap-1">
-                  <span className="text-xs text-red-600">{lang === 'en' ? 'Delete?' : 'Verwijderen?'}</span>
+                  <span className="text-xs text-red-600">{t('admin.concepts.deleteQuestion')}</span>
                   <button
                     onClick={() => onDeleteConfirm(concept.id)}
                     disabled={deletingConceptId === concept.id}
                     className="px-2 py-0.5 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
                     data-testid={`button-confirm-delete-${concept.id}`}
                   >
-                    {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : (lang === 'en' ? 'Yes' : 'Ja')}
+                    {deletingConceptId === concept.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : t('admin.yes')}
                   </button>
                   <button
                     onClick={onDeleteCancel}
                     className="px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
                   >
-                    {lang === 'en' ? 'No' : 'Nee'}
+                    {t('admin.no')}
                   </button>
                 </div>
               ) : (
                 <button
                   onClick={() => onDeleteRequest(concept.id)}
                   className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  title={lang === 'en' ? 'Delete' : 'Verwijderen'}
+                  title={t('admin.delete')}
                   data-testid={`button-delete-${concept.id}`}
                 >
                   <Trash2 className="w-4 h-4" />
@@ -450,12 +451,12 @@ export function AdminPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        setRagSettingsMsg({ type: 'success', text: 'RAG instellingen opgeslagen.' });
+        setRagSettingsMsg({ type: 'success', text: t('admin.ragSettings.saveSuccess') });
         if (ragSelectedCourseId) {
           setCoursesWithOverrides(prev => new Set([...prev, ragSelectedCourseId]));
         }
       } else {
-        setRagSettingsMsg({ type: 'error', text: data.error || (lang === 'en' ? 'Save failed.' : 'Opslaan mislukt.') });
+        setRagSettingsMsg({ type: 'error', text: data.error || t('admin.ragSettings.saveFailed') });
       }
     } catch (err: any) {
       setRagSettingsMsg({ type: 'error', text: err.message });
@@ -476,10 +477,10 @@ export function AdminPage() {
       const data = await res.json();
       if (res.ok) {
         setCoursesWithOverrides(prev => { const next = new Set(prev); next.delete(courseId); return next; });
-        setRagSettingsMsg({ type: 'success', text: lang === 'en' ? 'Course override removed. Global default is now used.' : 'Cursus-override verwijderd. Globale standaard wordt nu gebruikt.' });
+        setRagSettingsMsg({ type: 'success', text: t('admin.ragSettings.overrideRemoved') });
         loadRagSettingsAdmin();
       } else {
-        setRagSettingsMsg({ type: 'error', text: data.error || (lang === 'en' ? 'Delete failed.' : 'Verwijderen mislukt.') });
+        setRagSettingsMsg({ type: 'error', text: data.error || t('admin.ragSettings.overrideDeleteFailed') });
       }
     } catch (err: any) {
       setRagSettingsMsg({ type: 'error', text: err.message });
@@ -523,12 +524,12 @@ export function AdminPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setDiagnosticError(data.error || `Serverfout ${res.status}`);
+        setDiagnosticError(data.error || t('admin.ragSettings.serverErrorStatus', { status: String(res.status) }));
       } else {
         setDiagnosticResult(data);
       }
     } catch (err: any) {
-      setDiagnosticError(err.message || (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
+      setDiagnosticError(err.message || t('admin.ragSettings.unknownError'));
     } finally {
       setDiagnosticLoading(false);
     }
@@ -552,9 +553,9 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error updating role:', error);
-      setRoleMsg({ type: 'error', text: (lang === 'en' ? 'Error changing role: ' : 'Fout bij wijzigen van rol: ') + error.message });
+      setRoleMsg({ type: 'error', text: t('admin.users.roleError') + error.message });
     } else {
-      setRoleMsg({ type: 'success', text: lang === 'en' ? 'Role changed successfully.' : 'Rol succesvol gewijzigd.' });
+      setRoleMsg({ type: 'success', text: t('admin.users.roleChanged') });
       loadUsers();
     }
     setLoading(false);
@@ -577,7 +578,7 @@ export function AdminPage() {
 
   const handleAddConcept = async () => {
     if (!addConceptName.trim()) {
-      setAddConceptError('Naam is verplicht');
+      setAddConceptError(t('admin.concepts.nameRequired'));
       return;
     }
     setAddConceptLoading(true);
@@ -598,7 +599,7 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error adding concept:', error);
-      setAddConceptError((lang === 'en' ? 'Error adding: ' : 'Fout bij toevoegen: ') + error.message);
+      setAddConceptError(t('admin.concepts.addError') + error.message);
     } else {
       setAddConceptSuccess(true);
       setAddConceptName('');
@@ -622,13 +623,13 @@ export function AdminPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || (lang === 'en' ? `Error ${res.status}` : `Fout ${res.status}`));
+        throw new Error(data.error || t('admin.concepts.errorStatus', { status: String(res.status) }));
       }
       setDeleteConfirmId(null);
       await loadConcepts();
       await loadConceptsMeta();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
+      setDeleteError(err instanceof Error ? err.message : t('admin.concepts.unknownError'));
     } finally {
       setDeletingConceptId(null);
     }
@@ -650,7 +651,7 @@ export function AdminPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || `Serverfout ${response.status}`);
+        throw new Error(data.error || t('admin.ragSettings.serverErrorStatus', { status: String(response.status) }));
       }
       setRegenerateResult({
         count: (data.concepts?.length ?? 0) + (data.updated ?? 0),
@@ -660,7 +661,7 @@ export function AdminPage() {
       await loadConcepts();
       await loadConceptsMeta();
     } catch (err) {
-      setRegenerateError(err instanceof Error ? err.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'));
+      setRegenerateError(err instanceof Error ? err.message : t('admin.concepts.unknownError'));
     } finally {
       setRegeneratingConcepts(false);
     }
@@ -686,7 +687,7 @@ export function AdminPage() {
     );
     const failed = results.filter(r => r.status === 'rejected').length;
     if (failed > 0) {
-      setBulkDeleteError(lang === 'en' ? `${failed} of ${ids.length} concepts could not be deleted.` : `${failed} van de ${ids.length} begrippen konden niet worden verwijderd.`);
+      setBulkDeleteError(t('admin.concepts.bulkDeleteError', { failed: String(failed), total: String(ids.length) }));
     }
     setSelectedConceptIds(new Set());
     setBulkDeleting(false);
@@ -714,9 +715,9 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error updating prompt:', error);
-      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error saving: ' : 'Fout bij opslaan: ') + error.message });
+      setPromptMsg({ type: 'error', text: t('admin.prompts.saveError') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Prompt updated successfully.' : 'Prompt succesvol bijgewerkt.' });
+      setPromptMsg({ type: 'success', text: t('admin.prompts.saveSuccess') });
       setEditingPrompt(null);
       setPromptContent('');
       setEditingPromptName('');
@@ -733,14 +734,14 @@ export function AdminPage() {
       .from('chatbot_prompts')
       .insert({
         name: newProjectName.trim(),
-        content: newProjectContent.trim() || 'Beschrijf hier de rol van deze agent...',
+        content: newProjectContent.trim() || t('admin.prompts.agentContentPlaceholder'),
         is_active: false,
         section: 'project',
       });
     if (error) {
-      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error creating: ' : 'Fout bij aanmaken: ') + error.message });
+      setPromptMsg({ type: 'error', text: t('admin.prompts.createError') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Agent prompt created.' : 'Agent prompt aangemaakt.' });
+      setPromptMsg({ type: 'success', text: t('admin.prompts.createSuccess') });
       setNewProjectName('');
       setNewProjectContent('');
       setShowNewProjectForm(false);
@@ -756,9 +757,9 @@ export function AdminPage() {
       .delete()
       .eq('id', promptId);
     if (error) {
-      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error deleting: ' : 'Fout bij verwijderen: ') + error.message });
+      setPromptMsg({ type: 'error', text: t('admin.prompts.deleteError') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Prompt deleted.' : 'Prompt verwijderd.' });
+      setPromptMsg({ type: 'success', text: t('admin.prompts.deleteSuccess') });
       setConfirmDeletePromptId(null);
       loadPrompts();
     }
@@ -782,9 +783,9 @@ export function AdminPage() {
 
     if (error) {
       console.error('Error activating prompt:', error);
-      setPromptMsg({ type: 'error', text: (lang === 'en' ? 'Error activating: ' : 'Fout bij activeren: ') + error.message });
+      setPromptMsg({ type: 'error', text: t('admin.prompts.activateError') + error.message });
     } else {
-      setPromptMsg({ type: 'success', text: lang === 'en' ? 'Prompt activated.' : 'Prompt geactiveerd.' });
+      setPromptMsg({ type: 'success', text: t('admin.prompts.activateSuccess') });
       loadPrompts();
     }
     setLoading(false);
@@ -796,25 +797,25 @@ export function AdminPage() {
   );
 
 const tabs = [
-  { id: 'users' as TabType, label: lang === 'en' ? 'Users' : 'Gebruikers', icon: Users, show: isAdmin },
-  { id: 'documents' as TabType, label: lang === 'en' ? 'Documents' : 'Documenten', icon: FolderTree, show: true },
-  { id: 'rag_beheer' as TabType, label: lang === 'en' ? 'RAG Management' : 'RAG Beheer', icon: RefreshCw, show: true },
-  { id: 'concepts' as TabType, label: lang === 'en' ? 'Concepts' : 'Begrippen', icon: BookOpen, show: true },
-  { id: 'quiz_validation' as TabType, label: lang === 'en' ? 'Quiz Validation' : 'Quiz Validatie', icon: ClipboardCheck, show: true },
-  { id: 'sharestats_import' as TabType, label: 'ShareStats Import', icon: Download, show: true },
-  { id: 'quiz_sources' as TabType, label: lang === 'en' ? 'Quiz Sources' : 'Quiz-bronnen', icon: SlidersHorizontal, show: isAdmin || isDocent },
-  { id: 'prompts' as TabType, label: lang === 'en' ? 'Chatbot Prompts' : 'Chatbot Prompts', icon: MessageSquareText, show: isAdmin || isDocent },
-  { id: 'rag_settings' as TabType, label: lang === 'en' ? 'RAG Settings' : 'RAG Instellingen', icon: SlidersHorizontal, show: isAdmin || isDocent },
-  { id: 'projects_admin' as TabType, label: lang === 'en' ? 'Projects' : 'Projecten', icon: FolderTree, show: isAdmin || isDocent },
-  { id: 'personas' as TabType, label: lang === 'en' ? "Personas" : "Persona's", icon: MessageSquareText, show: isAdmin || isDocent },
-  { id: 'settings' as TabType, label: lang === 'en' ? 'Settings' : 'Instellingen', icon: Settings, show: isAdmin },
+  { id: 'users' as TabType, label: t('admin.tabs.users'), icon: Users, show: isAdmin },
+  { id: 'documents' as TabType, label: t('admin.tabs.documents'), icon: FolderTree, show: true },
+  { id: 'rag_beheer' as TabType, label: t('admin.tabs.ragBeheer'), icon: RefreshCw, show: true },
+  { id: 'concepts' as TabType, label: t('admin.tabs.concepts'), icon: BookOpen, show: true },
+  { id: 'quiz_validation' as TabType, label: t('admin.tabs.quizValidation'), icon: ClipboardCheck, show: true },
+  { id: 'sharestats_import' as TabType, label: t('admin.tabs.shareStats'), icon: Download, show: true },
+  { id: 'quiz_sources' as TabType, label: t('admin.tabs.quizSources'), icon: SlidersHorizontal, show: isAdmin || isDocent },
+  { id: 'prompts' as TabType, label: t('admin.tabs.prompts'), icon: MessageSquareText, show: isAdmin || isDocent },
+  { id: 'rag_settings' as TabType, label: t('admin.tabs.ragSettings'), icon: SlidersHorizontal, show: isAdmin || isDocent },
+  { id: 'projects_admin' as TabType, label: t('admin.tabs.projects'), icon: FolderTree, show: isAdmin || isDocent },
+  { id: 'personas' as TabType, label: t('admin.tabs.personas'), icon: MessageSquareText, show: isAdmin || isDocent },
+  { id: 'settings' as TabType, label: t('admin.tabs.settings'), icon: Settings, show: isAdmin },
 ].filter(tab => tab.show);
 
 const tabGroups = [
-  { label: lang === 'en' ? 'Course content' : 'Cursusinhoud', ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
-  { label: lang === 'en' ? 'Learning environment' : 'Leeromgeving', ids: ['prompts', 'quiz_validation', 'quiz_sources', 'projects_admin', 'personas'] },
-  { label: lang === 'en' ? 'System' : 'Systeem', ids: ['users', 'sharestats_import', 'settings'] },
-].map(g => ({ label: g.label, items: tabs.filter(t => g.ids.includes(t.id)) }))
+  { label: t('admin.tabGroups.courseContent'), ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
+  { label: t('admin.tabGroups.learningEnv'), ids: ['prompts', 'quiz_validation', 'quiz_sources', 'projects_admin', 'personas'] },
+  { label: t('admin.tabGroups.system'), ids: ['users', 'sharestats_import', 'settings'] },
+].map(g => ({ label: g.label, items: tabs.filter(tab => g.ids.includes(tab.id)) }))
  .filter(g => g.items.length > 0);
 
 
@@ -823,10 +824,8 @@ const tabGroups = [
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
           <Settings className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{lang === 'en' ? 'No Access' : 'Geen Toegang'}</h1>
-          <p className="text-gray-600">
-            {lang === 'en' ? 'You do not have access to the admin panel. Please contact the administrator.' : 'Je hebt geen toegang tot het beheerderspaneel. Neem contact op met de administrator.'}
-          </p>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('admin.noAccess.title')}</h1>
+          <p className="text-gray-600">{t('admin.noAccess.desc')}</p>
         </div>
       </div>
     );
@@ -836,18 +835,16 @@ const tabGroups = [
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{lang === 'en' ? 'Admin Dashboard' : 'Beheer Dashboard'}</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('admin.header.title')}</h1>
           <p className="text-gray-600">
-            {lang === 'en'
-              ? (isAdmin ? 'Manage users, documents and system settings' : 'Manage documents and course material')
-              : (isAdmin ? 'Beheer gebruikers, documenten en systeeminstellingen' : 'Beheer documenten en cursusmateriaal')}
+            {isAdmin ? t('admin.header.subtitleAdmin') : t('admin.header.subtitleDocent')}
           </p>
           <div className="mt-4">
   <Link
     to="/admin/courses"
     className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
   >
-    {lang === 'en' ? 'Manage courses' : 'Cursussen beheren'}
+    {t('admin.header.manageCourses')}
   </Link>
 </div>
 
@@ -857,7 +854,7 @@ const tabGroups = [
           className="flex items-center gap-2 px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
         >
           <Home className="w-5 h-5" />
-          <span>{lang === 'en' ? 'Back to Dashboard' : 'Terug naar Dashboard'}</span>
+          <span>{t('admin.header.backToDashboard')}</span>
         </button>
       </div>
 
@@ -866,15 +863,13 @@ const tabGroups = [
           <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-800">
-              {lang === 'en'
-                ? `Automatic folder mapping could not link ${autoBackfillStatus.failed} row${(autoBackfillStatus.failed ?? 0) !== 1 ? 's' : ''}`
-                : `Automatische mapkoppeling heeft ${autoBackfillStatus.failed} rij${(autoBackfillStatus.failed ?? 0) !== 1 ? 'en' : ''} niet kunnen koppelen`}
+              {(autoBackfillStatus.failed ?? 0) !== 1
+                ? t('admin.backfill.titlePlural', { failed: String(autoBackfillStatus.failed) })
+                : t('admin.backfill.titleSingular', { failed: String(autoBackfillStatus.failed) })}
             </p>
             <p className="text-xs text-amber-700 mt-0.5">
-              {lang === 'en'
-                ? `Total: ${autoBackfillStatus.total ?? '?'} · Linked: ${autoBackfillStatus.linked ?? 0} · Skipped: ${autoBackfillStatus.skipped ?? 0} · Failed: ${autoBackfillStatus.failed}`
-                : `Totaal: ${autoBackfillStatus.total ?? '?'} · Gekoppeld: ${autoBackfillStatus.linked ?? 0} · Overgeslagen: ${autoBackfillStatus.skipped ?? 0} · Mislukt: ${autoBackfillStatus.failed}`}
-              {autoBackfillStatus.ranAt && <> · {lang === 'en' ? 'Run at' : 'Uitgevoerd om'} {new Date(autoBackfillStatus.ranAt).toLocaleTimeString(lang === 'en' ? 'en-GB' : 'nl-NL', { hour: '2-digit', minute: '2-digit' })}</>}
+              {t('admin.backfill.stats', { total: String(autoBackfillStatus.total ?? '?'), linked: String(autoBackfillStatus.linked ?? 0), skipped: String(autoBackfillStatus.skipped ?? 0), failed: String(autoBackfillStatus.failed) })}
+              {autoBackfillStatus.ranAt && <> · {t('admin.backfill.runAt')} {new Date(autoBackfillStatus.ranAt).toLocaleTimeString(lang === 'en' ? 'en-GB' : 'nl-NL', { hour: '2-digit', minute: '2-digit' })}</>}
             </p>
             {(autoBackfillStatus.errors ?? []).length > 0 && (
               <ul className="mt-1.5 text-xs text-amber-700 list-disc list-inside space-y-0.5">
@@ -882,9 +877,11 @@ const tabGroups = [
               </ul>
             )}
             <p className="text-xs text-amber-600 mt-1.5">
-              {lang === 'en'
-                ? <>Go to <button className="underline font-medium" onClick={() => setActiveTab('projects_admin')} data-testid="link-backfill-projects-tab">Projects → Management</button> to fix the folder mapping manually.</>
-                : <>Ga naar <button className="underline font-medium" onClick={() => setActiveTab('projects_admin')} data-testid="link-backfill-projects-tab">Projecten → Beheer</button> om de mapkoppeling handmatig te herstellen.</>}
+              {t('admin.backfill.goTo')}{' '}
+              <button className="underline font-medium" onClick={() => setActiveTab('projects_admin')} data-testid="link-backfill-projects-tab">
+                {t('admin.backfill.fixLink')}
+              </button>{' '}
+              {t('admin.backfill.fixText')}
             </p>
           </div>
           <button
@@ -895,7 +892,7 @@ const tabGroups = [
               setAutoBackfillBannerDismissed(true);
             }}
             className="text-amber-500 hover:text-amber-700 transition-colors flex-shrink-0"
-            title={lang === 'en' ? 'Close' : 'Sluiten'}
+            title={t('common.close')}
             data-testid="button-dismiss-backfill-banner"
           >
             <XCircle className="w-4 h-4" />
@@ -961,9 +958,9 @@ const tabGroups = [
               )}
               {roleConfirm && (
                 <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm">
-                  <span className="text-amber-800">{lang === 'en' ? <>Change role to <strong>{roleConfirm.newRole}</strong>?</> : <>Rol wijzigen naar <strong>{roleConfirm.newRole}</strong>?</>}</span>
-                  <button onClick={confirmRoleChange} className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-medium">{lang === 'en' ? 'Confirm' : 'Bevestigen'}</button>
-                  <button onClick={() => setRoleConfirm(null)} className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium">{lang === 'en' ? 'Cancel' : 'Annuleren'}</button>
+                  <span className="text-amber-800">{t('admin.users.changeRoleTo')} <strong>{roleConfirm.newRole}</strong>?</span>
+                  <button onClick={confirmRoleChange} className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-medium">{t('admin.confirm')}</button>
+                  <button onClick={() => setRoleConfirm(null)} className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium">{t('admin.cancel')}</button>
                 </div>
               )}
               <div className="flex items-center gap-4">
@@ -971,7 +968,7 @@ const tabGroups = [
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="text"
-                    placeholder={lang === 'en' ? 'Search users by name or email...' : 'Zoek gebruikers op naam of email...'}
+                    placeholder={t('admin.users.searchPlaceholder')}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
@@ -983,10 +980,10 @@ const tabGroups = [
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-gray-200">
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{lang === 'en' ? 'Name' : 'Naam'}</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">Email</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{lang === 'en' ? 'Role' : 'Rol'}</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{lang === 'en' ? 'Actions' : 'Acties'}</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.nameCol')}</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.emailCol')}</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.roleCol')}</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.actionsCol')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1014,7 +1011,7 @@ const tabGroups = [
                                   disabled={loading}
                                   className="px-3 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors disabled:opacity-50"
                                 >
-                                  {lang === 'en' ? '→ Lecturer' : '→ Docent'}
+                                  {t('admin.users.toDocent')}
                                 </button>
                               )}
                               {user.role !== 'student' && (
@@ -1023,7 +1020,7 @@ const tabGroups = [
                                   disabled={loading}
                                   className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors disabled:opacity-50"
                                 >
-                                  {lang === 'en' ? '→ Student' : '→ Student'}
+                                  {t('admin.users.toStudent')}
                                 </button>
                               )}
                             </div>
@@ -1054,10 +1051,10 @@ const tabGroups = [
         <div className="flex items-start gap-2 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
           <span>
-            <strong>{lang === 'en' ? 'Documents changed' : 'Documenten gewijzigd'}</strong> — {lang === 'en' ? 'consider regenerating the concept list.' : 'overweeg de begrippenlijst te hergenereren.'}{' '}
+            <strong>{t('admin.ragBeheer.docsChanged')}</strong> — {t('admin.ragBeheer.docsChangedDesc')}{' '}
             {conceptsMeta.lastDocumentChange && (
               <span className="text-amber-700">
-                {lang === 'en' ? 'Last document change:' : 'Laatste documentwijziging:'}{' '}
+                {t('admin.ragBeheer.lastDocChange')}{' '}
                 {new Date(conceptsMeta.lastDocumentChange).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
@@ -1072,12 +1069,12 @@ const tabGroups = [
           {regeneratingConcepts ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              {lang === 'en' ? 'Working…' : 'Bezig…'}
+              {t('admin.ragBeheer.working')}
             </>
           ) : (
             <>
               <RefreshCw className="w-3.5 h-3.5" />
-              {lang === 'en' ? 'Regenerate now' : 'Hergenereer nu'}
+              {t('admin.ragBeheer.regenerateNow')}
             </>
           )}
         </button>
@@ -1092,37 +1089,37 @@ const tabGroups = [
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-gray-600">Beheer begrippen voor de "Ik Leg Uit" module</p>
+                  <p className="text-gray-600">{t('admin.concepts.subtitle')}</p>
                   {activeCourse && (
                     <p className="text-sm text-blue-600 mt-1 flex items-center gap-1">
                       <GraduationCap className="w-4 h-4" />
-                      Actieve cursus: <strong>{activeCourse.name}</strong>
-                      {courseConcepts.length === 0 && <span className="text-amber-600 ml-1">(nog geen cursus-begrippen)</span>}
+                      {t('admin.concepts.activeCourse')} <strong>{activeCourse.name}</strong>
+                      {courseConcepts.length === 0 && <span className="text-amber-600 ml-1">{t('admin.concepts.noCourseConceptsYet')}</span>}
                     </p>
                   )}
                   {!activeCourse && (
                     <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
                       <Globe className="w-4 h-4" />
-                      Alle begrippen (geen actieve cursus)
+                      {t('admin.concepts.allConcepts')}
                     </p>
                   )}
                   {activeCourse && conceptsMeta && (
                     <div className="flex flex-wrap items-center gap-2 mt-2" data-testid="text-concepts-meta">
                       <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium" data-testid="badge-rag-count">
-                        {conceptsMeta.ragCount} {lang === 'en' ? 'AI-extracted' : 'AI-geëxtraheerd'}
+                        {conceptsMeta.ragCount} {t('admin.concepts.aiExtracted')}
                       </span>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium" data-testid="badge-manual-count">
-                        {conceptsMeta.manualCount} {lang === 'en' ? 'manual' : 'handmatig'}
+                        {conceptsMeta.manualCount} {t('admin.concepts.manual')}
                       </span>
                       <span className="text-xs text-gray-500" data-testid="text-last-extraction">
                         {conceptsMeta.lastExtraction
-                          ? `${lang === 'en' ? 'Last extraction:' : 'Laatste extractie:'} ${new Date(conceptsMeta.lastExtraction).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-                          : (lang === 'en' ? 'Never regenerated' : 'Nog nooit hergegenereerd')}
+                          ? `${t('admin.concepts.lastExtraction')} ${new Date(conceptsMeta.lastExtraction).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                          : t('admin.concepts.neverRegenerated')}
                       </span>
                     </div>
                   )}
                   {activeCourse && !conceptsMeta && (
-                    <p className="text-xs text-gray-400 mt-2" data-testid="text-last-extraction">{lang === 'en' ? 'Never regenerated' : 'Nog nooit hergegenereerd'}</p>
+                    <p className="text-xs text-gray-400 mt-2" data-testid="text-last-extraction">{t('admin.concepts.neverRegenerated')}</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
@@ -1136,12 +1133,12 @@ const tabGroups = [
                       {regeneratingConcepts ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          {lang === 'en' ? 'Working…' : 'Bezig…'}
+                          {t('admin.concepts.working')}
                         </>
                       ) : (
                         <>
                           <RefreshCw className="w-4 h-4" />
-                          {lang === 'en' ? 'Regenerate concept list' : 'Hergenereer begrippenlijst'}
+                          {t('admin.concepts.regenerateBtn')}
                         </>
                       )}
                     </button>
@@ -1152,7 +1149,7 @@ const tabGroups = [
                     data-testid="button-toggle-add-concept"
                   >
                     <Plus className="w-4 h-4" />
-                    {lang === 'en' ? 'Add concept' : 'Begrip toevoegen'}
+                    {t('admin.concepts.addBtn')}
                   </button>
                 </div>
               </div>
@@ -1166,10 +1163,10 @@ const tabGroups = [
                   <div className="flex items-start gap-2 text-sm text-amber-800">
                     <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
                     <span>
-                      <strong>{lang === 'en' ? 'Documents changed' : 'Documenten gewijzigd'}</strong> — {lang === 'en' ? 'consider regenerating the concept list.' : 'overweeg de begrippenlijst te hergenereren.'}{' '}
+                      <strong>{t('admin.ragBeheer.docsChanged')}</strong> — {t('admin.ragBeheer.docsChangedDesc')}{' '}
                       {conceptsMeta.lastDocumentChange && (
                         <span className="text-amber-700">
-                          {lang === 'en' ? 'Last document change:' : 'Laatste documentwijziging:'}{' '}
+                          {t('admin.ragBeheer.lastDocChange')}{' '}
                           {new Date(conceptsMeta.lastDocumentChange).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </span>
                       )}
@@ -1184,12 +1181,12 @@ const tabGroups = [
                     {regeneratingConcepts ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        {lang === 'en' ? 'Working…' : 'Bezig…'}
+                        {t('admin.ragBeheer.working')}
                       </>
                     ) : (
                       <>
                         <RefreshCw className="w-3.5 h-3.5" />
-                        {lang === 'en' ? 'Regenerate now' : 'Hergenereer nu'}
+                        {t('admin.ragBeheer.regenerateNow')}
                       </>
                     )}
                   </button>
@@ -1200,8 +1197,8 @@ const tabGroups = [
                 <div className="flex items-start gap-2 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-800" data-testid="text-regenerate-result">
                   <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-green-600" />
                   <span>
-                    <strong>{regenerateResult.count}</strong> {lang === 'en' ? 'concepts generated' : 'begrippen gegenereerd'}
-                    {regenerateResult.skipped > 0 && <>, <strong>{regenerateResult.skipped}</strong> {lang === 'en' ? 'skipped' : 'overgeslagen'}</>}.
+                    <strong>{regenerateResult.count}</strong> {t('admin.concepts.generated')}
+                    {regenerateResult.skipped > 0 && <>, <strong>{regenerateResult.skipped}</strong> {t('admin.concepts.skipped')}</>}.
                     {regenerateResult.message && <> {regenerateResult.message}</>}
                   </span>
                 </div>
@@ -1214,38 +1211,38 @@ const tabGroups = [
 
               {addConceptForm && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
-                  <h3 className="font-semibold text-gray-900">{lang === 'en' ? 'Add new concept' : 'Nieuw begrip toevoegen'}</h3>
+                  <h3 className="font-semibold text-gray-900">{t('admin.concepts.addTitle')}</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Name *' : 'Naam *'}</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.concepts.nameLabel')}</label>
                       <input
                         type="text"
                         value={addConceptName}
                         onChange={e => setAddConceptName(e.target.value)}
-                        placeholder={lang === 'en' ? 'E.g. Relative risk' : 'Bijv. Relatief risico'}
+                        placeholder={t('admin.concepts.namePlaceholder')}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                         data-testid="input-concept-name"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Category' : 'Categorie'}</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.concepts.categoryLabel')}</label>
                       <select
                         value={addConceptCategory}
                         onChange={e => setAddConceptCategory(e.target.value as 'epidemiologie' | 'biostatistiek')}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                         data-testid="select-concept-category"
                       >
-                        <option value="epidemiologie">Epidemiologie</option>
-                        <option value="biostatistiek">Biostatistiek</option>
+                        <option value="epidemiologie">{t('admin.concepts.catEpidemiologie')}</option>
+                        <option value="biostatistiek">{t('admin.concepts.catBiostatistiek')}</option>
                       </select>
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Definition (optional)' : 'Definitie (optioneel)'}</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.concepts.definitionLabel')}</label>
                     <textarea
                       value={addConceptDefinition}
                       onChange={e => setAddConceptDefinition(e.target.value)}
-                      placeholder={lang === 'en' ? 'Brief definition of the concept...' : 'Korte definitie van het begrip...'}
+                      placeholder={t('admin.concepts.definitionPlaceholder')}
                       rows={2}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                       data-testid="input-concept-definition"
@@ -1255,7 +1252,7 @@ const tabGroups = [
                     <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{addConceptError}</p>
                   )}
                   {addConceptSuccess && (
-                    <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">{lang === 'en' ? 'Concept added successfully.' : 'Begrip succesvol toegevoegd.'}</p>
+                    <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">{t('admin.concepts.addSuccess')}</p>
                   )}
                   <div className="flex gap-2">
                     <button
@@ -1264,13 +1261,13 @@ const tabGroups = [
                       className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 text-sm"
                       data-testid="button-save-concept"
                     >
-                      {addConceptLoading ? <Loader2 className="w-4 h-4 animate-spin inline" /> : (lang === 'en' ? 'Save' : 'Opslaan')}
+                      {addConceptLoading ? <Loader2 className="w-4 h-4 animate-spin inline" /> : t('admin.save')}
                     </button>
                     <button
                       onClick={() => { setAddConceptForm(false); setAddConceptError(null); }}
                       className="px-4 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all text-sm"
                     >
-                      {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                      {t('admin.cancel')}
                     </button>
                   </div>
                 </div>
@@ -1282,7 +1279,7 @@ const tabGroups = [
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-sm text-gray-700">
-                  <strong>Tip:</strong> {lang === 'en' ? 'Use the "RAG Management" tab to automatically extract concepts from course material.' : 'Gebruik de "RAG Beheer" tab om begrippen automatisch te extracteren uit cursusmateriaal.'}
+                  <strong>{t('admin.tip')}</strong> {t('admin.concepts.tip')}
                 </p>
               </div>
 
@@ -1307,20 +1304,18 @@ const tabGroups = [
                         checked={allSelected}
                         className="w-4 h-4 rounded border-gray-300 accent-blue-600 pointer-events-none"
                       />
-                      {allSelected ? (lang === 'en' ? 'Deselect all' : 'Niets selecteren') : (lang === 'en' ? 'Select all' : 'Alles selecteren')}
+                      {allSelected ? t('admin.concepts.deselectAll') : t('admin.concepts.selectAll')}
                     </button>
 
                     {!noneSelected && (
-                      <span className="text-sm text-gray-500">{selectedConceptIds.size} {lang === 'en' ? 'selected' : 'geselecteerd'}</span>
+                      <span className="text-sm text-gray-500">{selectedConceptIds.size} {t('admin.concepts.selected')}</span>
                     )}
 
                     {!noneSelected && (
                       bulkDeleteConfirm ? (
                         <div className="flex items-center gap-2">
                           <span className="text-sm text-red-700 font-medium">
-                            {lang === 'en'
-                              ? `Permanently delete ${selectedConceptIds.size} concept${selectedConceptIds.size !== 1 ? 's' : ''}?`
-                              : `${selectedConceptIds.size} begrip${selectedConceptIds.size !== 1 ? 'pen' : ''} definitief verwijderen?`}
+                            {t('admin.concepts.bulkDeleteConfirm', { count: String(selectedConceptIds.size) })}
                           </span>
                           <button
                             onClick={handleBulkDelete}
@@ -1329,13 +1324,13 @@ const tabGroups = [
                             data-testid="button-confirm-bulk-delete"
                           >
                             {bulkDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                            {lang === 'en' ? 'Yes, delete' : 'Ja, verwijder'}
+                            {t('admin.concepts.yesDelete')}
                           </button>
                           <button
                             onClick={() => setBulkDeleteConfirm(false)}
                             className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
                           >
-                            {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                            {t('admin.cancel')}
                           </button>
                         </div>
                       ) : (
@@ -1346,7 +1341,7 @@ const tabGroups = [
                           data-testid="button-bulk-delete"
                         >
                           <Trash2 className="w-3 h-3" />
-                          {lang === 'en' ? `Delete selected (${selectedConceptIds.size})` : `Verwijder geselecteerde (${selectedConceptIds.size})`}
+                          {t('admin.concepts.deleteSelected', { count: String(selectedConceptIds.size) })}
                         </button>
                       )
                     )}
@@ -1362,19 +1357,19 @@ const tabGroups = [
                 <div>
                   <h3 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
                     <GraduationCap className="w-4 h-4 text-purple-600" />
-                    {lang === 'en' ? 'Course:' : 'Cursus:'} {activeCourse.name}
+                    {t('admin.concepts.courseLabel')} {activeCourse.name}
                     <span className="text-sm font-normal text-gray-500">({courseConcepts.length})</span>
                   </h3>
                   {courseConcepts.length === 0 ? (
                     <div className="text-center py-8 text-gray-500 border border-dashed border-gray-200 rounded-lg">
                       <BookOpen className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                      <p className="text-sm">{lang === 'en' ? 'No course concepts — use RAG Management to extract them.' : 'Geen cursus-begrippen — gebruik RAG Beheer om te extracteren.'}</p>
+                      <p className="text-sm">{t('admin.concepts.noCourseConcepts')}</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {courseConcepts.map(concept => {
                         const isRagExtracted = (concept.key_points || []).includes('[RAG-geëxtraheerd uit cursusmateriaal]');
-                        const sourceLabel = isRagExtracted ? 'Cursus — AI' : 'Cursus';
+                        const sourceLabel = isRagExtracted ? t('admin.concepts.sourceAI') : t('admin.concepts.sourceCourse');
                         const sourceBg = isRagExtracted ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
                         return (
                           <ConceptCard
@@ -1405,13 +1400,13 @@ const tabGroups = [
               <div>
                 <h3 className="text-base font-semibold text-gray-900 mb-3 flex items-center gap-2">
                   <Globe className="w-4 h-4 text-gray-500" />
-                  {lang === 'en' ? 'Global seeds' : 'Globale seeds'}
+                  {t('admin.concepts.globalSeeds')}
                   <span className="text-sm font-normal text-gray-500">({globalConcepts.length})</span>
                 </h3>
                 {globalConcepts.length === 0 ? (
                   <div className="text-center py-8 text-gray-500 border border-dashed border-gray-200 rounded-lg">
                     <BookOpen className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                    <p className="text-sm">{lang === 'en' ? 'No global concepts added yet.' : 'Nog geen globale begrippen toegevoegd.'}</p>
+                    <p className="text-sm">{t('admin.concepts.noGlobalConcepts')}</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1419,7 +1414,7 @@ const tabGroups = [
                       <ConceptCard
                         key={concept.id}
                         concept={concept}
-                        sourceLabel={lang === 'en' ? 'Global' : 'Globaal'}
+                        sourceLabel={t('admin.concepts.globalLabel')}
                         sourceBg="bg-gray-100 text-gray-600"
                         deleteConfirmId={deleteConfirmId}
                         deletingConceptId={deletingConceptId}
@@ -1449,18 +1444,16 @@ const tabGroups = [
 
           {activeTab === 'prompts' && (
             <div className="space-y-6">
-              <p className="text-gray-600">{lang === 'en' ? 'Manage system prompts per section of the learning environment.' : 'Beheer de systeem prompts per sectie van de leeromgeving.'}</p>
+              <p className="text-gray-600">{t('admin.prompts.subtitle')}</p>
 
               {promptsMigration && !promptsMigration.hasSection && (
                 <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl space-y-2">
-                  <p className="text-sm font-semibold text-yellow-900">{lang === 'en' ? 'One-time database migration required' : 'Eenmalige database-migratie vereist'}</p>
-                  <p className="text-sm text-yellow-800">
-                    {lang === 'en' ? 'To enable section management, run this SQL once in the Supabase dashboard (SQL Editor):' : 'Om sectie-beheer in te schakelen, voer je dit SQL eenmalig uit in het Supabase dashboard (SQL Editor):'}
-                  </p>
+                  <p className="text-sm font-semibold text-yellow-900">{t('admin.prompts.migrationTitle')}</p>
+                  <p className="text-sm text-yellow-800">{t('admin.prompts.migrationDesc')}</p>
                   <code className="block bg-yellow-100 border border-yellow-300 rounded-lg px-3 py-2 text-xs font-mono text-yellow-900 select-all whitespace-pre-wrap">
                     {promptsMigration.sqlToRun}
                   </code>
-                  <p className="text-xs text-yellow-700">{lang === 'en' ? 'After running the SQL: restart the server. The explanation prompt will be created automatically and section management will be activated.' : 'Na het uitvoeren van de SQL: herstart de server. De uitleg-prompt wordt dan automatisch aangemaakt en de sectie-indeling wordt geactiveerd.'}</p>
+                  <p className="text-xs text-yellow-700">{t('admin.prompts.migrationAfter')}</p>
                 </div>
               )}
 
@@ -1474,34 +1467,34 @@ const tabGroups = [
                 <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
                   <h3 className="text-lg font-bold text-gray-900 mb-1">
                     {editingPrompt.section === 'project'
-                      ? (lang === 'en' ? 'Edit Agent Prompt' : 'Bewerk Agent Prompt')
+                      ? t('admin.prompts.editAgent')
                       : editingPrompt.section === 'explain'
-                        ? (lang === 'en' ? 'Edit Explanation Prompt' : 'Bewerk Uitleg Prompt')
-                        : (lang === 'en' ? 'Edit Chat Prompt' : 'Bewerk Chat Prompt')}
+                        ? t('admin.prompts.editExplain')
+                        : t('admin.prompts.editChat')}
                   </h3>
                   <p className="text-sm text-gray-500 mb-4">{editingPrompt.name}</p>
 
                   {editingPrompt.section === 'project' && (
                     <div className="mb-3">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Agent name' : 'Naam van de agent'}</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.prompts.agentNameLabel')}</label>
                       <input
                         type="text"
                         value={editingPromptName}
                         onChange={e => setEditingPromptName(e.target.value)}
                         className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm"
-                        placeholder={lang === 'en' ? 'Agent prompt name...' : 'Naam van de agent prompt...'}
+                        placeholder={t('admin.prompts.agentNamePlaceholder')}
                         data-testid="input-prompt-name"
                       />
                     </div>
                   )}
 
-                  <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Content' : 'Inhoud'}</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.prompts.contentLabel')}</label>
                   <textarea
                     value={promptContent}
                     onChange={(e) => setPromptContent(e.target.value)}
                     rows={14}
                     className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none font-mono text-sm"
-                    placeholder={lang === 'en' ? 'Enter the system prompt...' : 'Voer de systeem prompt in...'}
+                    placeholder={t('admin.prompts.contentPlaceholder')}
                     data-testid="textarea-prompt-content"
                   />
                   <div className="flex gap-3 mt-4">
@@ -1511,14 +1504,14 @@ const tabGroups = [
                       className="px-6 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-sm disabled:opacity-50"
                       data-testid="button-save-prompt"
                     >
-                      {loading ? (lang === 'en' ? 'Saving...' : 'Opslaan...') : (lang === 'en' ? 'Save' : 'Opslaan')}
+                      {loading ? t('admin.prompts.saving') : t('admin.save')}
                     </button>
                     <button
                       onClick={() => { setEditingPrompt(null); setPromptContent(''); setEditingPromptName(''); }}
                       className="px-6 py-2 bg-gray-100 text-gray-700 font-semibold rounded-lg hover:bg-gray-200 transition-all"
                       data-testid="button-cancel-prompt"
                     >
-                      {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                      {t('admin.cancel')}
                     </button>
                   </div>
                 </div>
@@ -1528,8 +1521,8 @@ const tabGroups = [
                   <div>
                     <div className="flex items-center gap-2 mb-3">
                       <MessageSquareText className="w-5 h-5 text-blue-600" />
-                      <h3 className="text-base font-bold text-gray-900">Chat</h3>
-                      <span className="text-xs text-gray-400">— {lang === 'en' ? 'one system prompt for the chatbot' : 'één systeem-prompt voor de chatbot'}</span>
+                      <h3 className="text-base font-bold text-gray-900">{t('admin.prompts.chatTitle')}</h3>
+                      <span className="text-xs text-gray-400">— {t('admin.prompts.chatDesc')}</span>
                     </div>
                     <div className="space-y-2">
                       {(() => {
@@ -1544,14 +1537,14 @@ const tabGroups = [
                             <button
                               onClick={() => { setEditingPrompt(activeChatPrompt); setPromptContent(activeChatPrompt.content); setEditingPromptName(activeChatPrompt.name); }}
                               className="ml-4 p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors flex-shrink-0"
-                              title={lang === 'en' ? 'Edit' : 'Bewerken'}
+                              title={t('admin.edit')}
                               data-testid={`button-edit-chat-${activeChatPrompt.id}`}
                             >
                               <Edit2 className="w-4 h-4" />
                             </button>
                           </div>
                         ) : (
-                          <p className="text-sm text-gray-400 italic">{lang === 'en' ? 'No chat prompt found. Restart the server to create the default prompt.' : 'Geen chat-prompt gevonden. Herstart de server om de standaard-prompt aan te maken.'}</p>
+                          <p className="text-sm text-gray-400 italic">{t('admin.prompts.noChatPrompt')}</p>
                         );
                       })()}
                     </div>
@@ -1561,8 +1554,8 @@ const tabGroups = [
                   <div>
                     <div className="flex items-center gap-2 mb-3">
                       <Sparkles className="w-5 h-5 text-purple-600" />
-                      <h3 className="text-base font-bold text-gray-900">Ik Leg Uit</h3>
-                      <span className="text-xs text-gray-400">— evaluatietoon en -structuur voor studentuitleg</span>
+                      <h3 className="text-base font-bold text-gray-900">{t('admin.prompts.explainTitle')}</h3>
+                      <span className="text-xs text-gray-400">— {t('admin.prompts.explainDesc')}</span>
                     </div>
                     <div className="space-y-2">
                       {(() => {
@@ -1577,14 +1570,14 @@ const tabGroups = [
                             <button
                               onClick={() => { setEditingPrompt(activeExplainPrompt); setPromptContent(activeExplainPrompt.content); setEditingPromptName(activeExplainPrompt.name); }}
                               className="ml-4 p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-100 rounded-lg transition-colors flex-shrink-0"
-                              title={lang === 'en' ? 'Edit' : 'Bewerken'}
+                              title={t('admin.edit')}
                               data-testid={`button-edit-explain-${activeExplainPrompt.id}`}
                             >
                               <Edit2 className="w-4 h-4" />
                             </button>
                           </div>
                         ) : (
-                          <p className="text-sm text-gray-400 italic">{lang === 'en' ? 'No explanation prompt found. Run the migration SQL and restart the server to create the default prompt.' : 'Geen uitleg-prompt gevonden. Voer de migratie-SQL uit en herstart de server om de standaard-prompt aan te maken.'}</p>
+                          <p className="text-sm text-gray-400 italic">{t('admin.prompts.noExplainPrompt')}</p>
                         );
                       })()}
                     </div>
@@ -1595,8 +1588,8 @@ const tabGroups = [
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
                         <GraduationCap className="w-5 h-5 text-green-600" />
-                        <h3 className="text-base font-bold text-gray-900">{lang === 'en' ? 'Projects' : 'Projecten'}</h3>
-                        <span className="text-xs text-gray-400">— {lang === 'en' ? 'one prompt per agent, freely customisable' : 'één prompt per agent, vrij aanpasbaar'}</span>
+                        <h3 className="text-base font-bold text-gray-900">{t('admin.prompts.projectsTitle')}</h3>
+                        <span className="text-xs text-gray-400">— {t('admin.prompts.projectsDesc')}</span>
                       </div>
                       {promptsMigration?.hasSection !== false && (
                         <button
@@ -1605,24 +1598,24 @@ const tabGroups = [
                           data-testid="button-add-project-prompt"
                         >
                           <Plus className="w-4 h-4" />
-                          {lang === 'en' ? 'New agent prompt' : 'Nieuwe agent prompt'}
+                          {t('admin.prompts.newAgentPrompt')}
                         </button>
                       )}
                     </div>
                     {promptsMigration?.hasSection === false && (
                       <p className="text-sm text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3">
-                        {lang === 'en' ? 'Creating agent prompts is available after the database migration above has been run.' : 'Agent prompts aanmaken is beschikbaar nadat de database-migratie hierboven is uitgevoerd.'}
+                        {t('admin.prompts.agentPromptsAfterMigration')}
                       </p>
                     )}
 
                     {showNewProjectForm && (
                       <div className="mb-4 p-4 border border-green-200 bg-green-50 rounded-xl space-y-3">
-                        <p className="text-sm font-medium text-green-900">{lang === 'en' ? 'Create new agent prompt' : 'Nieuwe agent prompt aanmaken'}</p>
+                        <p className="text-sm font-medium text-green-900">{t('admin.prompts.createAgentTitle')}</p>
                         <input
                           type="text"
                           value={newProjectName}
                           onChange={e => setNewProjectName(e.target.value)}
-                          placeholder={lang === 'en' ? "Agent name (e.g. 'Research assistant')" : "Naam van de agent (bijv. 'Onderzoeksassistent')"}
+                          placeholder={t('admin.prompts.agentNameNewPlaceholder')}
                           className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 outline-none"
                           data-testid="input-new-project-name"
                         />
@@ -1630,7 +1623,7 @@ const tabGroups = [
                           value={newProjectContent}
                           onChange={e => setNewProjectContent(e.target.value)}
                           rows={5}
-                          placeholder={lang === 'en' ? 'Describe the role and instructions of this agent...' : 'Beschrijf de rol en instructies van deze agent...'}
+                          placeholder={t('admin.prompts.agentContentPlaceholder')}
                           className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 outline-none font-mono"
                           data-testid="textarea-new-project-content"
                         />
@@ -1641,14 +1634,14 @@ const tabGroups = [
                             className="px-4 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
                             data-testid="button-create-project-prompt"
                           >
-                            {loading ? (lang === 'en' ? 'Creating...' : 'Aanmaken...') : (lang === 'en' ? 'Create' : 'Aanmaken')}
+                            {loading ? t('admin.prompts.creating') : t('admin.prompts.create')}
                           </button>
                           <button
                             onClick={() => { setShowNewProjectForm(false); setNewProjectName(''); setNewProjectContent(''); }}
                             className="px-4 py-1.5 text-sm bg-white text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                             data-testid="button-cancel-new-project"
                           >
-                            {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                            {t('admin.cancel')}
                           </button>
                         </div>
                       </div>
@@ -1665,35 +1658,35 @@ const tabGroups = [
                             <button
                               onClick={() => { setEditingPrompt(prompt); setPromptContent(prompt.content); setEditingPromptName(prompt.name); }}
                               className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                              title={lang === 'en' ? 'Edit' : 'Bewerken'}
+                              title={t('admin.edit')}
                               data-testid={`button-edit-project-${prompt.id}`}
                             >
                               <Edit2 className="w-4 h-4" />
                             </button>
                             {confirmDeletePromptId === prompt.id ? (
                               <div className="flex items-center gap-1">
-                                <span className="text-xs text-red-600 font-medium">{lang === 'en' ? 'Delete?' : 'Verwijderen?'}</span>
+                                <span className="text-xs text-red-600 font-medium">{t('admin.prompts.deleteConfirm')}</span>
                                 <button
                                   onClick={() => handleDeleteProjectPrompt(prompt.id)}
                                   disabled={deletingPromptId === prompt.id}
                                   className="px-2 py-1 text-xs bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"
                                   data-testid={`button-confirm-delete-prompt-${prompt.id}`}
                                 >
-                                  {deletingPromptId === prompt.id ? '...' : (lang === 'en' ? 'Yes' : 'Ja')}
+                                  {deletingPromptId === prompt.id ? '...' : t('admin.yes')}
                                 </button>
                                 <button
                                   onClick={() => setConfirmDeletePromptId(null)}
                                   className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200"
                                   data-testid={`button-cancel-delete-prompt-${prompt.id}`}
                                 >
-                                  {lang === 'en' ? 'No' : 'Nee'}
+                                  {t('admin.no')}
                                 </button>
                               </div>
                             ) : (
                               <button
                                 onClick={() => setConfirmDeletePromptId(prompt.id)}
                                 className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                title={lang === 'en' ? 'Delete' : 'Verwijderen'}
+                                title={t('admin.delete')}
                                 data-testid={`button-delete-project-${prompt.id}`}
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -1703,7 +1696,7 @@ const tabGroups = [
                         </div>
                       ))}
                       {prompts.filter(p => p.section === 'project').length === 0 && !showNewProjectForm && (
-                        <p className="text-sm text-gray-400 italic">{lang === 'en' ? 'No agent prompts created yet. Click "New agent prompt" to get started.' : 'Nog geen agent prompts aangemaakt. Klik op "Nieuwe agent prompt" om te beginnen.'}</p>
+                        <p className="text-sm text-gray-400 italic">{t('admin.prompts.noAgentPrompts')}</p>
                       )}
                     </div>
                   </div>
@@ -1715,17 +1708,15 @@ const tabGroups = [
           {activeTab === 'rag_settings' && (
             <div className="space-y-6 p-6">
               <div>
-                <h2 className="text-xl font-bold text-gray-900 mb-1">{lang === 'en' ? 'RAG Proximity Settings' : 'RAG Nabijheidsinstellingen'}</h2>
-                <p className="text-sm text-gray-600">
-                  {lang === 'en' ? 'Configure per module how strictly RAG search results are filtered. Select a course or the global default below.' : 'Stel per module in hoe strikt de RAG-zoekresultaten worden gefilterd. Kies hieronder de cursus of de globale standaard.'}
-                </p>
+                <h2 className="text-xl font-bold text-gray-900 mb-1">{t('admin.ragSettings.title')}</h2>
+                <p className="text-sm text-gray-600">{t('admin.ragSettings.subtitle')}</p>
               </div>
 
               <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-blue-50 border border-blue-100 rounded-xl">
                 <Globe className="w-5 h-5 text-blue-600 flex-shrink-0" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium text-blue-900">{lang === 'en' ? 'Adjust settings for:' : 'Instellingen aanpassen voor:'}</p>
-                  <p className="text-xs text-blue-600 mt-0.5">{lang === 'en' ? 'Course-specific settings override the global default.' : 'Cursus-specifieke instellingen overschrijven de globale standaard.'}</p>
+                  <p className="text-sm font-medium text-blue-900">{t('admin.ragSettings.adjustFor')}</p>
+                  <p className="text-xs text-blue-600 mt-0.5">{t('admin.ragSettings.overrideNote')}</p>
                 </div>
                 <div className="relative">
                   <select
@@ -1737,7 +1728,7 @@ const tabGroups = [
                     className="appearance-none pl-3 pr-8 py-2 text-sm bg-white border border-blue-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 text-gray-800 min-w-[220px]"
                     data-testid="select-rag-course"
                   >
-                    <option value="">🌐 Globale standaard</option>
+                    <option value="">{t('admin.ragSettings.globalDefault')}</option>
                     {allCourses.map(course => (
                       <option key={course.id} value={course.id}>
                         {coursesWithOverrides.has(course.id) ? '⚙️ ' : '○ '}{course.name}
@@ -1754,7 +1745,7 @@ const tabGroups = [
                     <>
                       <span className="flex items-center gap-2">
                         <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
-                        <strong>{allCourses.find(c => c.id === ragSelectedCourseId)?.name}</strong> heeft eigen instellingen (override actief).
+                        <strong>{allCourses.find(c => c.id === ragSelectedCourseId)?.name}</strong> {t('admin.ragSettings.hasOverride')}
                       </span>
                       <button
                         onClick={() => deleteRagOverride(ragSelectedCourseId)}
@@ -1763,26 +1754,22 @@ const tabGroups = [
                         data-testid="button-delete-rag-override"
                       >
                         {ragDeletingOverride ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                        Terugzetten naar globaal
+                        {t('admin.ragSettings.resetToGlobal')}
                       </button>
                     </>
                   ) : (
                     <span className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-gray-400 flex-shrink-0" />
-                      <strong>{allCourses.find(c => c.id === ragSelectedCourseId)?.name}</strong> gebruikt de globale standaard. Sla op om een eigen instelling te maken.
+                      <strong>{allCourses.find(c => c.id === ragSelectedCourseId)?.name}</strong> {t('admin.ragSettings.usesGlobal')}
                     </span>
                   )}
                 </div>
               ) : (
                 <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm border bg-gray-50 border-gray-200 text-gray-600">
                   <Globe className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                  {lang === 'en' ? 'Global default — applies to all courses without a custom setting.' : 'Globale standaard — geldt voor alle cursussen zonder eigen instelling.'}
+                  {t('admin.ragSettings.globalDefaultDesc')}
                   {coursesWithOverrides.size > 0 && (
-                    <span className="ml-1 text-blue-600 font-medium">
-                      {lang === 'en'
-                        ? `(${coursesWithOverrides.size} course${coursesWithOverrides.size !== 1 ? 's' : ''} with custom setting)`
-                        : `(${coursesWithOverrides.size} cursus${coursesWithOverrides.size !== 1 ? 'sen' : ''} met eigen instelling)`}
-                    </span>
+                    <span className="ml-1 text-blue-600 font-medium">({t('admin.ragSettings.coursesWithOverride', { count: String(coursesWithOverrides.size) })})</span>
                   )}
                 </div>
               )}
@@ -1799,12 +1786,10 @@ const tabGroups = [
                   <div>
                     <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-purple-600" />
-                      {lang === 'en' ? 'Concept extraction' : 'Begrippenextractie'}
+                      {t('admin.ragSettings.extraction.title')}
                     </h3>
                     <p className="text-xs text-gray-600 mt-1 max-w-2xl">
-                      {lang === 'en'
-                        ? 'When the AI regenerates the concept list, each candidate concept is verified against the course material. Concepts without sufficient evidence are rejected. Stricter = fewer but more relevant concepts.'
-                        : 'Wanneer de AI de begrippenlijst hergenereert, wordt elk kandidaat-begrip gecontroleerd tegen het cursusmateriaal. Begrippen zonder voldoende bewijs worden afgewezen. Strikter = minder maar relevantere begrippen.'}
+                      {t('admin.ragSettings.extraction.desc')}
                     </p>
                   </div>
                 </div>
@@ -1812,12 +1797,10 @@ const tabGroups = [
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      {lang === 'en' ? 'Verification threshold' : 'Verificatie-drempel'} (<span className="font-mono">{ragSettingsState.extraction.similarity_threshold.toFixed(2)}</span>)
+                      {t('admin.ragSettings.extraction.thresholdLabel')} (<span className="font-mono">{ragSettingsState.extraction.similarity_threshold.toFixed(2)}</span>)
                     </label>
                     <p className="text-xs text-gray-500 mb-2">
-                      {lang === 'en'
-                        ? 'Minimum similarity per candidate concept. Tip: with text-embedding-3-small, good matches typically score between 0.45 and 0.65.'
-                        : 'Minimale overeenkomst per kandidaat-begrip. Tip: bij text-embedding-3-small scoren goede matches typisch tussen 0.45 en 0.65.'}
+                      {t('admin.ragSettings.extraction.thresholdDesc')}
                     </p>
                     <input
                       type="range"
@@ -1830,18 +1813,16 @@ const tabGroups = [
                       data-testid="slider-threshold-extraction"
                     />
                     <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                      <span>{lang === 'en' ? 'No filter (0.00)' : 'Geen filter (0.00)'}</span><span>{lang === 'en' ? 'Strict (0.95)' : 'Strikt (0.95)'}</span>
+                      <span>{t('admin.ragSettings.noFilter')}</span><span>{t('admin.ragSettings.strict')}</span>
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      {lang === 'en' ? 'Min. evidence chunks' : 'Min. bewijschunks'} (<span className="font-mono">{ragSettingsState.extraction.min_evidence_chunks}</span>)
+                      {t('admin.ragSettings.extraction.minEvidenceLabel')} (<span className="font-mono">{ragSettingsState.extraction.min_evidence_chunks}</span>)
                     </label>
                     <p className="text-xs text-gray-500 mb-2">
-                      {lang === 'en'
-                        ? 'How many chunks must score above the threshold to accept the concept? Higher = stricter.'
-                        : 'Hoeveel chunks moeten boven de drempel scoren om het begrip te accepteren? Hoger = strikter.'}
+                      {t('admin.ragSettings.extraction.minEvidenceDesc')}
                     </p>
                     <input
                       type="range"
@@ -1854,16 +1835,14 @@ const tabGroups = [
                       data-testid="slider-min-evidence-extraction"
                     />
                     <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                      <span>{lang === 'en' ? '0 (no filter)' : '0 (geen filter)'}</span><span>{lang === 'en' ? '5 (very strict)' : '5 (zeer strikt)'}</span>
+                      <span>{t('admin.ragSettings.extraction.minEvidenceMin')}</span><span>{t('admin.ragSettings.extraction.minEvidenceMax')}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
               {(['chat', 'explain', 'quiz', 'project'] as const).map(mod => {
-                const labels: Record<string, string> = lang === 'en'
-                  ? { chat: 'Chat', explain: 'Explain concepts', quiz: 'Quiz', project: 'Project' }
-                  : { chat: 'Chat', explain: 'Begrippen uitleggen', quiz: 'Quiz', project: 'Project' };
+                const labels: Record<string, string> = { chat: t('admin.ragSettings.modules.chat'), explain: t('admin.ragSettings.modules.explain'), quiz: t('admin.ragSettings.modules.quiz'), project: t('admin.ragSettings.modules.project') };
                 const s = ragSettingsState[mod];
                 return (
                   <div key={mod} className="border border-gray-200 rounded-xl p-5 space-y-4 bg-gray-50">
@@ -1875,9 +1854,9 @@ const tabGroups = [
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          {lang === 'en' ? 'Threshold' : 'Drempelwaarde'} (<span className="font-mono">{s.similarity_threshold.toFixed(2)}</span>)
+                          {t('admin.ragSettings.modules.thresholdLabel')} (<span className="font-mono">{s.similarity_threshold.toFixed(2)}</span>)
                         </label>
-                        <p className="text-xs text-gray-500 mb-2">{lang === 'en' ? 'Minimum similarity for RAG chunks (0.0 – 1.0)' : 'Minimale overeenkomst voor RAG-chunks (0.0 – 1.0)'}</p>
+                        <p className="text-xs text-gray-500 mb-2">{t('admin.ragSettings.modules.thresholdDesc')}</p>
                         <input
                           type="range"
                           min={0.10}
@@ -1889,23 +1868,23 @@ const tabGroups = [
                           data-testid={`slider-threshold-${mod}`}
                         />
                         <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                          <span>{lang === 'en' ? 'Broad (0.10)' : 'Breed (0.10)'}</span><span>{lang === 'en' ? 'Strict (0.95)' : 'Strikt (0.95)'}</span>
+                          <span>{t('admin.ragSettings.modules.broad')}</span><span>{t('admin.ragSettings.strict')}</span>
                         </div>
                         {s.similarity_threshold < 0.20 && (
                           <p
                             className="mt-1.5 text-xs text-amber-700"
                             data-testid={`warning-threshold-permissive-${mod}`}
                           >
-                            {lang === 'en' ? 'Very permissive — may return irrelevant passages.' : 'Erg permissief — kan irrelevante passages binnenhalen.'}
+                            {t('admin.ragSettings.modules.permissiveWarning')}
                           </p>
                         )}
                       </div>
 
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Max. chunks (<span className="font-mono">{s.match_count}</span>)
+                          {t('admin.ragSettings.modules.maxChunksLabel')} (<span className="font-mono">{s.match_count}</span>)
                         </label>
-                        <p className="text-xs text-gray-500 mb-2">{lang === 'en' ? 'Number of top-matching passages (1 – 20)' : 'Aantal top-overeenkomende passages (1 – 20)'}</p>
+                        <p className="text-xs text-gray-500 mb-2">{t('admin.ragSettings.modules.maxChunksDesc')}</p>
                         <input
                           type="range"
                           min={1}
@@ -1922,26 +1901,24 @@ const tabGroups = [
                       </div>
 
                       <div className="flex flex-col justify-center">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">{lang === 'en' ? 'Strict source restriction' : 'Strikte bronbeperking'}</label>
-                        <p className="text-xs text-gray-500 mb-3">{lang === 'en' ? 'LLM may only answer based on the retrieved course texts' : 'LLM mag alleen antwoorden op basis van de gevonden cursusteksten'}</p>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">{t('admin.ragSettings.modules.strictLabel')}</label>
+                        <p className="text-xs text-gray-500 mb-3">{t('admin.ragSettings.modules.strictDesc')}</p>
                         <button
                           onClick={() => updateRagModule(mod, 'rag_strict_mode', !s.rag_strict_mode)}
                           className={`relative inline-flex items-center gap-3 w-fit px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${s.rag_strict_mode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
                           data-testid={`toggle-strict-${mod}`}
                         >
                           {s.rag_strict_mode ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                          {s.rag_strict_mode ? (lang === 'en' ? 'Strict on' : 'Strikt aan') : (lang === 'en' ? 'Strict off' : 'Strikt uit')}
+                          {s.rag_strict_mode ? t('admin.ragSettings.modules.strictOn') : t('admin.ragSettings.modules.strictOff')}
                         </button>
                       </div>
                     </div>
 
                     {mod === 'explain' && (
                       <div className="border-t border-gray-200 pt-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">{lang === 'en' ? 'Enrich search query' : 'Zoekquery verrijken'}</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.ragSettings.modules.expansionLabel')}</label>
                         <p className="text-xs text-gray-500 mb-3 max-w-2xl">
-                          {lang === 'en'
-                            ? 'Expands short concept names with synonyms, key_points and the definition before the embedding model is called. Prevents text-embedding-3-small from returning low similarity scores for isolated terms (e.g. "cohort"). Only active for "Explain concepts"; chat/quiz/project use their own context-rich queries and do not need this enrichment.'
-                            : 'Vult korte begripsnamen aan met Nederlandse synoniemen, key_points en de definition voordat het embedding-model wordt aangeroepen. Verhelpt dat text-embedding-3-small voor losse vaktermen (zoals \u201ccohort\u201d) anders lage similarity-scores oplevert. Alleen actief voor \u201cBegrippen uitleggen\u201d; chat/quiz/project gebruiken eigen context-rijke queries en hebben deze verrijking niet nodig.'}
+                          {t('admin.ragSettings.modules.expansionDesc')}
                         </p>
                         <button
                           onClick={() => updateRagModule(mod, 'query_expansion_enabled', !s.query_expansion_enabled)}
@@ -1949,7 +1926,7 @@ const tabGroups = [
                           data-testid={`toggle-expansion-${mod}`}
                         >
                           {s.query_expansion_enabled ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                          {s.query_expansion_enabled ? (lang === 'en' ? 'Enrichment on' : 'Verrijking aan') : (lang === 'en' ? 'Enrichment off' : 'Verrijking uit')}
+                          {s.query_expansion_enabled ? t('admin.ragSettings.modules.expansionOn') : t('admin.ragSettings.modules.expansionOff')}
                         </button>
                       </div>
                     )}
@@ -1965,7 +1942,7 @@ const tabGroups = [
                   data-testid="button-save-rag-settings"
                 >
                   {ragSettingsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  {ragSettingsSaving ? (lang === 'en' ? 'Saving...' : 'Opslaan...') : (lang === 'en' ? 'Save' : 'Opslaan')}
+                  {ragSettingsSaving ? t('admin.ragSettings.saving') : t('admin.save')}
                 </button>
                 <button
                   onClick={loadRagSettingsAdmin}
@@ -1974,7 +1951,7 @@ const tabGroups = [
                   data-testid="button-reset-rag-settings"
                 >
                   <RefreshCw className="w-4 h-4" />
-                  {lang === 'en' ? 'Reload' : 'Herladen'}
+                  {t('admin.ragSettings.reload')}
                 </button>
               </div>
 
@@ -1983,17 +1960,15 @@ const tabGroups = [
                 <div>
                   <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                     <Search className="w-4 h-4 text-gray-600" />
-                    {lang === 'en' ? 'Diagnose: test threshold' : 'Diagnose: test drempelwaarde'}
+                    {t('admin.ragSettings.diagnostic.title')}
                   </h3>
                   <p className="text-xs text-gray-600 mt-1 max-w-2xl">
-                    {lang === 'en'
-                      ? 'Type a search term (e.g. a concept name) to see which chunks are returned — without applying a threshold. This lets you estimate which threshold is realistic for your course material.'
-                      : 'Type een zoekterm (bijvoorbeeld een begripsnaam) om te zien welke chunks worden gevonden — zonder drempel toe te passen. Zo kun je inschatten welke drempel realistisch is voor jouw cursusmateriaal.'}
+                    {t('admin.ragSettings.diagnostic.desc')}
                   </p>
                   {!isAdmin && !ragSelectedCourseId && (
                     <p className="text-xs text-amber-700 mt-2 flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-md w-fit">
                       <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                      {lang === 'en' ? 'Choose a course above first — diagnosis requires a course selection for lecturers.' : 'Kies eerst een cursus hierboven — diagnose vereist een cursusselectie voor docenten.'}
+                      {t('admin.ragSettings.diagnostic.selectCourseFirst')}
                     </p>
                   )}
                 </div>
@@ -2005,7 +1980,7 @@ const tabGroups = [
                       value={diagnosticQuery}
                       onChange={e => setDiagnosticQuery(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !diagnosticLoading) runDiagnostic(); }}
-                      placeholder={lang === 'en' ? 'e.g. Cross-over study' : 'bijv. Cross-over onderzoek'}
+                      placeholder={t('admin.ragSettings.diagnostic.placeholder')}
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
                       data-testid="input-diagnostic-query"
                     />
@@ -2016,7 +1991,7 @@ const tabGroups = [
                       data-testid="button-run-diagnostic"
                     >
                       {diagnosticLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                      Test
+                      {t('admin.ragSettings.diagnostic.testBtn')}
                     </button>
                   </div>
                   <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer w-fit">
@@ -2027,20 +2002,18 @@ const tabGroups = [
                       className="accent-blue-600"
                       data-testid="checkbox-diagnostic-expand"
                     />
-                    {lang === 'en' ? 'Enrich the search term with synonyms (same logic as "Explain concepts" uses)' : 'Verrijk de zoekterm met synoniemen (zelfde logica als \u201cBegrippen uitleggen\u201d gebruikt)'}
+                    {t('admin.ragSettings.diagnostic.enrichLabel')}
                   </label>
                   {diagnosticExpand && (
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-gray-600">
-                        {lang === 'en'
-                          ? <>Optional: definition of the concept (as stored in <code>concepts</code>) for a fair comparison with "Explain concepts".</>
-                          : <>Optioneel: definition van het begrip (zoals opgeslagen in <code>concepts</code>) voor een eerlijke vergelijking met &ldquo;Begrippen uitleggen&rdquo;.</>}
+                        {t('admin.ragSettings.diagnostic.definitionLabel')}
                       </label>
                       <textarea
                         value={diagnosticDefinition}
                         onChange={e => setDiagnosticDefinition(e.target.value)}
                         rows={2}
-                        placeholder={lang === 'en' ? "E.g. 'A group of people with a common characteristic followed over time.'" : "Bijv. 'Een groep mensen met een gemeenschappelijk kenmerk die in de tijd gevolgd wordt.'"}
+                        placeholder={t('admin.ragSettings.diagnostic.definitionPlaceholder')}
                         className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-full"
                         data-testid="textarea-diagnostic-definition"
                       />
@@ -2058,21 +2031,21 @@ const tabGroups = [
                 {diagnosticResult && (
                   <div className="space-y-3" data-testid="diagnostic-results">
                     <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                      <span>{lang === 'en' ? 'Result for' : 'Resultaat voor'} <strong>"{diagnosticResult.query}"</strong>:</span>
+                      <span>{t('admin.ragSettings.diagnostic.resultFor')} <strong>"{diagnosticResult.query}"</strong>:</span>
                       <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-mono">
-                        {lang === 'en' ? 'Best score' : 'Beste score'}: {diagnosticResult.maxScore.toFixed(3)}
+                        {t('admin.ragSettings.diagnostic.bestScore')} {diagnosticResult.maxScore.toFixed(3)}
                       </span>
                       <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
-                        {diagnosticResult.chunks.length} {lang === 'en' ? 'chunks returned' : 'chunks teruggegeven'}
+                        {diagnosticResult.chunks.length} {t('admin.ragSettings.diagnostic.chunksReturned')}
                       </span>
                       {diagnosticResult.candidatesInAllowedFolders !== undefined && (
                         <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
-                          ({diagnosticResult.candidatesInAllowedFolders} {lang === 'en' ? 'candidates in allowed folders' : 'kandidaten in toegestane mappen'})
+                          ({diagnosticResult.candidatesInAllowedFolders} {t('admin.ragSettings.diagnostic.candidatesInFolders')})
                         </span>
                       )}
                       {diagnosticResult.expanded && (
                         <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs">
-                          {lang === 'en' ? 'enriched search term used' : 'verrijkte zoekterm gebruikt'}
+                          {t('admin.ragSettings.diagnostic.enrichedUsed')}
                         </span>
                       )}
                     </div>
@@ -2081,14 +2054,14 @@ const tabGroups = [
                         className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded-md px-3 py-2"
                         data-testid="text-diagnostic-embed-query"
                       >
-                        <span className="font-medium text-blue-900">{lang === 'en' ? 'Enriched search string:' : 'Verrijkte zoekstring:'}</span>{' '}
+                        <span className="font-medium text-blue-900">{t('admin.ragSettings.diagnostic.enrichedQuery')}</span>{' '}
                         <span className="font-mono break-words">{diagnosticResult.embedQuery}</span>
                       </div>
                     )}
 
                     {diagnosticResult.chunks.length === 0 ? (
                       <div className="text-sm text-gray-500 italic">
-                        {lang === 'en' ? 'No chunks found. Check whether the course has RAG folders assigned.' : 'Geen chunks gevonden. Controleer of de cursus RAG-mappen heeft toegewezen.'}
+                        {t('admin.ragSettings.diagnostic.noChunks')}
                       </div>
                     ) : (
                       <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -2131,22 +2104,12 @@ const tabGroups = [
 
           {activeTab === 'settings' && (
             <div className="space-y-4">
-              <p className="text-gray-600">{lang === 'en' ? 'System settings and configuration' : 'Systeeminstellingen en configuratie'}</p>
+              <p className="text-gray-600">{t('admin.settings.subtitle')}</p>
               <div className="space-y-4">
                 <div className="p-4 border border-gray-200 rounded-lg">
-                  <h3 className="font-semibold text-gray-900 mb-2">{lang === 'en' ? 'API Configuration' : 'API Configuratie'}</h3>
+                  <h3 className="font-semibold text-gray-900 mb-2">{t('admin.settings.apiConfig')}</h3>
                   <p className="text-sm text-gray-600">
-                    {lang === 'en' ? (
-                      <>Add your API keys as Replit Secrets:<br />
-                      - OPENAI_API_KEY for LLM functionality and embeddings/RAG<br />
-                      - HUGGINGFACE_API_KEY for alternative embeddings<br />
-                      - GITHUB_TOKEN for higher GitHub API limits</>
-                    ) : (
-                      <>Voeg je API keys toe als Replit Secrets:<br />
-                      - OPENAI_API_KEY voor LLM functionaliteit en embeddings/RAG<br />
-                      - HUGGINGFACE_API_KEY voor alternatieve embeddings<br />
-                      - GITHUB_TOKEN voor hogere GitHub API limieten</>
-                    )}
+                    {t('admin.settings.apiConfigDesc')}
                   </p>
                 </div>
               </div>
