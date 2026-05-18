@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCourseAccess } from '../contexts/CourseAccessContext';
@@ -21,6 +21,13 @@ export default function CoursesAdmin() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Bewerk-state per rij.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   async function loadCourses() {
     setLoadingList(true);
@@ -77,6 +84,58 @@ export default function CoursesAdmin() {
       setError(msg);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  function startEdit(c: CourseRow) {
+    setEditingId(c.id);
+    setEditName(c.name);
+    setEditDesc(c.description ?? '');
+    setEditError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditName('');
+    setEditDesc('');
+    setEditError(null);
+  }
+
+  async function saveEdit(courseId: string) {
+    setEditError(null);
+    const trimmedName = editName.trim();
+    const trimmedDesc = editDesc.trim();
+    if (!trimmedName) {
+      setEditError('Naam mag niet leeg zijn.');
+      return;
+    }
+    const token = session?.access_token;
+    if (!token) {
+      setEditError('Niet ingelogd.');
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const res = await fetch(`/api/admin/courses/${courseId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: trimmedName, description: trimmedDesc }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setEditError(json.error || `Bijwerken mislukt (${res.status})`);
+        return;
+      }
+      cancelEdit();
+      await Promise.all([loadCourses(), refreshCourses()]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setEditError(msg);
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -175,31 +234,113 @@ export default function CoursesAdmin() {
           </p>
         ) : (
           <ul className="space-y-2" data-testid="list-courses">
-            {courses.map((c) => (
-              <li
-                key={c.id}
-                className="flex items-center justify-between border border-gray-200 rounded-md px-4 py-3 bg-white"
-                data-testid={`row-course-${c.id}`}
-              >
-                <div>
-                  <div className="font-medium text-gray-900" data-testid={`text-course-name-${c.id}`}>
-                    {c.name}
-                  </div>
-                  {c.description && (
-                    <div className="text-xs text-gray-500 mt-0.5">{c.description}</div>
-                  )}
-                </div>
-                <span
-                  className={
-                    c.is_active
-                      ? 'text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800'
-                      : 'text-xs font-medium px-2 py-0.5 rounded-full bg-gray-200 text-gray-700'
-                  }
+            {courses.map((c) => {
+              const isEditing = editingId === c.id;
+              return (
+                <li
+                  key={c.id}
+                  className="border border-gray-200 rounded-md px-4 py-3 bg-white"
+                  data-testid={`row-course-${c.id}`}
                 >
-                  {c.is_active ? 'Actief' : 'Inactief'}
-                </span>
-              </li>
-            ))}
+                  {isEditing ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Naam</label>
+                        <input
+                          type="text"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          maxLength={120}
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          disabled={editSaving}
+                          data-testid={`input-edit-name-${c.id}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Beschrijving
+                        </label>
+                        <textarea
+                          value={editDesc}
+                          onChange={(e) => setEditDesc(e.target.value)}
+                          rows={2}
+                          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          disabled={editSaving}
+                          data-testid={`input-edit-description-${c.id}`}
+                        />
+                      </div>
+                      {editError && (
+                        <div
+                          className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
+                          data-testid={`text-edit-error-${c.id}`}
+                        >
+                          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                          <span>{editError}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => saveEdit(c.id)}
+                          disabled={editSaving || !editName.trim()}
+                          className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors"
+                          data-testid={`button-save-course-${c.id}`}
+                        >
+                          {editSaving ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Check className="w-3.5 h-3.5" />
+                          )}
+                          Opslaan
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          disabled={editSaving}
+                          className="inline-flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 text-sm font-medium px-3 py-1.5 rounded-md transition-colors"
+                          data-testid={`button-cancel-edit-${c.id}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          Annuleren
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-gray-900" data-testid={`text-course-name-${c.id}`}>
+                          {c.name}
+                        </div>
+                        {c.description && (
+                          <div className="text-xs text-gray-500 mt-0.5">{c.description}</div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span
+                          className={
+                            c.is_active
+                              ? 'text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800'
+                              : 'text-xs font-medium px-2 py-0.5 rounded-full bg-gray-200 text-gray-700'
+                          }
+                        >
+                          {c.is_active ? 'Actief' : 'Inactief'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => startEdit(c)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                          title="Naam en beschrijving aanpassen"
+                          data-testid={`button-edit-course-${c.id}`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          Bewerken
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

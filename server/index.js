@@ -1430,9 +1430,13 @@ app.post('/api/admin/courses', async (req, res) => {
   };
 
   try {
-    // 1) Voorkom dubbele cursusnaam.
+    // 1) Voorkom dubbele cursusnaam OF dubbele folder_name (beide kolommen
+    //    hebben een UNIQUE-constraint en zijn in onze flow altijd gelijk).
     const { data: existingCourse } = await supabaseAdmin
-      .from('courses').select('id').eq('name', rawName).maybeSingle();
+      .from('courses')
+      .select('id, name, folder_name')
+      .or(`name.eq.${rawName},folder_name.eq.${rawName}`)
+      .maybeSingle();
     if (existingCourse) {
       return res.status(409).json({ error: `Er bestaat al een cursus met de naam "${rawName}"` });
     }
@@ -1444,11 +1448,19 @@ app.post('/api/admin/courses', async (req, res) => {
       return res.status(500).json({ error: 'Globale root-map (is_root=true) niet gevonden' });
     }
 
-    // 3) Maak de cursus aan.
+    // 3) Maak de cursus aan. courses.folder_name is NOT NULL UNIQUE en wordt
+    //    altijd gelijkgehouden aan courses.name (zo zijn MenS1 en Basiscursus
+    //    ook aangemaakt). Sync-tooling (src/services/courseSync.ts) gebruikt
+    //    folder_name om met Supabase Storage-rootmappen te vergelijken.
     const { data: newCourse, error: courseErr } = await supabaseAdmin
       .from('courses')
-      .insert({ name: rawName, description: description || null, is_active: true })
-      .select('id, name, description, is_active')
+      .insert({
+        name: rawName,
+        folder_name: rawName,
+        description: description || null,
+        is_active: true,
+      })
+      .select('id, name, folder_name, description, is_active')
       .single();
     if (courseErr || !newCourse) {
       return res.status(500).json({ error: `Kon cursus niet aanmaken: ${courseErr?.message}` });
@@ -1549,6 +1561,140 @@ app.post('/api/admin/courses', async (req, res) => {
     console.error('[admin/courses] Unexpected error:', err);
     await rollback(`exception: ${err?.message}`);
     return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+// PATCH /api/admin/courses/:id — hernoem en/of werk beschrijving bij van een
+// bestaande cursus. Houdt courses.name, courses.folder_name én de parent-
+// cursusmap-naam in document_folders synchroon, zodat de structuur identiek
+// blijft aan MenS1/Basiscursus.
+app.patch('/api/admin/courses/:id', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen cursussen bewerken' });
+
+  const courseId = req.params.id;
+  if (!courseId) return res.status(400).json({ error: 'Cursus-ID ontbreekt' });
+
+  const nameProvided = typeof req.body?.name === 'string';
+  const descProvided = typeof req.body?.description === 'string';
+  if (!nameProvided && !descProvided) {
+    return res.status(400).json({ error: 'Geef minstens "name" of "description" mee' });
+  }
+
+  const newName = nameProvided ? req.body.name.trim() : null;
+  const newDesc = descProvided ? req.body.description.trim() : null;
+  if (nameProvided) {
+    if (!newName) return res.status(400).json({ error: 'Cursusnaam mag niet leeg zijn' });
+    if (newName.length > 120) return res.status(400).json({ error: 'Cursusnaam is te lang (max 120 tekens)' });
+  }
+
+  // We voeren de wijzigingen uit binnen één Postgres-transactie via pgPool,
+  // zodat een mislukte folder-rename de courses-update ook terugdraait. De
+  // supabase-js client heeft geen transactiesupport, vandaar deze route.
+  if (!pgPool) {
+    return res.status(503).json({ error: 'Direct DB-verbinding (SUPABASE_DB_URL) niet beschikbaar voor transactionele rename' });
+  }
+
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1) Bestaande cursus ophalen + row-lock.
+    const existingRes = await client.query(
+      'SELECT id, name, folder_name, description FROM courses WHERE id = $1 FOR UPDATE',
+      [courseId]
+    );
+    if (existingRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Cursus niet gevonden' });
+    }
+    const existing = existingRes.rows[0];
+
+    // 2) Bij naamwijziging: uniekheid op name én folder_name (excl. zichzelf).
+    if (nameProvided && newName !== existing.name) {
+      const clashRes = await client.query(
+        `SELECT id FROM courses
+         WHERE id <> $1 AND (name = $2 OR folder_name = $2)
+         LIMIT 1`,
+        [courseId, newName]
+      );
+      if (clashRes.rowCount > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `Er bestaat al een cursus met de naam "${newName}"` });
+      }
+    }
+
+    // 3) courses-rij bijwerken. name én folder_name blijven gelijk.
+    const setParts = [];
+    const params = [];
+    let i = 1;
+    if (nameProvided) {
+      setParts.push(`name = $${i++}`);
+      params.push(newName);
+      setParts.push(`folder_name = $${i++}`);
+      params.push(newName);
+    }
+    if (descProvided) {
+      setParts.push(`description = $${i++}`);
+      params.push(newDesc || null);
+    }
+    params.push(courseId);
+    const updRes = await client.query(
+      `UPDATE courses SET ${setParts.join(', ')}
+       WHERE id = $${i}
+       RETURNING id, name, folder_name, description, is_active`,
+      params
+    );
+    const updated = updRes.rows[0];
+
+    // 4) Bij naamwijziging: parent-cursusmap synchroon hernoemen. De map is
+    //    eenduidig identificeerbaar als (parent_folder_id = root, folder_type
+    //    = 'course', name = oude cursusnaam) — er bestaat een UNIQUE-
+    //    constraint op (parent_folder_id, name) in document_folders. Wij
+    //    eisen exact 1 geüpdatete rij; bij 0 of meer dan 1 rollback.
+    if (nameProvided && newName !== existing.name) {
+      const rootRes = await client.query(
+        "SELECT id FROM document_folders WHERE is_root = true LIMIT 1"
+      );
+      if (rootRes.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return res.status(500).json({ error: 'Globale root-map (is_root=true) niet gevonden — rename teruggedraaid' });
+      }
+      const rootId = rootRes.rows[0].id;
+      const folderRes = await client.query(
+        `UPDATE document_folders
+         SET name = $1, description = $2
+         WHERE parent_folder_id = $3
+           AND folder_type = 'course'
+           AND name = $4
+         RETURNING id`,
+        [newName, `Cursusmap ${newName}`, rootId, existing.name]
+      );
+      if (folderRes.rowCount !== 1) {
+        await client.query('ROLLBACK');
+        return res.status(500).json({
+          error: `Verwacht 1 cursusmap te hernoemen, maar vond er ${folderRes.rowCount}. Wijziging teruggedraaid.`,
+        });
+      }
+    }
+
+    await client.query('COMMIT');
+    console.log(`[admin/courses] Cursus ${courseId} bijgewerkt → name="${updated.name}"`);
+    return res.json({ course: updated });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    // unique_violation = 23505 (mocht race-conditie er toch doorheen glippen)
+    if (err && err.code === '23505') {
+      return res.status(409).json({ error: `Naam is al in gebruik door een andere cursus` });
+    }
+    console.error('[admin/courses PATCH] Unexpected error:', err);
+    return res.status(500).json({ error: err?.message || 'Internal server error' });
+  } finally {
+    client.release();
   }
 });
 
