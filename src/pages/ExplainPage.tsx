@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, ragDocumentDownloadUrl } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, ragDocumentDownloadUrl, openRagDocument } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
@@ -68,13 +68,20 @@ function FeedbackBlock({
       if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
+  const handleOpenSource = (s: { documentId?: string }) => {
+    if (!s.documentId) return;
+    openRagDocument(s.documentId).catch((err) => {
+      window.alert(err?.message || 'Kon bron niet openen.');
+    });
+  };
   return (
     <div className="bg-white rounded-2xl border border-gray-200 p-6">
       <h3 className="text-xl font-bold text-gray-900 mb-4">{t('explain.feedback')}</h3>
       <MarkdownMessage
         content={feedback}
-        sources={retrievedSources.map((s, i) => ({ index: i + 1, title: s.title, href: s.href }))}
+        sources={retrievedSources.map((s, i) => ({ index: i + 1, title: s.title, href: s.href, documentId: s.documentId }))}
         onCitationClick={handleCitationClick}
+        onSourceOpen={handleOpenSource}
       />
       {/\(buiten\s+(?:het\s+|dit\s+|de\s+)?cursusmateriaal\)/i.test(feedback) && (
         <div
@@ -94,6 +101,7 @@ function FeedbackBlock({
         open={sourcesOpen}
         onOpenChange={setSourcesOpen}
         idPrefix={idPrefix}
+        onOpenSource={handleOpenSource}
       />
       {retrievedStats && (
         <div className="mt-4">

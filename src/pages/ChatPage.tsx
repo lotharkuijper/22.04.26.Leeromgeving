@@ -4,7 +4,7 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import { sendChatMessage, llmErrorToDutch, type Message } from '../services/llm.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, ragDocumentDownloadUrl, type DocumentChunk } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, ragDocumentDownloadUrl, openRagDocument, type DocumentChunk } from '../services/rag.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
@@ -70,13 +70,23 @@ function AssistantMessageBody({
               5
             )
           : []);
-  const citationSources = dispRaw.map((s, i) => ({ index: i + 1, title: s.title, href: s.href }));
+  const citationSources = dispRaw.map((s, i) => ({
+    index: i + 1,
+    title: s.title,
+    href: s.href,
+    documentId: s.documentId,
+  }));
   const handleCitationClick = (idx: number) => {
     setSourcesOpen(true);
-    // Wacht tot SourceList ingeklapt -> uitgeklapt is voordat we scrollen.
     requestAnimationFrame(() => {
       const el = document.getElementById(`source-${messageId}-${idx}`);
       if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  };
+  const handleOpenSource = (s: { documentId?: string; title: string }) => {
+    if (!s.documentId) return;
+    openRagDocument(s.documentId).catch((err) => {
+      window.alert(err?.message || (lang === 'en' ? 'Could not open source.' : 'Kon bron niet openen.'));
     });
   };
   return (
@@ -85,6 +95,7 @@ function AssistantMessageBody({
         content={content}
         sources={citationSources}
         onCitationClick={handleCitationClick}
+        onSourceOpen={handleOpenSource}
       />
       {dispRaw.length > 0 && (
         <SourceList
@@ -94,6 +105,7 @@ function AssistantMessageBody({
           open={sourcesOpen}
           onOpenChange={setSourcesOpen}
           idPrefix={messageId}
+          onOpenSource={handleOpenSource}
         />
       )}
     </>

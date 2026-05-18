@@ -1166,7 +1166,10 @@ app.get('/api/rag/documents/:documentId/download', async (req, res) => {
       if (signErr || !signed?.signedUrl) {
         return res.status(500).json({ error: 'Kon geen downloadlink aanmaken.' });
       }
-      return res.redirect(signed.signedUrl);
+      // De client kan een Bearer-token niet via een gewone <a href> meesturen.
+      // Daarom geven we JSON met een tijdelijk getekende URL terug zodat de
+      // frontend deze in een nieuw tabblad kan openen.
+      return res.json({ url: signed.signedUrl, filename });
     }
     return res.status(404).json({ error: 'Dit document heeft geen downloadbaar bestand.' });
   } catch (err) {

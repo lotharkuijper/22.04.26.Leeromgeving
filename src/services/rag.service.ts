@@ -407,6 +407,40 @@ export function ragDocumentDownloadUrl(documentId?: string): string | undefined 
   return `/api/rag/documents/${encodeURIComponent(documentId)}/download`;
 }
 
+// Opent een RAG-document via een geauthenticeerde fetch. Vereist omdat een
+// gewone <a href> de Supabase Bearer-token niet meestuurt (de download-route
+// zou dan 401 geven). Bij signed-URL responses opent een nieuw tabblad de
+// getekende URL; bij binary (file_bytes) responses wordt een blob-URL geopend.
+export async function openRagDocument(documentId: string): Promise<void> {
+  if (!documentId) return;
+  const url = `/api/rag/documents/${encodeURIComponent(documentId)}/download`;
+  const { data: { session } } = await supabase.auth.getSession();
+  const headers: Record<string, string> = {};
+  if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const j = await res.json();
+      detail = j?.error || '';
+    } catch { /* ignore */ }
+    throw new Error(detail || `Kon bron niet openen (${res.status}).`);
+  }
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    const j = await res.json() as { url?: string };
+    if (!j.url) throw new Error('Geen downloadlink ontvangen.');
+    window.open(j.url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const win = window.open(objectUrl, '_blank', 'noopener,noreferrer');
+  // Geef de browser even tijd om het tabblad te openen voor we de URL revoken.
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  if (!win) throw new Error('Pop-up geblokkeerd. Sta pop-ups toe om de bron te openen.');
+}
+
 export function buildContextWithCap(
   chunks: DocumentChunk[],
   maxChunks: number = RAG_CONTEXT_MAX_CHUNKS,

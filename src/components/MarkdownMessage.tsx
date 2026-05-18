@@ -8,6 +8,7 @@ interface MarkdownMessageProps {
   content: string;
   sources?: CitationSource[];
   onCitationClick?: (index: number) => void;
+  onSourceOpen?: (source: CitationSource) => void;
   className?: string;
 }
 
@@ -15,11 +16,16 @@ export function MarkdownMessage({
   content,
   sources = [],
   onCitationClick,
+  onSourceOpen,
   className,
 }: MarkdownMessageProps) {
   const wrap = (children: React.ReactNode) =>
     sources.length > 0 ? (
-      <CitationText sources={sources} onCitationClick={onCitationClick}>
+      <CitationText
+        sources={sources}
+        onCitationClick={onCitationClick}
+        onSourceOpen={onSourceOpen}
+      >
         {children}
       </CitationText>
     ) : (

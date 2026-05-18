@@ -22,6 +22,8 @@ interface SourceListProps {
   onOpenChange?: (open: boolean) => void;
   /** Voorvoegsel voor element-id's (source-{prefix}-{n}); vereist bij meerdere lijsten op één pagina. */
   idPrefix?: string;
+  /** Click-handler voor het openen van een bron; overschrijft default anchor-navigatie. */
+  onOpenSource?: (item: SourceItem) => void;
 }
 
 function dedupeByDocument(items: SourceItem[]): SourceItem[] {
@@ -43,6 +45,7 @@ export function SourceList({
   open: openProp,
   onOpenChange,
   idPrefix,
+  onOpenSource,
 }: SourceListProps) {
   const [internalOpen, setInternalOpen] = useState(!defaultCollapsed);
   const open = openProp ?? internalOpen;
@@ -95,13 +98,19 @@ export function SourceList({
                 data-testid={`source-item-${index}`}
                 id={`source-${idNs}-${num}`}
               >
-                {source.href ? (
+                {(source.href || source.documentId) ? (
                   <a
-                    href={source.href}
+                    href={source.href || '#'}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="hover:underline"
                     data-testid={`link-source-${num}`}
+                    onClick={(e) => {
+                      if (onOpenSource) {
+                        e.preventDefault();
+                        onOpenSource(source);
+                      }
+                    }}
                   >
                     {inner}
                   </a>

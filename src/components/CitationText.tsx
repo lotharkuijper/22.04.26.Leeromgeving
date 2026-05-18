@@ -4,20 +4,24 @@ export interface CitationSource {
   index: number;
   title: string;
   href?: string;
+  documentId?: string;
 }
 
 interface CitationTextProps {
   children: ReactNode;
   sources: CitationSource[];
   onCitationClick?: (index: number) => void;
+  onSourceOpen?: (source: CitationSource) => void;
 }
 
 function CitationSup({
   source,
   onClick,
+  onSourceOpen,
 }: {
   source: CitationSource;
   onClick?: (index: number) => void;
+  onSourceOpen?: (source: CitationSource) => void;
 }) {
   const [hover, setHover] = useState(false);
   return (
@@ -44,16 +48,22 @@ function CitationSup({
           data-testid={`citation-tooltip-${source.index}`}
         >
           <span className="font-medium">[{source.index}] {source.title}</span>
-          {source.href && (
+          {(source.href || source.documentId) && (
             <>
               {' · '}
               <a
-                href={source.href}
+                href={source.href || '#'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline text-blue-300 hover:text-blue-200"
                 data-testid={`citation-tooltip-link-${source.index}`}
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onSourceOpen) {
+                    e.preventDefault();
+                    onSourceOpen(source);
+                  }
+                }}
               >
                 Open bron
               </a>
@@ -68,7 +78,8 @@ function CitationSup({
 function transformString(
   text: string,
   sources: CitationSource[],
-  onCitationClick?: (index: number) => void
+  onCitationClick?: (index: number) => void,
+  onSourceOpen?: (source: CitationSource) => void
 ): ReactNode[] {
   if (!text) return [text];
   const byIndex = new Map(sources.map((s) => [s.index, s]));
@@ -83,7 +94,12 @@ function transformString(
     if (!src) continue;
     if (m.index > last) out.push(text.slice(last, m.index));
     out.push(
-      <CitationSup key={`cit-${key++}-${idx}`} source={src} onClick={onCitationClick} />
+      <CitationSup
+        key={`cit-${key++}-${idx}`}
+        source={src}
+        onClick={onCitationClick}
+        onSourceOpen={onSourceOpen}
+      />
     );
     last = m.index + m[0].length;
   }
@@ -94,20 +110,21 @@ function transformString(
 function walk(
   node: ReactNode,
   sources: CitationSource[],
-  onCitationClick?: (index: number) => void
+  onCitationClick?: (index: number) => void,
+  onSourceOpen?: (source: CitationSource) => void
 ): ReactNode {
   if (typeof node === 'string') {
-    const parts = transformString(node, sources, onCitationClick);
+    const parts = transformString(node, sources, onCitationClick, onSourceOpen);
     return <>{parts.map((p, i) => <Fragment key={i}>{p}</Fragment>)}</>;
   }
   if (Array.isArray(node)) {
     return node.map((child, i) => (
-      <Fragment key={i}>{walk(child, sources, onCitationClick)}</Fragment>
+      <Fragment key={i}>{walk(child, sources, onCitationClick, onSourceOpen)}</Fragment>
     ));
   }
   return node;
 }
 
-export function CitationText({ children, sources, onCitationClick }: CitationTextProps) {
-  return <>{walk(children, sources, onCitationClick)}</>;
+export function CitationText({ children, sources, onCitationClick, onSourceOpen }: CitationTextProps) {
+  return <>{walk(children, sources, onCitationClick, onSourceOpen)}</>;
 }
