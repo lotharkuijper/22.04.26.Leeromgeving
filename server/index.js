@@ -8245,7 +8245,7 @@ async function listProjectSubmissionsHandler(req, res) {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
-});
+}
 
 app.get('/api/projects/:projectId/submissions', listProjectSubmissionsHandler);
 
