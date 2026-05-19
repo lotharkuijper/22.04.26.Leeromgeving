@@ -139,13 +139,22 @@ export function DashboardPage() {
             .order('updated_at', { ascending: false })
             .limit(1)
             .maybeSingle(),
-          supabase
-            .from('student_explanations')
-            .select('id, created_at, concepts(name)')
-            .eq('student_id', profile.id)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle(),
+          activeCourseId
+            ? supabase
+                .from('student_explanations')
+                .select('id, created_at, concepts!inner(name, course_id)')
+                .eq('student_id', profile.id)
+                .eq('concepts.course_id', activeCourseId)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            : supabase
+                .from('student_explanations')
+                .select('id, created_at, concepts(name)')
+                .eq('student_id', profile.id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
           supabase
             .from('quiz_attempts')
             .select('id, topics, score_percentage, created_at')
@@ -316,12 +325,10 @@ export function DashboardPage() {
           const last = data[tile.key];
           const Icon = tile.icon;
           const hasLast = !!last;
-          const needsCourse = !activeCourseId;
-          const target = needsCourse ? '/choose-course' : tile.to;
           return (
             <Link
               key={tile.key}
-              to={target}
+              to={tile.to}
               data-testid={`tile-${tile.key}`}
               className={`group relative block rounded-2xl border bg-white p-6 transition-all hover:shadow-lg ${tile.border} ${tile.hoverBorder} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500`}
             >
@@ -334,13 +341,6 @@ export function DashboardPage() {
                   <h2 className="text-lg font-semibold text-slate-900">{t(tile.titleKey as never)}</h2>
                   {loading ? (
                     <div className="mt-2 h-4 w-3/4 rounded bg-slate-100 animate-pulse" />
-                  ) : needsCourse ? (
-                    <p
-                      className="mt-2 text-sm text-slate-500"
-                      data-testid={`tile-${tile.key}-needs-course`}
-                    >
-                      {t('dashboard.tile.needsCourse')}
-                    </p>
                   ) : hasLast ? (
                     <p
                       className="mt-2 text-sm text-slate-700 line-clamp-2"
@@ -358,7 +358,7 @@ export function DashboardPage() {
                     </p>
                   )}
                   <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 group-hover:text-slate-900">
-                    <span>{needsCourse ? t('dashboard.chooseCourse') : t(tile.ctaKey as never)}</span>
+                    <span>{t(tile.ctaKey as never)}</span>
                     <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                   </div>
                 </div>
