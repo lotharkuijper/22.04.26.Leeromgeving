@@ -1,4 +1,4 @@
-# LAIR-VU — Leeromgeving met AI-integratie en Reflectie
+# LEAP-VU — Learning & Engagement AI-Platform
 
 Vite/React SPA + Express server + Supabase (PostgreSQL/auth/RLS).
 LLM: Groq `llama-3.3-70b-versatile`. Embeddings: OpenAI `text-embedding-3-small`.

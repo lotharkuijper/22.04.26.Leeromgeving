@@ -57,9 +57,9 @@ export function LoginPage() {
       <div className="w-full max-w-md">
         <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
           <div className="flex flex-col items-center mb-8">
-            <img src="/lair-vu-logo.png" alt="LAIR-VU logo" className="h-24 w-auto mb-4" />
+            <img src="/leap-vu-logo.png" alt="LEAP-VU logo" className="h-24 w-auto mb-4" />
             <h1 className="text-2xl font-bold text-gray-900 mb-2 text-center">
-              LAIR-VU
+              LEAP-VU
             </h1>
             <p className="text-gray-600 text-center">
               {isSignUp ? t('login.signUpSubtitle') : t('login.signInSubtitle')}

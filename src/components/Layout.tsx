@@ -124,9 +124,9 @@ export function Layout({ children }: LayoutProps) {
 
             {/* LEFT SIDE: LOGO + TITLE */}
             <div className="flex items-center gap-2">
-              <img src="/lair-vu-logo.png" alt="LAIR-VU logo" className="h-10 w-auto" />
+              <img src="/leap-vu-logo.png" alt="LEAP-VU logo" className="h-10 w-auto" />
               <span className="font-bold text-lg text-gray-900 hidden sm:block">
-                LAIR-VU
+                LEAP-VU
               </span>
             </div>
 
