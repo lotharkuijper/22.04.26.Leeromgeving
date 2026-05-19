@@ -785,6 +785,11 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       </div>
 
       {/* Ingeleverde projectproducten */}
+      {!project.submissions_enabled && (
+        <div className="bg-gray-50 rounded-2xl border border-gray-200 p-4 text-xs text-gray-600" data-testid="section-project-submissions-disabled">
+          Inleveren projectproduct staat uit voor dit project. Zet het aan via Bewerken om studenten één bestand per groep te laten uploaden.
+        </div>
+      )}
       {project.submissions_enabled && (
         <div className="bg-white rounded-2xl border border-gray-200 p-5" data-testid="section-project-submissions">
           <div className="mb-3">
