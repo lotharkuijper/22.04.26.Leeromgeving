@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import {
   Folder,
   File,
-  Trash2,
   Upload,
   FolderPlus,
   ChevronRight,
-  FolderOpen
+  FolderOpen,
+  Download,
+  Inbox,
 } from 'lucide-react';
 import {
   getSubfolders,
@@ -15,12 +16,26 @@ import {
   getBreadcrumbPath,
   BreadcrumbItem,
   getRootFolder,
+  getFolderById,
   createSubfolder,
   deleteFolder,
   updateFolder,
 } from '../services/folder.service';
 import { useAuth } from '../contexts/AuthContext';
 import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
+
+interface SubmissionItem {
+  id: string;
+  project_id: string;
+  project_title: string | null;
+  group_id: string;
+  group_name: string | null;
+  uploaded_by_name: string | null;
+  uploaded_by_email: string | null;
+  filename: string;
+  byte_size: number | null;
+  created_at: string;
+}
 
 interface DocumentItem {
   id: string;
@@ -44,10 +59,13 @@ export default function DocumentManagement({
   onUploadClick: (folderId: string | null) => void;
   onDeleteDocument: (documentId: string, filePath: string, fileName: string) => void;
 }) {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [currentFolderType, setCurrentFolderType] = useState<string | null>(null);
   const [folders, setFolders] = useState<FolderWithDocumentCount[]>([]);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [submissions, setSubmissions] = useState<SubmissionItem[]>([]);
+  const [submissionsError, setSubmissionsError] = useState<string | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
@@ -88,19 +106,62 @@ export default function DocumentManagement({
 
     try {
       setLoading(true);
-      const [subfolders, docs, path] = await Promise.all([
+      setSubmissionsError(null);
+      const [subfolders, docs, path, meta] = await Promise.all([
         getSubfolders(currentFolderId),
         getDocumentsInFolder(currentFolderId),
         getBreadcrumbPath(currentFolderId),
+        getFolderById(currentFolderId),
       ]);
 
       setFolders(subfolders);
       setDocuments(docs as DocumentItem[]);
       setBreadcrumbs(path);
+      const ftype = meta?.folder_type || null;
+      setCurrentFolderType(ftype);
+
+      if (ftype === 'uploads' && session?.access_token) {
+        try {
+          const r = await fetch(`/api/admin/uploads-folder/${currentFolderId}/submissions`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          if (r.ok) {
+            const d = await r.json();
+            setSubmissions(d.submissions || []);
+          } else {
+            const j = await r.json().catch(() => ({}));
+            setSubmissionsError(j.error || 'Kon inleveringen niet laden');
+            setSubmissions([]);
+          }
+        } catch (e: any) {
+          setSubmissionsError(e.message);
+          setSubmissions([]);
+        }
+      } else {
+        setSubmissions([]);
+      }
     } catch (error) {
       console.error('Error loading folder:', error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function downloadSubmission(s: SubmissionItem) {
+    if (!session?.access_token) return;
+    try {
+      const r = await fetch(`/api/projects/${s.project_id}/submissions/${s.id}/download`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!r.ok) { setSubmissionsError('Download mislukt'); return; }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = s.filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) {
+      setSubmissionsError(e.message);
     }
   }
 
@@ -283,10 +344,51 @@ export default function DocumentManagement({
         </div>
       )}
 
+      {currentFolderType === 'uploads' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2 text-sm text-amber-900" data-testid="banner-uploads-info">
+          <Inbox className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="font-medium">Inleveringen van studenten</div>
+            <div className="text-xs text-amber-800">
+              In deze map staan de ingeleverde projectproducten per groep. Eén bestand per groep — een nieuwe upload vervangt de vorige.
+              {submissionsError && <span className="block text-red-700 mt-1">{submissionsError}</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {currentFolderType === 'uploads' && !loading && submissions.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden" data-testid="list-uploads-submissions">
+          {submissions.map(s => (
+            <div key={s.id} className="flex items-center justify-between p-4 border-b border-gray-100 hover:bg-gray-50" data-testid={`uploads-submission-row-${s.id}`}>
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <File className="w-5 h-5 text-gray-500 flex-shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-medium truncate">{s.filename}</div>
+                  <div className="text-xs text-gray-500">
+                    {s.project_title || s.project_id.slice(0, 8)} · {s.group_name || s.group_id.slice(0, 8)}
+                    {s.uploaded_by_name || s.uploaded_by_email ? ` · door ${s.uploaded_by_name || s.uploaded_by_email}` : ''}
+                    {' · '}{new Date(s.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {s.byte_size ? ` · ${Math.round(s.byte_size / 1024)} KB` : ''}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => downloadSubmission(s)}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1.5"
+                data-testid={`button-download-uploads-submission-${s.id}`}
+              >
+                <Download className="w-4 h-4" /> Download
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         {loading ? (
           <div className="text-center py-12 text-gray-500">Laden...</div>
-        ) : folders.length === 0 && documents.length === 0 ? (
+        ) : folders.length === 0 && documents.length === 0 && !(currentFolderType === 'uploads' && submissions.length > 0) ? (
           <div className="text-center py-12 text-gray-500">
             <FolderOpen className="w-12 h-12 mx-auto mb-3 text-gray-400" />
             <p>Deze map is leeg</p>

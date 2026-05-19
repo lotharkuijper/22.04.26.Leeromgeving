@@ -8470,6 +8470,79 @@ app.get('/api/admin/courses/:courseId/submissions', async (req, res) => {
   }
 });
 
+// GET /api/admin/uploads-folder/:folderId/submissions — staff browse-pad voor
+// de Documenten-UI: resolve cursus via course_folder_assignments + folder_type
+// 'uploads', delegeer dan naar de cursus-brede submissions-listing.
+app.get('/api/admin/uploads-folder/:folderId/submissions', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { folderId } = req.params;
+  try {
+    const { data: folder } = await supabaseAdmin
+      .from('document_folders').select('id, folder_type').eq('id', folderId).maybeSingle();
+    if (!folder) return res.status(404).json({ error: 'Map niet gevonden' });
+    if (folder.folder_type !== 'uploads') {
+      return res.status(400).json({ error: 'Map is geen Uploads-map' });
+    }
+    const { data: assign } = await supabaseAdmin
+      .from('course_folder_assignments').select('course_id').eq('folder_id', folderId).maybeSingle();
+    if (!assign) return res.status(404).json({ error: 'Uploads-map is niet aan een cursus gekoppeld' });
+    const courseId = assign.course_id;
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    const isCourseStaff = isAdmin
+      || (profile?.role === 'docent' && await userHasCourseAccess(auth.user, profile, courseId));
+    if (!isCourseStaff) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+
+    const { data: projects } = await supabaseAdmin
+      .from('projects').select('id, title').eq('course_id', courseId);
+    const projectIds = (projects || []).map(p => p.id);
+    if (!projectIds.length) return res.json({ courseId, submissions: [] });
+    const projectMap = new Map((projects || []).map(p => [p.id, p]));
+
+    const { data: rows, error: e } = await supabaseAdmin
+      .from('project_submissions')
+      .select('id, project_id, group_id, uploaded_by, filename, mime_type, byte_size, created_at, project_groups!inner(name)')
+      .in('project_id', projectIds)
+      .order('created_at', { ascending: false });
+    if (e) return res.status(500).json({ error: e.message });
+
+    const uploaderIds = Array.from(new Set((rows || []).map(r => r.uploaded_by).filter(Boolean)));
+    let uploaderMap = new Map();
+    if (uploaderIds.length) {
+      const { data: profs } = await supabaseAdmin
+        .from('profiles').select('id, email, full_name').in('id', uploaderIds);
+      uploaderMap = new Map((profs || []).map(p => [p.id, p]));
+    }
+    return res.json({
+      courseId,
+      submissions: (rows || []).map(s => {
+        const up = s.uploaded_by ? uploaderMap.get(s.uploaded_by) : null;
+        const proj = projectMap.get(s.project_id);
+        return {
+          id: s.id,
+          project_id: s.project_id,
+          project_title: proj?.title || null,
+          group_id: s.group_id,
+          group_name: s.project_groups?.name || null,
+          uploaded_by: s.uploaded_by,
+          uploaded_by_name: up?.full_name || up?.email || null,
+          uploaded_by_email: up?.email || null,
+          filename: s.filename,
+          mime_type: s.mime_type,
+          byte_size: s.byte_size,
+          created_at: s.created_at,
+        };
+      }),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // =============================================================================
 // Beoordeling opvragen — voor elke evaluator-persona van het project: rubric
 // + alle persona-gesprekken van de groep + projectdocumenten naar OpenAI, en
