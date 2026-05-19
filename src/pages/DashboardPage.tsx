@@ -109,7 +109,7 @@ function firstName(full: string | null | undefined): string {
 
 export function DashboardPage() {
   const { profile, isAdmin, isDocent } = useAuth();
-  const { activeCourse } = useActiveCourse();
+  const { activeCourse, activeCourseId } = useActiveCourse();
   const { t, lang } = useLanguage();
 
   const [loading, setLoading] = useState(true);
@@ -153,13 +153,22 @@ export function DashboardPage() {
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle(),
-          supabase
-            .from('student_project_sessions')
-            .select('id, last_activity, current_phase, projects(title)')
-            .eq('student_id', profile.id)
-            .order('last_activity', { ascending: false })
-            .limit(1)
-            .maybeSingle(),
+          activeCourseId
+            ? supabase
+                .from('student_project_sessions')
+                .select('id, last_activity, current_phase, projects!inner(title, course_id)')
+                .eq('student_id', profile.id)
+                .eq('projects.course_id', activeCourseId)
+                .order('last_activity', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            : supabase
+                .from('student_project_sessions')
+                .select('id, last_activity, current_phase, projects(title)')
+                .eq('student_id', profile.id)
+                .order('last_activity', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
           supabase
             .from('learning_journal_entries')
             .select('id, title, content, updated_at')
@@ -229,7 +238,7 @@ export function DashboardPage() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.id, lang]);
+  }, [profile?.id, lang, activeCourseId]);
 
   const greeting = (() => {
     const h = new Date().getHours();
@@ -280,10 +289,12 @@ export function DashboardPage() {
           const last = data[tile.key];
           const Icon = tile.icon;
           const hasLast = !!last;
+          const needsCourse = !activeCourseId;
+          const target = needsCourse ? '/choose-course' : tile.to;
           return (
             <Link
               key={tile.key}
-              to={tile.to}
+              to={target}
               data-testid={`tile-${tile.key}`}
               className={`group relative block rounded-2xl border bg-white p-6 transition-all hover:shadow-lg ${tile.border} ${tile.hoverBorder} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500`}
             >
@@ -296,6 +307,13 @@ export function DashboardPage() {
                   <h2 className="text-lg font-semibold text-slate-900">{t(tile.titleKey as never)}</h2>
                   {loading ? (
                     <div className="mt-2 h-4 w-3/4 rounded bg-slate-100 animate-pulse" />
+                  ) : needsCourse ? (
+                    <p
+                      className="mt-2 text-sm text-slate-500"
+                      data-testid={`tile-${tile.key}-needs-course`}
+                    >
+                      {t('dashboard.tile.needsCourse')}
+                    </p>
                   ) : hasLast ? (
                     <p
                       className="mt-2 text-sm text-slate-700 line-clamp-2"
@@ -313,7 +331,7 @@ export function DashboardPage() {
                     </p>
                   )}
                   <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 group-hover:text-slate-900">
-                    <span>{t(tile.ctaKey as never)}</span>
+                    <span>{needsCourse ? t('dashboard.chooseCourse') : t(tile.ctaKey as never)}</span>
                     <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                   </div>
                 </div>
@@ -343,10 +361,10 @@ export function DashboardPage() {
                   {data.journal.title && (
                     <p className="text-sm font-medium text-slate-800">{truncate(data.journal.title, 80)}</p>
                   )}
-                  <div className="text-sm text-slate-700">
+                  <div className="text-sm text-slate-700 line-clamp-2 overflow-hidden">
                     <MarkdownMessage
-                      content={truncate(data.journal.content, 160)}
-                      className="prose prose-sm max-w-none prose-p:my-0 prose-p:text-slate-700 prose-strong:text-slate-900"
+                      content={truncate(data.journal.content, 140)}
+                      className="prose prose-sm max-w-none prose-p:my-0 prose-p:inline prose-p:text-slate-700 prose-strong:text-slate-900"
                     />
                   </div>
                 </div>
