@@ -130,7 +130,7 @@ export function DashboardPage() {
       }
       setLoading(true);
       try {
-        const [convRes, explRes, quizRes, projRes, journalRes] = await Promise.all([
+        const [convRes, explRes, quizRes, personaRes, projRes, journalRes] = await Promise.all([
           supabase
             .from('conversations')
             .select('id, title, updated_at')
@@ -153,10 +153,17 @@ export function DashboardPage() {
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle(),
+          supabase
+            .from('group_persona_messages')
+            .select('id, created_at, group_persona_threads!inner(persona_id, project_personas!inner(name, project_id, projects!inner(title, course_id)))')
+            .eq('user_id', profile.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
           activeCourseId
             ? supabase
                 .from('student_project_sessions')
-                .select('id, last_activity, current_phase, projects!inner(title, course_id)')
+                .select('id, last_activity, projects!inner(title, course_id)')
                 .eq('student_id', profile.id)
                 .eq('projects.course_id', activeCourseId)
                 .order('last_activity', { ascending: false })
@@ -164,7 +171,7 @@ export function DashboardPage() {
                 .maybeSingle()
             : supabase
                 .from('student_project_sessions')
-                .select('id, last_activity, current_phase, projects(title)')
+                .select('id, last_activity, projects(title)')
                 .eq('student_id', profile.id)
                 .order('last_activity', { ascending: false })
                 .limit(1)
@@ -208,15 +215,35 @@ export function DashboardPage() {
           const scoreLabel = typeof score === 'number' ? ` · ${score}%` : '';
           next.quiz = { label: `${topicLabel}${scoreLabel}` };
         }
-        if (projRes.data) {
-          const project = (projRes.data as { projects?: { title?: string } | { title?: string }[] | null }).projects;
-          let title: string | undefined;
-          if (Array.isArray(project)) title = project[0]?.title;
-          else if (project) title = project.title;
-          const phase = (projRes.data.current_phase as string | null) ?? null;
-          const phaseLabel = phase ? t(`dashboard.tile.project.phase.${phase}` as never) : '';
-          const titleLabel = title?.trim() || t('dashboard.tile.project.unknown');
-          next.project = { label: phaseLabel ? `${titleLabel} · ${phaseLabel}` : titleLabel };
+        // Voorkeur: laatste persona-conversatie van de student (titel + persona).
+        // Fallback: laatste student_project_sessions rij (alleen titel).
+        const pickOne = (v: unknown): Record<string, unknown> | undefined => {
+          if (Array.isArray(v)) return (v[0] as Record<string, unknown>) ?? undefined;
+          if (v && typeof v === 'object') return v as Record<string, unknown>;
+          return undefined;
+        };
+
+        let projectLabel: string | null = null;
+        if (personaRes.data) {
+          const thread = pickOne((personaRes.data as Record<string, unknown>).group_persona_threads);
+          const persona = pickOne(thread?.project_personas);
+          const project = pickOne(persona?.projects);
+          const courseMatches =
+            !activeCourseId || (project?.course_id as string | undefined) === activeCourseId;
+          if (courseMatches) {
+            const title = (project?.title as string | undefined)?.trim();
+            const titleLabel = title || t('dashboard.tile.project.unknown');
+            const personaName = (persona?.name as string | undefined)?.trim();
+            projectLabel = personaName ? `${titleLabel} · ${personaName}` : titleLabel;
+          }
+        }
+        if (!projectLabel && projRes.data) {
+          const project = pickOne((projRes.data as Record<string, unknown>).projects);
+          const title = (project?.title as string | undefined)?.trim();
+          projectLabel = title || t('dashboard.tile.project.unknown');
+        }
+        if (projectLabel) {
+          next.project = { label: projectLabel };
         }
         if (journalRes.data) {
           next.journal = {
@@ -348,33 +375,37 @@ export function DashboardPage() {
         aria-label={t('dashboard.journal.title')}
       >
         <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="flex items-start gap-3 min-w-0 flex-1">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-100 text-green-700 flex-shrink-0">
-              <BookText className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-base font-semibold text-slate-900">{t('dashboard.journal.title')}</h2>
-              {loading ? (
+          {loading ? (
+            <div className="flex items-start gap-3 min-w-0 flex-1">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-100 text-green-700 flex-shrink-0">
+                <BookText className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-base font-semibold text-slate-900">{t('dashboard.journal.title')}</h2>
                 <div className="mt-2 h-4 w-2/3 rounded bg-green-100 animate-pulse" />
-              ) : data.journal ? (
-                <div className="mt-1" data-testid="text-journal-last">
-                  {data.journal.title && (
-                    <p className="text-sm font-medium text-slate-800">{truncate(data.journal.title, 80)}</p>
-                  )}
-                  <div className="text-sm text-slate-700 line-clamp-2 overflow-hidden">
-                    <MarkdownMessage
-                      content={truncate(data.journal.content, 140)}
-                      className="prose prose-sm max-w-none prose-p:my-0 prose-p:inline prose-p:text-slate-700 prose-strong:text-slate-900"
-                    />
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-1 text-sm text-slate-600" data-testid="text-journal-empty">
-                  {t('dashboard.journal.empty')}
-                </p>
-              )}
+              </div>
             </div>
-          </div>
+          ) : data.journal ? (
+            <div className="flex items-start gap-3 min-w-0 flex-1">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-100 text-green-700 flex-shrink-0">
+                <BookText className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1" data-testid="text-journal-last">
+                <h2 className="text-base font-semibold text-slate-900">{t('dashboard.journal.title')}</h2>
+                {data.journal.title && (
+                  <p className="mt-1 text-sm font-medium text-slate-800">{truncate(data.journal.title, 80)}</p>
+                )}
+                <div className="text-sm text-slate-700 line-clamp-2 overflow-hidden">
+                  <MarkdownMessage
+                    content={truncate(data.journal.content, 140)}
+                    className="prose prose-sm max-w-none prose-p:my-0 prose-p:inline prose-p:text-slate-700 prose-strong:text-slate-900"
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="min-w-0 flex-1" data-testid="text-journal-empty" />
+          )}
           <Link
             to="/feedback"
             data-testid="btn-journal-write"
