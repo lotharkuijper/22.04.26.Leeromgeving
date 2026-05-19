@@ -8201,18 +8201,31 @@ app.get('/api/projects/:projectId/submissions', async (req, res) => {
     const { data, error: e } = await q;
     if (e) return res.status(500).json({ error: e.message });
 
+    const rows = data || [];
+    const uploaderIds = Array.from(new Set(rows.map(r => r.uploaded_by).filter(Boolean)));
+    let uploaderMap = new Map();
+    if (uploaderIds.length) {
+      const { data: profs } = await supabaseAdmin
+        .from('profiles').select('id, email, full_name').in('id', uploaderIds);
+      uploaderMap = new Map((profs || []).map(p => [p.id, p]));
+    }
     return res.json({
-      submissions: (data || []).map(s => ({
-        id: s.id,
-        project_id: s.project_id,
-        group_id: s.group_id,
-        group_name: s.project_groups?.name || null,
-        uploaded_by: s.uploaded_by,
-        filename: s.filename,
-        mime_type: s.mime_type,
-        byte_size: s.byte_size,
-        created_at: s.created_at,
-      })),
+      submissions: rows.map(s => {
+        const up = s.uploaded_by ? uploaderMap.get(s.uploaded_by) : null;
+        return {
+          id: s.id,
+          project_id: s.project_id,
+          group_id: s.group_id,
+          group_name: s.project_groups?.name || null,
+          uploaded_by: s.uploaded_by,
+          uploaded_by_name: up?.full_name || up?.email || null,
+          uploaded_by_email: up?.email || null,
+          filename: s.filename,
+          mime_type: s.mime_type,
+          byte_size: s.byte_size,
+          created_at: s.created_at,
+        };
+      }),
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -8359,6 +8372,81 @@ app.delete('/api/projects/:projectId/submissions/:subId', async (req, res) => {
       .eq('id', subId).eq('project_id', projectId);
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Alias-routes (taakcontract): /api/projects/:projectId/groups/:groupId/submissions
+// — semantisch identiek aan ?groupId=... maar als pad-parameter.
+app.get('/api/projects/:projectId/groups/:groupId/submissions', (req, res, next) => {
+  req.query.groupId = req.params.groupId;
+  req.url = `/api/projects/${req.params.projectId}/submissions?groupId=${req.params.groupId}`;
+  app._router.handle(req, res, next);
+});
+app.post('/api/projects/:projectId/groups/:groupId/submissions', docUpload.single('file'), (req, res, next) => {
+  req.body = req.body || {};
+  req.body.groupId = req.params.groupId;
+  req.url = `/api/projects/${req.params.projectId}/submissions`;
+  app._router.handle(req, res, next);
+});
+
+// GET /api/admin/courses/:courseId/submissions — cursus-brede staff overzicht:
+// alle inleveringen van alle projecten van deze cursus, met groep- en
+// project-context. Alleen admin/superuser of docent met course_members-record.
+app.get('/api/admin/courses/:courseId/submissions', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { courseId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    const isCourseStaff = isAdmin
+      || (profile?.role === 'docent' && await userHasCourseAccess(auth.user, profile, courseId));
+    if (!isCourseStaff) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+
+    const { data: projects } = await supabaseAdmin
+      .from('projects').select('id, title').eq('course_id', courseId);
+    const projectIds = (projects || []).map(p => p.id);
+    if (!projectIds.length) return res.json({ submissions: [] });
+    const projectMap = new Map((projects || []).map(p => [p.id, p]));
+
+    const { data: rows, error: e } = await supabaseAdmin
+      .from('project_submissions')
+      .select('id, project_id, group_id, uploaded_by, filename, mime_type, byte_size, created_at, project_groups!inner(name)')
+      .in('project_id', projectIds)
+      .order('created_at', { ascending: false });
+    if (e) return res.status(500).json({ error: e.message });
+
+    const uploaderIds = Array.from(new Set((rows || []).map(r => r.uploaded_by).filter(Boolean)));
+    let uploaderMap = new Map();
+    if (uploaderIds.length) {
+      const { data: profs } = await supabaseAdmin
+        .from('profiles').select('id, email, full_name').in('id', uploaderIds);
+      uploaderMap = new Map((profs || []).map(p => [p.id, p]));
+    }
+    return res.json({
+      submissions: (rows || []).map(s => {
+        const up = s.uploaded_by ? uploaderMap.get(s.uploaded_by) : null;
+        const proj = projectMap.get(s.project_id);
+        return {
+          id: s.id,
+          project_id: s.project_id,
+          project_title: proj?.title || null,
+          group_id: s.group_id,
+          group_name: s.project_groups?.name || null,
+          uploaded_by: s.uploaded_by,
+          uploaded_by_name: up?.full_name || up?.email || null,
+          uploaded_by_email: up?.email || null,
+          filename: s.filename,
+          mime_type: s.mime_type,
+          byte_size: s.byte_size,
+          created_at: s.created_at,
+        };
+      }),
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

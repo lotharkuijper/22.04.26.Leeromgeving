@@ -27,6 +27,8 @@ interface SubmissionRow {
   group_id: string;
   group_name: string | null;
   uploaded_by: string | null;
+  uploaded_by_name: string | null;
+  uploaded_by_email: string | null;
   filename: string;
   mime_type: string | null;
   byte_size: number | null;
@@ -697,7 +699,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm truncate">{s.filename}</div>
                     <div className="text-[11px] text-gray-500">
-                      {s.group_name || s.group_id.slice(0, 8)} · {new Date(s.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      {s.group_name || s.group_id.slice(0, 8)}
+                      {s.uploaded_by_name || s.uploaded_by_email ? ` · door ${s.uploaded_by_name || s.uploaded_by_email}` : ''}
+                      {' · '}{new Date(s.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       {s.byte_size ? ` · ${Math.round(s.byte_size / 1024)} KB` : ''}
                     </div>
                   </div>

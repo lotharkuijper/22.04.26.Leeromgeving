@@ -1541,6 +1541,9 @@ export function ProjectRoomPage() {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm truncate">{submissions[0].filename}</div>
                     <div className="text-[11px] text-gray-500">
+                      {(submissions[0] as any).uploaded_by_name || (submissions[0] as any).uploaded_by_email
+                        ? `Door ${(submissions[0] as any).uploaded_by_name || (submissions[0] as any).uploaded_by_email} · `
+                        : ''}
                       {new Date(submissions[0].created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       {submissions[0].byte_size ? ` · ${Math.round(submissions[0].byte_size / 1024)} KB` : ''}
                     </div>
