@@ -1534,11 +1534,30 @@ app.post('/api/admin/courses', async (req, res) => {
     createdFolderIds.push(dataFolder.id);
     await insertPerms(dataFolder.id);
 
+    // 6b) Uploads-submap voor studenten-inleveringen (Task #156).
+    const { data: uploadsFolder, error: upErr } = await supabaseAdmin
+      .from('document_folders').insert({
+        name: 'Uploads',
+        description: `Inleveringen voor ${rawName}`,
+        parent_folder_id: courseFolder.id,
+        created_by: r.user.id,
+        folder_type: 'uploads',
+        bucket_type: 'docs_general',
+        is_root: false,
+      }).select('id').single();
+    if (upErr || !uploadsFolder) {
+      await rollback(`uploads-folder-insert: ${upErr?.message}`);
+      return res.status(500).json({ error: `Kon Uploads-map niet aanmaken: ${upErr?.message}` });
+    }
+    createdFolderIds.push(uploadsFolder.id);
+    await insertPerms(uploadsFolder.id);
+
     // 7) Koppel beide submappen aan de cursus (verplicht — anders zien cursus en mappen elkaar niet).
     const { error: assignErr } = await supabaseAdmin
       .from('course_folder_assignments').insert([
         { course_id: createdCourseId, folder_id: ragFolder.id },
         { course_id: createdCourseId, folder_id: dataFolder.id },
+        { course_id: createdCourseId, folder_id: uploadsFolder.id },
       ]);
     if (assignErr) {
       await rollback(`course_folder_assignments: ${assignErr.message}`);
@@ -1556,12 +1575,13 @@ app.post('/api/admin/courses', async (req, res) => {
       console.warn('[admin/courses] folder_rag_assignments insert (non-fatal):', ragAssignErr.message);
     }
 
-    console.log(`[admin/courses] Cursus "${rawName}" aangemaakt (${createdCourseId}) met folders ${courseFolder.id}/${ragFolder.id}/${dataFolder.id}`);
+    console.log(`[admin/courses] Cursus "${rawName}" aangemaakt (${createdCourseId}) met folders ${courseFolder.id}/${ragFolder.id}/${dataFolder.id}/${uploadsFolder.id}`);
     return res.status(201).json({
       course: newCourse,
       courseFolderId: courseFolder.id,
       ragFolderId: ragFolder.id,
       projectdataFolderId: dataFolder.id,
+      uploadsFolderId: uploadsFolder.id,
       ragModulesWarning: ragAssignErr ? ragAssignErr.message : null,
     });
   } catch (err) {
@@ -1805,8 +1825,8 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
         const subRes = await client.query(
           `SELECT id FROM document_folders
            WHERE parent_folder_id = $1
-             AND folder_type IN ('rag_sources', 'data')
-             AND name IN ('RAG', 'Projectdata')`,
+             AND folder_type IN ('rag_sources', 'data', 'uploads')
+             AND name IN ('RAG', 'Projectdata', 'Uploads')`,
           [courseFolderId]
         );
         for (const row of subRes.rows) subFolderIds.push(row.id);
@@ -1825,6 +1845,7 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
       journalRes,
       extraFoldersRes,
       docsRes,
+      submissionsRes,
     ] = await Promise.all([
       client.query('SELECT COUNT(*)::int AS n FROM course_members WHERE course_id = $1', [courseId]),
       client.query('SELECT COUNT(*)::int AS n FROM projects WHERE course_id = $1', [courseId]),
@@ -1893,6 +1914,14 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
             [courseFolderId]
           )
         : Promise.resolve({ rows: [{ n: 0 }] }),
+      // Inleveringen (project_submissions) van alle projecten van deze cursus.
+      client.query(
+        `SELECT COUNT(*)::int AS n
+           FROM project_submissions ps
+           JOIN projects p ON p.id = ps.project_id
+          WHERE p.course_id = $1`,
+        [courseId]
+      ),
     ]);
 
     const counts = {
@@ -1902,6 +1931,7 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
       journal_entries: journalRes.rows[0].n,
       extra_folders: extraFoldersRes.rows[0].n,
       documents: docsRes.rows[0].n,
+      submissions: submissionsRes.rows[0].n,
     };
 
     const blocked =
@@ -1910,7 +1940,8 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
       counts.sessions > 0 ||
       counts.journal_entries > 0 ||
       counts.extra_folders > 0 ||
-      counts.documents > 0;
+      counts.documents > 0 ||
+      counts.submissions > 0;
 
     // Preview-modus: alleen tellingen teruggeven, niets verwijderen.
     if (preview) {
@@ -1932,6 +1963,7 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
       if (counts.journal_entries > 0) parts.push(`${counts.journal_entries} dagboek-notitie(s)`);
       if (counts.extra_folders > 0) parts.push(`${counts.extra_folders} extra (sub)map(pen)`);
       if (counts.documents > 0) parts.push(`${counts.documents} document(en)`);
+      if (counts.submissions > 0) parts.push(`${counts.submissions} inlevering(en)`);
       return res.status(409).json({
         error: `Kan cursus "${existing.name}" niet verwijderen: er is nog gekoppelde data (${parts.join(', ')}). Verwijder die eerst of deactiveer de cursus.`,
         counts,
@@ -2051,6 +2083,9 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
         members: membersDelRes.rowCount || 0,
         documents: documentsDeleted,
         extra_folders: extraFoldersDeleted,
+        // project_submissions cascadet mee via projects ON DELETE CASCADE,
+        // dus we rapporteren simpelweg de telling van vóór de delete.
+        submissions: counts.submissions,
       };
     }
 
@@ -7212,7 +7247,7 @@ app.patch('/api/projects/:projectId', async (req, res) => {
     // cursussen laat groepslidmaatschappen + cursus-toegang inconsistent achter.
     const allowed = ['title', 'research_question', 'description', 'briefing_markdown',
       'goals', 'rubric_criteria', 'min_group_size', 'max_group_size',
-      'allow_self_signup', 'status'];
+      'allow_self_signup', 'status', 'submissions_enabled'];
     const patch = {};
     for (const k of allowed) {
       if (k in (req.body || {})) patch[k] = req.body[k];
@@ -8117,6 +8152,217 @@ app.delete('/api/projects/:projectId/documents/:docId', async (req, res) => {
   }
 });
 
+
+// =============================================================================
+// Projectproduct-inleveringen (Task #156). Eén bestand per groep is de huidige
+// regel — vervangen vervangt door een nieuwe rij + verwijdert oudere rijen
+// voor dezelfde (project, groep). Architectuur staat versie-historie toe als
+// het beleid later verandert (geen UNIQUE op (project_id, group_id)).
+// =============================================================================
+
+const SUBMISSION_MAX_BYTES = 15 * 1024 * 1024;
+const SUBMISSION_ACCEPT_RE = /\.(pdf|docx|pptx|xlsx|odt|ods|odp|zip|txt|md|markdown|csv|tsv|json|rtf|jpg|jpeg|png|html|htm)$/i;
+
+// GET /api/projects/:projectId/submissions?groupId=X
+//   - groupId opgegeven: lijst voor die groep (lid of staff).
+//   - geen groupId: alleen staff — alle groepen van het project.
+app.get('/api/projects/:projectId/submissions', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId } = req.params;
+  const { groupId } = req.query;
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id, submissions_enabled').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    // 'Staff' = admin/superuser OF docent met cursus-lidmaatschap. Een docent
+    // van een andere cursus mag deze submissions niet zien.
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    const isCourseStaff = isAdmin
+      || (profile?.role === 'docent' && project.course_id && await userHasCourseAccess(auth.user, profile, project.course_id));
+
+    if (!isCourseStaff) {
+      // Niet-staff: moet lid zijn van de opgevraagde groep.
+      if (!groupId) return res.status(400).json({ error: 'groupId is vereist' });
+      const member = await isGroupMember(groupId, auth.user.id);
+      if (!member) return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+
+    let q = supabaseAdmin
+      .from('project_submissions')
+      .select('id, project_id, group_id, uploaded_by, filename, mime_type, byte_size, created_at, project_groups!inner(name)')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+    if (groupId) q = q.eq('group_id', groupId);
+    const { data, error: e } = await q;
+    if (e) return res.status(500).json({ error: e.message });
+
+    return res.json({
+      submissions: (data || []).map(s => ({
+        id: s.id,
+        project_id: s.project_id,
+        group_id: s.group_id,
+        group_name: s.project_groups?.name || null,
+        uploaded_by: s.uploaded_by,
+        filename: s.filename,
+        mime_type: s.mime_type,
+        byte_size: s.byte_size,
+        created_at: s.created_at,
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/:projectId/submissions — student uploadt projectproduct
+// voor de eigen groep. Vervangt eventuele oudere rij(en) voor deze groep.
+app.post('/api/projects/:projectId/submissions', docUpload.single('file'), async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  if (!pgPool) return res.status(503).json({ error: 'Directe DB-verbinding niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId } = req.params;
+  const groupId = req.body?.groupId;
+  if (!groupId) return res.status(400).json({ error: 'groupId is vereist' });
+  if (!req.file) return res.status(400).json({ error: 'Geen bestand ontvangen (veld "file")' });
+  const filename = String(req.file.originalname || 'upload').slice(0, 200);
+  if (!SUBMISSION_ACCEPT_RE.test(filename)) {
+    return res.status(400).json({ error: 'Niet-ondersteund bestandstype' });
+  }
+  if ((req.file.size || 0) > SUBMISSION_MAX_BYTES) {
+    return res.status(400).json({ error: 'Bestand te groot (max 15 MB)' });
+  }
+
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, submissions_enabled, status').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    if (!project.submissions_enabled) {
+      return res.status(403).json({ error: 'Inleveren is niet ingeschakeld voor dit project' });
+    }
+    if (project.status && project.status !== 'active') {
+      return res.status(403).json({ error: 'Project is niet meer actief' });
+    }
+
+    const { data: group } = await supabaseAdmin
+      .from('project_groups').select('id, project_id, status').eq('id', groupId).maybeSingle();
+    if (!group || group.project_id !== projectId) {
+      return res.status(404).json({ error: 'Groep niet gevonden voor dit project' });
+    }
+    if (group.status === 'archived') {
+      return res.status(403).json({ error: 'Groep is gearchiveerd' });
+    }
+
+    const member = await isGroupMember(groupId, auth.user.id);
+    if (!member) return res.status(403).json({ error: 'Je bent geen lid van deze groep' });
+
+    // Vervang oudere inleveringen in één transactie: nieuwe rij invoegen,
+    // dan alle eerdere rijen voor deze (project, groep) verwijderen.
+    const client = await pgPool.connect();
+    try {
+      await client.query('BEGIN');
+      const insRes = await client.query(
+        `INSERT INTO project_submissions
+           (project_id, group_id, uploaded_by, filename, mime_type, file_bytes, byte_size)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, project_id, group_id, uploaded_by, filename, mime_type, byte_size, created_at`,
+        [
+          projectId, groupId, auth.user.id, filename,
+          req.file.mimetype || 'application/octet-stream',
+          req.file.buffer,
+          req.file.size || 0,
+        ]
+      );
+      const newId = insRes.rows[0].id;
+      await client.query(
+        'DELETE FROM project_submissions WHERE project_id = $1 AND group_id = $2 AND id <> $3',
+        [projectId, groupId, newId]
+      );
+      await client.query('COMMIT');
+      return res.json({ submission: insRes.rows[0] });
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('[project-submission POST]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/projects/:projectId/submissions/:subId/download — leden van de
+// groep + staff mogen downloaden.
+app.get('/api/projects/:projectId/submissions/:subId/download', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  if (!pgPool) return res.status(503).json({ error: 'Directe DB-verbinding niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, subId } = req.params;
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    const isCourseStaff = isAdmin
+      || (profile?.role === 'docent' && project.course_id && await userHasCourseAccess(auth.user, profile, project.course_id));
+
+    const { data: sub } = await supabaseAdmin
+      .from('project_submissions')
+      .select('id, project_id, group_id, filename, mime_type')
+      .eq('id', subId).eq('project_id', projectId).maybeSingle();
+    if (!sub) return res.status(404).json({ error: 'Inlevering niet gevonden' });
+
+    if (!isCourseStaff) {
+      const member = await isGroupMember(sub.group_id, auth.user.id);
+      if (!member) return res.status(403).json({ error: 'Geen toegang tot deze inlevering' });
+    }
+
+    const result = await pgPool.query(
+      'SELECT file_bytes, mime_type FROM project_submissions WHERE id = $1',
+      [subId]
+    );
+    const buffer = result.rows[0]?.file_bytes;
+    if (!buffer) return res.status(404).json({ error: 'Bestandsinhoud niet gevonden' });
+    const mimeType = result.rows[0]?.mime_type || sub.mime_type || 'application/octet-stream';
+    const safeName = String(sub.filename || 'download').replace(/[\r\n"]/g, '_');
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    return res.end(buffer);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/projects/:projectId/submissions/:subId — alleen staff.
+app.delete('/api/projects/:projectId/submissions/:subId', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, subId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const access = await requireProjectStaff(projectId, auth.user, profile);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const { error: e } = await supabaseAdmin
+      .from('project_submissions').delete()
+      .eq('id', subId).eq('project_id', projectId);
+    if (e) return res.status(500).json({ error: e.message });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 // =============================================================================
 // Beoordeling opvragen — voor elke evaluator-persona van het project: rubric

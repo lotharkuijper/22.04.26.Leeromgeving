@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
   Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database, EyeOff,
-  LogOut, ScrollText, ChevronDown, ChevronRight,
+  LogOut, ScrollText, ChevronDown, ChevronRight, UploadCloud,
 } from 'lucide-react';
 
 interface Persona {
@@ -30,6 +30,15 @@ interface Project {
   briefing_markdown: string | null;
   rubric_criteria: any[];
   research_question: string;
+  submissions_enabled?: boolean | null;
+}
+interface Submission {
+  id: string;
+  filename: string;
+  byte_size: number | null;
+  mime_type: string | null;
+  uploaded_by: string | null;
+  created_at: string;
 }
 interface ProjectGroup {
   id: string;
@@ -141,6 +150,11 @@ export function ProjectRoomPage() {
   const [projectMaterials, setProjectMaterials] = useState<ProjectMaterialDoc[]>([]);
   const [bestandenOpen, setBestandenOpen] = useState(false);
   const [hasEvaluator, setHasEvaluator] = useState(false);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const submitFileRef = useRef<HTMLInputElement>(null);
   const [evaluating, setEvaluating] = useState(false);
   const [evaluateRequestId, setEvaluateRequestId] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -197,6 +211,68 @@ export function ProjectRoomPage() {
   }, [token, projectId, groupId, activePersonaId]);
 
   useEffect(() => { loadRoom(); }, [loadRoom]);
+
+  const loadSubmissions = useCallback(async () => {
+    if (!token || !projectId || !groupId || !project?.submissions_enabled) {
+      setSubmissions([]);
+      return;
+    }
+    try {
+      const r = await fetch(`/api/projects/${projectId}/submissions?groupId=${groupId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setSubmissions(d.submissions || []);
+      }
+    } catch {
+      /* niet fataal */
+    }
+  }, [token, projectId, groupId, project?.submissions_enabled]);
+
+  useEffect(() => { loadSubmissions(); }, [loadSubmissions]);
+
+  const submitProduct = async (file: File) => {
+    if (!token || !projectId || !groupId) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('groupId', groupId);
+      const r = await fetch(`/api/projects/${projectId}/submissions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Upload mislukt');
+      await loadSubmissions();
+      setShowSubmitModal(false);
+      setInfo('Projectproduct ingeleverd.');
+      setTimeout(() => setInfo(null), 4000);
+    } catch (e: any) {
+      setSubmitError(e.message);
+    } finally {
+      setSubmitting(false);
+      if (submitFileRef.current) submitFileRef.current.value = '';
+    }
+  };
+
+  const downloadSubmission = async (s: Submission) => {
+    if (!token || !projectId) return;
+    try {
+      const r = await fetch(`/api/projects/${projectId}/submissions/${s.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); setError(j.error || 'Download mislukt'); return; }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = s.filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) { setError(e.message); }
+  };
 
   // Reset thread + active persona als groep wisselt — voorkomt dat berichten
   // van een vorige groep blijven hangen bij snel navigeren.
@@ -691,6 +767,17 @@ export function ProjectRoomPage() {
           <span className="flex items-center gap-1 text-gray-600 text-xs">
             <Users className="w-4 h-4" />{members.length}
           </span>
+          {project.submissions_enabled && !isFinalized && (
+            <button
+              onClick={() => { setSubmitError(null); setShowSubmitModal(true); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 text-white hover:bg-amber-600 rounded-lg text-xs font-medium"
+              data-testid="button-open-submit-product"
+              title="Lever het projectproduct van je groep in"
+            >
+              <UploadCloud className="w-4 h-4" />
+              {submissions.length > 0 ? 'Inlevering vervangen' : 'Inleveren projectproduct'}
+            </button>
+          )}
           {!isFinalized && (
             <>
               <button
@@ -1431,6 +1518,69 @@ export function ProjectRoomPage() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Inlever-dialoog projectproduct (Task #156) */}
+      {showSubmitModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6">
+            <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+              <UploadCloud className="w-5 h-5 text-amber-600" /> Projectproduct inleveren
+            </h3>
+            <p className="text-sm text-gray-600 mb-3">
+              Eén bestand per groep. Een nieuwe upload vervangt de vorige.
+              Toegestaan: pdf, docx, pptx, xlsx, zip, txt, md, csv, json, rtf, jpg, png, html (max 15 MB).
+            </p>
+            {submissions.length > 0 && (
+              <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded-lg" data-testid="current-submission">
+                <div className="text-xs text-gray-500 mb-1">Huidige inlevering:</div>
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-gray-500" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate">{submissions[0].filename}</div>
+                    <div className="text-[11px] text-gray-500">
+                      {new Date(submissions[0].created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      {submissions[0].byte_size ? ` · ${Math.round(submissions[0].byte_size / 1024)} KB` : ''}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => downloadSubmission(submissions[0])}
+                    className="p-1 text-blue-500 hover:bg-blue-50 rounded"
+                    title="Download huidige inlevering"
+                    data-testid="button-download-current-submission"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+            {submitError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded text-sm mb-3" data-testid="text-submit-error">{submitError}</div>
+            )}
+            <input
+              ref={submitFileRef}
+              type="file"
+              accept=".pdf,.docx,.pptx,.xlsx,.odt,.ods,.odp,.zip,.txt,.md,.markdown,.csv,.tsv,.json,.rtf,.jpg,.jpeg,.png,.html,.htm"
+              onChange={e => { const f = e.target.files?.[0]; if (f) submitProduct(f); }}
+              disabled={submitting}
+              className="block w-full text-sm"
+              data-testid="input-submit-file"
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setShowSubmitModal(false)}
+                disabled={submitting}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg disabled:opacity-40"
+                data-testid="button-cancel-submit"
+              >
+                Sluiten
+              </button>
+              {submitting && (
+                <span className="inline-flex items-center gap-1.5 px-4 py-2 text-amber-700"><Loader2 className="w-4 h-4 animate-spin" /> Uploaden…</span>
+              )}
+            </div>
           </div>
         </div>
       )}

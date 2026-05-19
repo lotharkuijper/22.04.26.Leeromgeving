@@ -17,7 +17,19 @@ interface ProjectRow {
   min_group_size: number | null;
   max_group_size: number | null;
   allow_self_signup: boolean | null;
+  submissions_enabled: boolean | null;
   status: string | null;
+  created_at: string;
+}
+
+interface SubmissionRow {
+  id: string;
+  group_id: string;
+  group_name: string | null;
+  uploaded_by: string | null;
+  filename: string;
+  mime_type: string | null;
+  byte_size: number | null;
   created_at: string;
 }
 
@@ -89,6 +101,7 @@ export function ProjectsAdminTab() {
       setEditing({
         title: '', research_question: '', briefing_markdown: '', goals: '',
         rubric_criteria: [], min_group_size: 1, max_group_size: 5, allow_self_signup: true,
+        submissions_enabled: false,
         course_id: activeCourseId || null, status: 'active',
       });
       setRubricLines('');
@@ -115,6 +128,7 @@ export function ProjectsAdminTab() {
       min_group_size: editing.min_group_size ?? 1,
       max_group_size: editing.max_group_size ?? 5,
       allow_self_signup: editing.allow_self_signup ?? true,
+      submissions_enabled: editing.submissions_enabled ?? false,
       status: editing.status || 'active',
     };
     if ((payload.min_group_size as number) > (payload.max_group_size as number)) {
@@ -243,6 +257,23 @@ export function ProjectsAdminTab() {
                   </label>
                 </div>
               </div>
+              <div className="border-t border-gray-100 pt-3">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={!!editing.submissions_enabled}
+                    onChange={e => setEditing({ ...editing, submissions_enabled: e.target.checked })}
+                    data-testid="checkbox-project-submissions-enabled"
+                  />
+                  <span>
+                    <span className="font-medium">Inleveren projectproduct aanzetten</span>
+                    <span className="block text-[11px] text-gray-500">
+                      Studenten kunnen per groep één bestand uploaden. Een nieuwe upload vervangt de vorige.
+                    </span>
+                  </span>
+                </label>
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setEditing(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-cancel-project">{t('admin.projects.cancelBtn')}</button>
@@ -276,6 +307,51 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   const [libPersonas, setLibPersonas] = useState<{ id: string; name: string; avatar_emoji: string; persona_type?: string | null }[]>([]);
   const [selectedLibId, setSelectedLibId] = useState('');
   const [importingLib, setImportingLib] = useState(false);
+  const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
+  const [loadingSubs, setLoadingSubs] = useState(false);
+
+  const loadSubmissions = useCallback(async () => {
+    if (!project.submissions_enabled) { setSubmissions([]); return; }
+    setLoadingSubs(true);
+    try {
+      const r = await fetch(`/api/projects/${project.id}/submissions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setSubmissions(d.submissions || []);
+      }
+    } finally {
+      setLoadingSubs(false);
+    }
+  }, [project.id, project.submissions_enabled, token]);
+
+  const downloadSubmission = async (s: SubmissionRow) => {
+    try {
+      const r = await fetch(`/api/projects/${project.id}/submissions/${s.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); setLocalError(j.error || 'Download mislukt'); return; }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = s.filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) { setLocalError(e.message); }
+  };
+
+  const deleteSubmission = async (s: SubmissionRow) => {
+    if (!confirm(`Inlevering "${s.filename}" verwijderen?`)) return;
+    try {
+      const r = await fetch(`/api/projects/${project.id}/submissions/${s.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); setLocalError(j.error || 'Verwijderen mislukt'); return; }
+      setLocalInfo('Inlevering verwijderd.');
+      await loadSubmissions();
+    } catch (e: any) { setLocalError(e.message); }
+  };
 
   const loadPersonas = useCallback(async () => {
     const { data } = await supabase
@@ -341,7 +417,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     }
   };
 
-  useEffect(() => { loadPersonas(); loadProjectDocs(); loadLibPersonas(); }, [loadPersonas, loadProjectDocs, loadLibPersonas]);
+  useEffect(() => { loadPersonas(); loadProjectDocs(); loadLibPersonas(); loadSubmissions(); }, [loadPersonas, loadProjectDocs, loadLibPersonas, loadSubmissions]);
 
   // Lazy-load rubric-lijst per evaluator-persona.
   useEffect(() => {
@@ -597,6 +673,56 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
           </ul>
         )}
       </div>
+
+      {/* Ingeleverde projectproducten */}
+      {project.submissions_enabled && (
+        <div className="bg-white rounded-2xl border border-gray-200 p-5" data-testid="section-project-submissions">
+          <div className="mb-3">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <FileText className="w-4 h-4" /> Ingeleverde projectproducten
+            </h3>
+            <p className="text-xs text-gray-500">
+              Eén bestand per groep. De meest recente upload vervangt de vorige.
+            </p>
+          </div>
+          {loadingSubs ? (
+            <p className="text-xs text-gray-500"><Loader2 className="w-3 h-3 inline animate-spin mr-1" /> Laden…</p>
+          ) : submissions.length === 0 ? (
+            <p className="text-xs text-gray-500">Nog geen inleveringen.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {submissions.map(s => (
+                <li key={s.id} className="py-2 flex items-center gap-3" data-testid={`submission-row-${s.id}`}>
+                  <FileText className="w-4 h-4 text-gray-500" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate">{s.filename}</div>
+                    <div className="text-[11px] text-gray-500">
+                      {s.group_name || s.group_id.slice(0, 8)} · {new Date(s.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      {s.byte_size ? ` · ${Math.round(s.byte_size / 1024)} KB` : ''}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => downloadSubmission(s)}
+                    className="p-1 text-blue-500 hover:bg-blue-50 rounded"
+                    title="Download"
+                    data-testid={`button-download-submission-${s.id}`}
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => deleteSubmission(s)}
+                    className="p-1 text-red-500 hover:bg-red-50 rounded"
+                    title="Verwijderen"
+                    data-testid={`button-delete-submission-${s.id}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Persona's */}
       <div className="bg-white rounded-2xl border border-gray-200 p-5">
