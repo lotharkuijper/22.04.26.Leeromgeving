@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
+import { MarkdownMessage } from '../components/MarkdownMessage';
 import {
   BookText,
   Plus,
@@ -567,9 +568,9 @@ export function FeedbackPage() {
                             {expanded && (
                               <div className="px-6 pb-5 pl-13" data-testid={`body-${entry.id}`}>
                                 <div className="flex items-start justify-between gap-3 mb-3">
-                                  <p className="text-gray-700 whitespace-pre-wrap flex-1">
-                                    {entry.content}
-                                  </p>
+                                  <div className="text-gray-700 flex-1 min-w-0" data-testid={`content-${entry.id}`}>
+                                    <MarkdownMessage content={entry.content.replace(/(?<!\n)\n(?!\n)/g, '  \n')} />
+                                  </div>
                                   <div className="flex items-center gap-1 flex-shrink-0">
                                     <button
                                       onClick={() => handleEdit(entry)}
