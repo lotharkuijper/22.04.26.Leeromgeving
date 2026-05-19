@@ -8166,7 +8166,7 @@ const SUBMISSION_ACCEPT_RE = /\.(pdf|docx|pptx|xlsx|odt|ods|odp|zip|txt|md|markd
 // GET /api/projects/:projectId/submissions?groupId=X
 //   - groupId opgegeven: lijst voor die groep (lid of staff).
 //   - geen groupId: alleen staff — alle groepen van het project.
-app.get('/api/projects/:projectId/submissions', async (req, res) => {
+async function listProjectSubmissionsHandler(req, res) {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
@@ -8232,9 +8232,11 @@ app.get('/api/projects/:projectId/submissions', async (req, res) => {
   }
 });
 
+app.get('/api/projects/:projectId/submissions', listProjectSubmissionsHandler);
+
 // POST /api/projects/:projectId/submissions — student uploadt projectproduct
 // voor de eigen groep. Vervangt eventuele oudere rij(en) voor deze groep.
-app.post('/api/projects/:projectId/submissions', docUpload.single('file'), async (req, res) => {
+async function uploadProjectSubmissionHandler(req, res) {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   if (!pgPool) return res.status(503).json({ error: 'Directe DB-verbinding niet beschikbaar' });
   const auth = await authUser(req);
@@ -8308,7 +8310,8 @@ app.post('/api/projects/:projectId/submissions', docUpload.single('file'), async
     console.error('[project-submission POST]', err.message);
     return res.status(500).json({ error: err.message });
   }
-});
+}
+app.post('/api/projects/:projectId/submissions', docUpload.single('file'), uploadProjectSubmissionHandler);
 
 // GET /api/projects/:projectId/submissions/:subId/download — leden van de
 // groep + staff mogen downloaden.
@@ -8378,17 +8381,17 @@ app.delete('/api/projects/:projectId/submissions/:subId', async (req, res) => {
 });
 
 // Alias-routes (taakcontract): /api/projects/:projectId/groups/:groupId/submissions
-// — semantisch identiek aan ?groupId=... maar als pad-parameter.
-app.get('/api/projects/:projectId/groups/:groupId/submissions', (req, res, next) => {
+// — semantisch identiek aan ?groupId=... maar als pad-parameter. We hergebruiken
+// de handlers direct (geen interne re-dispatch) zodat multer maar één keer
+// langs de multipart-stream gaat.
+app.get('/api/projects/:projectId/groups/:groupId/submissions', (req, res) => {
   req.query.groupId = req.params.groupId;
-  req.url = `/api/projects/${req.params.projectId}/submissions?groupId=${req.params.groupId}`;
-  app._router.handle(req, res, next);
+  return listProjectSubmissionsHandler(req, res);
 });
-app.post('/api/projects/:projectId/groups/:groupId/submissions', docUpload.single('file'), (req, res, next) => {
+app.post('/api/projects/:projectId/groups/:groupId/submissions', docUpload.single('file'), (req, res) => {
   req.body = req.body || {};
   req.body.groupId = req.params.groupId;
-  req.url = `/api/projects/${req.params.projectId}/submissions`;
-  app._router.handle(req, res, next);
+  return uploadProjectSubmissionHandler(req, res);
 });
 
 // GET /api/admin/courses/:courseId/submissions — cursus-brede staff overzicht:

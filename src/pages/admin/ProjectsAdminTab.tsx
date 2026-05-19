@@ -4,6 +4,16 @@ import { useActiveCourse } from '../../contexts/ActiveCourseContext';
 import { useLanguage } from '../../i18n';
 import { supabase } from '../../lib/supabase';
 import { Plus, Save, Trash2, FolderOpen, Settings, X, ArrowLeft, Paperclip, Loader2, FileText, Copy, Download, Eye, EyeOff, Database, ShieldAlert } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from '@/components/ui/alert-dialog';
 
 interface ProjectRow {
   id: string;
@@ -342,8 +352,8 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
     } catch (e: any) { setLocalError(e.message); }
   };
 
-  const deleteSubmission = async (s: SubmissionRow) => {
-    if (!confirm(`Inlevering "${s.filename}" verwijderen?`)) return;
+  const [confirmDeleteSub, setConfirmDeleteSub] = useState<SubmissionRow | null>(null);
+  const performDeleteSubmission = async (s: SubmissionRow) => {
     try {
       const r = await fetch(`/api/projects/${project.id}/submissions/${s.id}`, {
         method: 'DELETE',
@@ -353,6 +363,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       setLocalInfo('Inlevering verwijderd.');
       await loadSubmissions();
     } catch (e: any) { setLocalError(e.message); }
+    finally { setConfirmDeleteSub(null); }
   };
 
   const loadPersonas = useCallback(async () => {
@@ -714,7 +725,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                     <Download className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => deleteSubmission(s)}
+                    onClick={() => setConfirmDeleteSub(s)}
                     className="p-1 text-red-500 hover:bg-red-50 rounded"
                     title="Verwijderen"
                     data-testid={`button-delete-submission-${s.id}`}
@@ -886,6 +897,27 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         </div>
       )}
 
+      <AlertDialog open={!!confirmDeleteSub} onOpenChange={(o) => { if (!o) setConfirmDeleteSub(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Inlevering verwijderen?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Weet je zeker dat je "{confirmDeleteSub?.filename}" wilt verwijderen?
+              De groep kan daarna opnieuw een bestand inleveren. Deze actie is niet terug te draaien.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-submission">Annuleer</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => confirmDeleteSub && performDeleteSubmission(confirmDeleteSub)}
+              data-testid="button-confirm-delete-submission"
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Verwijder
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
