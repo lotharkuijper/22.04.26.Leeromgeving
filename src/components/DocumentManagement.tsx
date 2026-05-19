@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Download,
   Inbox,
+  Trash2,
 } from 'lucide-react';
 import {
   getSubfolders,
@@ -75,6 +76,8 @@ export default function DocumentManagement({
   const [newFolderDescription, setNewFolderDescription] = useState('');
   const [confirmDeleteFolder, setConfirmDeleteFolder] = useState<{ id: string; name: string } | null>(null);
   const [deletingFolder, setDeletingFolder] = useState(false);
+  const [confirmDeleteSubmission, setConfirmDeleteSubmission] = useState<SubmissionItem | null>(null);
+  const [deletingSubmission, setDeletingSubmission] = useState(false);
   const { notice, setNotice, clearNotice } = useNotice();
 
   useEffect(() => {
@@ -144,6 +147,29 @@ export default function DocumentManagement({
       console.error('Error loading folder:', error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function deleteSubmissionConfirmed() {
+    if (!confirmDeleteSubmission || !session?.access_token) return;
+    const s = confirmDeleteSubmission;
+    setDeletingSubmission(true);
+    try {
+      const r = await fetch(`/api/projects/${s.project_id}/submissions/${s.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setSubmissionsError(j.error || 'Verwijderen mislukt');
+        return;
+      }
+      setConfirmDeleteSubmission(null);
+      await loadCurrentFolder();
+    } catch (e: any) {
+      setSubmissionsError(e.message);
+    } finally {
+      setDeletingSubmission(false);
     }
   }
 
@@ -373,17 +399,41 @@ export default function DocumentManagement({
                   </div>
                 </div>
               </div>
-              <button
-                onClick={() => downloadSubmission(s)}
-                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1.5"
-                data-testid={`button-download-uploads-submission-${s.id}`}
-              >
-                <Download className="w-4 h-4" /> Download
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => downloadSubmission(s)}
+                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1.5"
+                  data-testid={`button-download-uploads-submission-${s.id}`}
+                >
+                  <Download className="w-4 h-4" /> Download
+                </button>
+                <button
+                  onClick={() => setConfirmDeleteSubmission(s)}
+                  className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700 flex items-center gap-1.5"
+                  data-testid={`button-delete-uploads-submission-${s.id}`}
+                >
+                  <Trash2 className="w-4 h-4" /> Verwijderen
+                </button>
+              </div>
             </div>
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteSubmission !== null}
+        title="Inlevering verwijderen?"
+        description={
+          confirmDeleteSubmission
+            ? `Weet je zeker dat je de inlevering "${confirmDeleteSubmission.filename}" van groep "${confirmDeleteSubmission.group_name || confirmDeleteSubmission.group_id.slice(0, 8)}" wilt verwijderen? Deze actie kan niet ongedaan worden gemaakt.`
+            : ''
+        }
+        confirmLabel="Verwijderen"
+        variant="danger"
+        busy={deletingSubmission}
+        onConfirm={() => { void deleteSubmissionConfirmed(); }}
+        onCancel={() => setConfirmDeleteSubmission(null)}
+      />
 
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         {loading ? (
