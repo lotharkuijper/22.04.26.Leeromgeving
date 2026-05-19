@@ -83,10 +83,16 @@ const UPLOAD_ACCEPT = '.txt,.md,.markdown,.csv,.tsv,.json,.log,.pdf,.docx,.pptx,
 const PROJECT_DOC_ACCEPT = UPLOAD_ACCEPT + ',.omv,.omt,.sav,.jasp,.rdata,.rds,.sps,.dta';
 
 
+interface CourseSubmissionRow extends SubmissionRow {
+  project_id: string;
+  project_title: string | null;
+}
+
 export function ProjectsAdminTab() {
   const { session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
   const { lang, t } = useLanguage();
+  const token = session?.access_token || '';
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [editing, setEditing] = useState<Partial<ProjectRow> | null>(null);
   const [rubricLines, setRubricLines] = useState('');
@@ -94,6 +100,9 @@ export function ProjectsAdminTab() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [detailProject, setDetailProject] = useState<ProjectRow | null>(null);
+  const [courseSubs, setCourseSubs] = useState<CourseSubmissionRow[]>([]);
+  const [loadingCourseSubs, setLoadingCourseSubs] = useState(false);
+  const [showCourseSubs, setShowCourseSubs] = useState(false);
 
   const load = useCallback(async () => {
     let q = supabase.from('projects').select('*').order('created_at', { ascending: false });
@@ -103,6 +112,41 @@ export function ProjectsAdminTab() {
   }, [activeCourseId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadCourseSubmissions = useCallback(async () => {
+    if (!activeCourseId || !token) return;
+    setLoadingCourseSubs(true);
+    try {
+      const r = await fetch(`/api/admin/courses/${activeCourseId}/submissions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setCourseSubs(d.submissions || []);
+      } else {
+        const j = await r.json().catch(() => ({}));
+        setError(j.error || 'Kon inleveringen niet laden');
+      }
+    } catch (e: any) { setError(e.message); }
+    finally { setLoadingCourseSubs(false); }
+  }, [activeCourseId, token]);
+
+  useEffect(() => { if (showCourseSubs) loadCourseSubmissions(); }, [showCourseSubs, loadCourseSubmissions]);
+
+  const downloadCourseSub = async (s: CourseSubmissionRow) => {
+    try {
+      const r = await fetch(`/api/projects/${s.project_id}/submissions/${s.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) { setError('Download mislukt'); return; }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = s.filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) { setError(e.message); }
+  };
 
 
   const startEdit = (p: Partial<ProjectRow> | null) => {
@@ -222,6 +266,59 @@ export function ProjectsAdminTab() {
         )}
       </div>
 
+      {activeCourseId && (
+        <div className="bg-white rounded-2xl border border-gray-200 p-5" data-testid="section-course-submissions">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <FileText className="w-4 h-4" /> Cursus-brede inleveringen
+              </h3>
+              <p className="text-xs text-gray-500">Alle ingeleverde projectproducten van projecten in deze cursus.</p>
+            </div>
+            <button
+              onClick={() => setShowCourseSubs(s => !s)}
+              className="px-3 py-1.5 text-sm text-blue-700 hover:bg-blue-50 rounded"
+              data-testid="button-toggle-course-submissions"
+            >
+              {showCourseSubs ? 'Verberg' : 'Toon inleveringen'}
+            </button>
+          </div>
+          {showCourseSubs && (
+            <div className="mt-3">
+              {loadingCourseSubs ? (
+                <p className="text-xs text-gray-500"><Loader2 className="w-3 h-3 inline animate-spin mr-1" /> Laden…</p>
+              ) : courseSubs.length === 0 ? (
+                <p className="text-xs text-gray-500">Nog geen inleveringen in deze cursus.</p>
+              ) : (
+                <ul className="divide-y divide-gray-100">
+                  {courseSubs.map(s => (
+                    <li key={s.id} className="py-2 flex items-center gap-3" data-testid={`course-submission-row-${s.id}`}>
+                      <FileText className="w-4 h-4 text-gray-500" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm truncate">{s.filename}</div>
+                        <div className="text-[11px] text-gray-500">
+                          {s.project_title || s.project_id.slice(0, 8)} · {s.group_name || s.group_id.slice(0, 8)}
+                          {s.uploaded_by_name || s.uploaded_by_email ? ` · door ${s.uploaded_by_name || s.uploaded_by_email}` : ''}
+                          {' · '}{new Date(s.created_at).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          {s.byte_size ? ` · ${Math.round(s.byte_size / 1024)} KB` : ''}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => downloadCourseSub(s)}
+                        className="p-1 text-blue-500 hover:bg-blue-50 rounded"
+                        title="Download"
+                        data-testid={`button-download-course-submission-${s.id}`}
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {editing && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">

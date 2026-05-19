@@ -1846,6 +1846,7 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
       extraFoldersRes,
       docsRes,
       submissionsRes,
+      uploadsDocsRes,
     ] = await Promise.all([
       client.query('SELECT COUNT(*)::int AS n FROM course_members WHERE course_id = $1', [courseId]),
       client.query('SELECT COUNT(*)::int AS n FROM projects WHERE course_id = $1', [courseId]),
@@ -1922,6 +1923,19 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
           WHERE p.course_id = $1`,
         [courseId]
       ),
+      // Documenten specifiek in de Uploads-submap (aparte rapportage zodat de
+      // delete-preview onderscheid kan maken tussen 'gewone' documenten en
+      // uploads-documenten).
+      courseFolderId
+        ? client.query(
+            `SELECT COUNT(*)::int AS n
+               FROM documents d
+               JOIN document_folders f ON f.id = d.folder_id
+              WHERE f.parent_folder_id = $1
+                AND f.folder_type = 'uploads'`,
+            [courseFolderId]
+          )
+        : Promise.resolve({ rows: [{ n: 0 }] }),
     ]);
 
     const counts = {
@@ -1932,6 +1946,7 @@ app.delete('/api/admin/courses/:id', async (req, res) => {
       extra_folders: extraFoldersRes.rows[0].n,
       documents: docsRes.rows[0].n,
       submissions: submissionsRes.rows[0].n,
+      uploadsDocuments: uploadsDocsRes?.rows?.[0]?.n ?? 0,
     };
 
     const blocked =
