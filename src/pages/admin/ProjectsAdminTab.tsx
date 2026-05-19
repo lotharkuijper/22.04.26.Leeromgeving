@@ -13,7 +13,7 @@ import {
   AlertDialogFooter,
   AlertDialogCancel,
   AlertDialogAction,
-} from '@/components/ui/alert-dialog';
+} from '../../components/ui/alert-dialog';
 
 interface ProjectRow {
   id: string;
