@@ -666,7 +666,7 @@ export function QuizPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* SETUP LEFT COLUMN */}
-          <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-200 p-6 space-y-6">
+          <div className="lg:col-span-2 chic-card p-6 space-y-6">
             <h2 className="text-xl font-bold text-gray-900">{t('quiz.startNew')}</h2>
 
             {/* TOPICS */}
@@ -1030,7 +1030,7 @@ export function QuizPage() {
 
           {/* RIGHT COLUMN: short hint card */}
           <div className="space-y-6">
-            <div className="bg-white rounded-2xl border border-gray-200 p-6">
+            <div className="chic-card p-6">
               <h3 className="text-lg font-bold text-gray-900 mb-2">{t('quiz.howItWorks')}</h3>
               <ul className="text-sm text-gray-700 space-y-2 list-disc pl-4">
                 <li>{t('quiz.howItWorksBefore')} <strong>{t('quiz.howItWorksMcqBold')}</strong> {t('quiz.howItWorksMcqAfter')}</li>
@@ -1074,7 +1074,7 @@ export function QuizPage() {
     const topicsText = selectedTopics.map(topic => topic.name).join(', ');
     return (
       <div className="max-w-4xl mx-auto space-y-6">
-        <div className="bg-white rounded-2xl border border-gray-200 p-8 space-y-6 text-center">
+        <div className="chic-card p-8 space-y-6 text-center">
           <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center">
             <Play className="w-8 h-8 text-white" />
           </div>
@@ -1178,7 +1178,7 @@ export function QuizPage() {
           />
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 p-8 space-y-6">
+        <div className="chic-card p-8 space-y-6">
           {/* Casus context bovenaan */}
           {currentQ.type === 'casus' && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900" data-testid="block-casus-context">
@@ -1359,7 +1359,7 @@ export function QuizPage() {
 
     return (
       <div className="max-w-4xl mx-auto space-y-6">
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center space-y-6">
+        <div className="chic-card p-12 text-center space-y-6">
           <div className={`w-24 h-24 mx-auto rounded-full flex items-center justify-center ${
             passed ? 'bg-gradient-to-br from-green-500 to-emerald-600' : 'bg-gradient-to-br from-orange-500 to-orange-600'
           }`}>
@@ -1443,7 +1443,7 @@ export function QuizPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <div className="chic-card p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
             <TrendingUp className="w-6 h-6 text-cyan-600" />
             {t('quiz.answerOverview')}
@@ -1590,7 +1590,7 @@ function ResultsList({
 }) {
   const { t } = useLanguage();
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6" data-testid="block-results-list">
+    <div className="chic-card p-6" data-testid="block-results-list">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
           <TrendingUp className="w-5 h-5 text-cyan-600" />

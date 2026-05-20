@@ -226,7 +226,7 @@ export function ProjectsAdminTab() {
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+      <div className="chic-card p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><FolderOpen className="w-5 h-5" />{t('admin.projects.title')}</h2>
@@ -267,7 +267,7 @@ export function ProjectsAdminTab() {
       </div>
 
       {activeCourseId && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-5" data-testid="section-course-submissions">
+        <div className="chic-card p-5" data-testid="section-course-submissions">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -685,7 +685,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
+      <div className="chic-card p-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={onBack} className="p-1.5 hover:bg-gray-100 rounded" data-testid="button-back-projects-admin">
@@ -715,7 +715,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       )}
 
       {/* Projectdocumenten */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
+      <div className="chic-card p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="font-semibold text-gray-900 flex items-center gap-2"><FolderOpen className="w-4 h-4" /> {t('admin.projects.docs.title')}</h3>
@@ -791,7 +791,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
         </div>
       )}
       {project.submissions_enabled && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-5" data-testid="section-project-submissions">
+        <div className="chic-card p-5" data-testid="section-project-submissions">
           <div className="mb-3">
             <h3 className="font-semibold text-gray-900 flex items-center gap-2">
               <FileText className="w-4 h-4" /> Ingeleverde projectproducten
@@ -842,7 +842,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       )}
 
       {/* Persona's */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5">
+      <div className="chic-card p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="font-semibold text-gray-900">{t('admin.projects.personas.title', { count: String(personas.length) })}</h3>

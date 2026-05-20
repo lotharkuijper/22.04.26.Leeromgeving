@@ -35,8 +35,8 @@ interface NavItemProps {
 function NavItem({ to, icon: Icon, label, active, color, onClick }: NavItemProps) {
   const baseClass = "flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium";
   const activeClass = active
-    ? `bg-gradient-to-r ${color} text-white shadow-lg`
-    : "text-gray-700 hover:bg-gray-100";
+    ? `bg-gradient-to-r ${color} text-white shadow-md ring-1 ring-white/30`
+    : "text-slate-700 hover:bg-slate-100/70";
 
   return (
     <Link
@@ -117,8 +117,8 @@ export function Layout({ children }: LayoutProps) {
     : t('nav.role.student');
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
+    <div className="min-h-screen">
+      <nav className="bg-white/75 backdrop-blur-md border-b border-slate-200/70 sticky top-0 z-50 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ring-1 ring-slate-100/40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
 
@@ -186,7 +186,7 @@ export function Layout({ children }: LayoutProps) {
         {/* SIDEBAR */}
         <aside className={`
           ${mobileMenuOpen ? 'block' : 'hidden'} md:block
-          w-full md:w-64 bg-white border-r border-gray-200 md:sticky md:top-16 md:h-[calc(100vh-4rem)]
+          w-full md:w-64 bg-white/70 backdrop-blur-md border-r border-slate-200/70 ring-1 ring-slate-100/40 md:sticky md:top-16 md:h-[calc(100vh-4rem)]
           fixed inset-0 top-16 z-40 overflow-visible
         `}>
           <div className="p-4 space-y-2">
@@ -209,7 +209,7 @@ export function Layout({ children }: LayoutProps) {
                 setMobileMenuOpen(false);
                 navigate('/choose-course');
               }}
-              className="flex items-center gap-3 px-4 py-3 rounded-xl text-gray-700 hover:bg-gray-100 transition-all font-medium w-full"
+              className="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-700 hover:bg-slate-100/70 transition-all font-medium w-full"
             >
               <GraduationCap className="w-5 h-5" />
               <span>{t('nav.switchCourse')}</span>

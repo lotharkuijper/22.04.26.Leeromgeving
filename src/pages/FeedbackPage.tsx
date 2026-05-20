@@ -389,7 +389,7 @@ export function FeedbackPage() {
       </div>
 
       {showForm && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <div className="chic-card p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4">
             {editingEntry ? t('feedback.edit') + ' ' + t('feedback.entryTitle') : t('feedback.newEntry')}
           </h2>

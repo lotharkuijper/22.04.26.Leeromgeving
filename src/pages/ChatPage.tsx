@@ -559,7 +559,7 @@ export function ChatPage() {
       </div>
     )}
     <div className="h-[calc(100vh-8rem)] flex gap-4">
-      <div className="w-64 bg-white rounded-2xl border border-gray-200 p-4 flex flex-col">
+      <div className="w-64 chic-card p-4 flex flex-col">
         <button
           onClick={createNewConversation}
           disabled={!profile}
@@ -606,7 +606,7 @@ export function ChatPage() {
         </div>
       </div>
 
-      <div className="flex-1 bg-white rounded-2xl border border-gray-200 flex flex-col">
+      <div className="flex-1 chic-card flex flex-col">
         {!currentConversationId ? (
           <div className="flex-1 flex items-center justify-center text-gray-500">
             <div className="text-center">

@@ -287,7 +287,7 @@ export function DashboardPage() {
 
   return (
     <div
-      className="-m-4 md:-m-8 p-4 md:p-8 min-h-[calc(100vh-4rem)] space-y-8 bg-gradient-to-br from-sky-50 via-indigo-50/40 to-emerald-50"
+      className="space-y-8"
       data-testid="page-dashboard"
     >
       {/* Welcome hero */}

@@ -154,13 +154,13 @@ export function ProjectsPage() {
       )}
 
       {overview.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-gray-500">
+        <div className="chic-card p-12 text-center text-gray-500">
           <FolderOpen className="w-12 h-12 mx-auto mb-3 text-gray-400" />
           <p>{t('projects.notLinked')}</p>
         </div>
       ) : (
         overview.map(c => (
-          <div key={c.course.id} className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+          <div key={c.course.id} className="chic-card overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
               <h2 className="font-semibold text-gray-900 flex items-center gap-2">
                 <BookOpen className="w-4 h-4" /> {c.course.name}

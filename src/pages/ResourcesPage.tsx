@@ -180,7 +180,7 @@ export function ResourcesPage() {
       </div>
 
       {/* Sectie 1: Cursusmateriaal (RAG) */}
-      <section className="bg-white border border-gray-200 rounded-xl p-5">
+      <section className="bg-white/80 backdrop-blur-sm border border-slate-200/70 ring-1 ring-slate-100/60 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.10)] rounded-xl p-5">
         <div className="flex items-center gap-2 mb-1">
           <BookOpen className="w-5 h-5 text-blue-600 flex-shrink-0" />
           <h2 className="text-base font-semibold text-gray-900">{t('resources.courseFiles')}</h2>
@@ -198,7 +198,7 @@ export function ResourcesPage() {
       </section>
 
       {/* Sectie 2: Overige documenten */}
-      <section className="bg-white border border-gray-200 rounded-xl p-5">
+      <section className="bg-white/80 backdrop-blur-sm border border-slate-200/70 ring-1 ring-slate-100/60 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.10)] rounded-xl p-5">
         <div className="flex items-center gap-2 mb-1">
           <FileText className="w-5 h-5 text-purple-600 flex-shrink-0" />
           <h2 className="text-base font-semibold text-gray-900">{t('resources.otherFiles')}</h2>

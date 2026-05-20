@@ -186,7 +186,7 @@ export function PersonaLibraryTab() {
 
   if (!activeCourseId) {
     return (
-      <div className="p-8 text-center text-gray-500 bg-white rounded-2xl border border-gray-200">
+      <div className="p-8 text-center text-gray-500 chic-card">
         {t('admin.personaLib.selectCourse')}
       </div>
     );
@@ -194,7 +194,7 @@ export function PersonaLibraryTab() {
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-2xl border border-gray-200 p-6">
+      <div className="chic-card p-6">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Bot className="w-5 h-5" /> {t('admin.personaLib.title')}</h2>

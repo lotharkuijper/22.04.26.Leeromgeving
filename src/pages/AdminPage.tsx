@@ -857,7 +857,7 @@ const tabGroups = [
   if (!isDocent && !isAdmin) {
     return (
       <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
+        <div className="chic-card p-12 text-center">
           <Settings className="w-16 h-16 mx-auto mb-4 text-gray-400" />
           <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('admin.noAccess.title')}</h1>
           <p className="text-gray-600">{t('admin.noAccess.desc')}</p>
@@ -952,7 +952,7 @@ const tabGroups = [
         </div>
 
         {/* Desktop: verticale zijbalk */}
-        <nav className="hidden md:block w-52 flex-shrink-0 bg-white rounded-2xl border border-gray-200 overflow-hidden self-start sticky top-4">
+        <nav className="hidden md:block w-52 flex-shrink-0 chic-card overflow-hidden self-start sticky top-4">
           {tabGroups.map((group, gi) => (
             <div key={group.label} className={gi > 0 ? 'border-t border-gray-100' : ''}>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 pt-4 pb-1">
@@ -982,7 +982,7 @@ const tabGroups = [
         </nav>
 
         {/* Inhoudspaneel */}
-        <div className="flex-1 bg-white rounded-2xl border border-gray-200 min-w-0">
+        <div className="flex-1 chic-card min-w-0">
           <div className="p-6">
           {activeTab === 'users' && (
             <div className="space-y-4">

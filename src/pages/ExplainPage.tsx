@@ -77,7 +77,7 @@ function FeedbackBlock({
     });
   };
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-6">
+    <div className="chic-card p-6">
       <h3 className="text-xl font-bold text-gray-900 mb-4">{t('explain.feedback')}</h3>
       <MarkdownMessage
         content={feedback}
@@ -550,7 +550,7 @@ export function ExplainPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1 space-y-6">
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <div className="chic-card p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4">{t('explain.concepts')}</h2>
 
           <div className="space-y-4 mb-4">
@@ -651,7 +651,7 @@ export function ExplainPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 p-6">
+        <div className="chic-card p-6">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
               <History className="w-5 h-5 text-blue-600" />
@@ -761,14 +761,14 @@ export function ExplainPage() {
 
         <div className="lg:col-span-2 space-y-6">
           {!selectedConcept ? (
-            <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
+            <div className="chic-card p-12 text-center">
               <BookOpen className="w-16 h-16 mx-auto mb-4 text-gray-400" />
               <p className="text-lg font-semibold text-gray-900 mb-2">{t('explain.selectConcept')}</p>
               <p className="text-sm text-gray-600">{t('explain.selectConceptSub')}</p>
             </div>
           ) : (
             <>
-              <div className="bg-white rounded-2xl border border-gray-200 p-6">
+              <div className="chic-card p-6">
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">{selectedConcept.name}</h2>
                 <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 mb-4">
                   {selectedConcept.category}
