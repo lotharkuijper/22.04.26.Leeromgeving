@@ -1255,7 +1255,7 @@ const tabGroups = [
                         value={addConceptName}
                         onChange={e => setAddConceptName(e.target.value)}
                         placeholder={t('admin.concepts.namePlaceholder')}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                        className="w-full px-3 py-2 chic-input text-sm"
                         data-testid="input-concept-name"
                       />
                     </div>
@@ -1264,7 +1264,7 @@ const tabGroups = [
                       <select
                         value={addConceptCategory}
                         onChange={e => setAddConceptCategory(e.target.value as 'epidemiologie' | 'biostatistiek')}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                        className="w-full px-3 py-2 chic-input text-sm"
                         data-testid="select-concept-category"
                       >
                         <option value="epidemiologie">{t('admin.concepts.catEpidemiologie')}</option>
@@ -1279,7 +1279,7 @@ const tabGroups = [
                       onChange={e => setAddConceptDefinition(e.target.value)}
                       placeholder={t('admin.concepts.definitionPlaceholder')}
                       rows={2}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                      className="w-full px-3 py-2 chic-input text-sm"
                       data-testid="input-concept-definition"
                     />
                   </div>
@@ -2016,7 +2016,7 @@ const tabGroups = [
                       onChange={e => setDiagnosticQuery(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !diagnosticLoading) runDiagnostic(); }}
                       placeholder={t('admin.ragSettings.diagnostic.placeholder')}
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                      className="flex-1 px-3 py-2 text-sm chic-input outline-none"
                       data-testid="input-diagnostic-query"
                     />
                     <button

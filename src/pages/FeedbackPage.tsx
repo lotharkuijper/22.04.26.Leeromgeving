@@ -404,7 +404,7 @@ export function FeedbackPage() {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 data-testid="input-title"
-                className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none"
+                className="w-full px-4 py-2 chic-input"
                 placeholder={lang === 'en' ? 'E.g.: Learned about logistic regression' : 'Bijvoorbeeld: Geleerd over logistische regressie'}
                 required
               />
@@ -419,7 +419,7 @@ export function FeedbackPage() {
                 value={activityType}
                 onChange={(e) => setActivityType(e.target.value)}
                 data-testid="select-activity-type"
-                className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none"
+                className="w-full px-4 py-2 chic-input"
               >
                 {GROUPS.map(g => (
                   <option key={g.key} value={g.activityType} data-testid={`option-${g.key}`}>
@@ -442,7 +442,7 @@ export function FeedbackPage() {
                 onChange={(e) => setContent(e.target.value)}
                 data-testid="textarea-content"
                 rows={6}
-                className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none resize-none"
+                className="w-full px-4 py-2 chic-input resize-none"
                 placeholder={lang === 'en' ? 'What did you learn? What have you been working on? What are your insights?' : 'Wat heb je geleerd? Waar ben je mee bezig geweest? Wat zijn je inzichten?'}
                 required
               />

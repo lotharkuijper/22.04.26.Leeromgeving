@@ -141,7 +141,7 @@ export function ProjectsPage() {
           <h1 className="text-3xl font-bold text-gray-900 mb-1">{t('projects.title')}</h1>
           <p className="text-gray-600">{t('projects.subtitle')}</p>
         </div>
-        <button onClick={() => setJoinDialog(true)} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg text-sm font-medium" data-testid="button-open-join">
+        <button onClick={() => setJoinDialog(true)} className="btn-secondary text-sm" data-testid="button-open-join">
           <Users className="w-4 h-4" /> {t('projects.joinWithCode')}
         </button>
       </div>
@@ -251,8 +251,8 @@ export function ProjectsPage() {
             </ul>
             <p className="text-sm font-medium text-gray-800 mb-4"><span>{t('projects.restartQuestionBefore')} <span className="text-blue-700">"{t('projects.restartQuestionLink')}"</span>{t('projects.restartQuestionAfter')}</span></p>
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setRestartConfirm(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg" data-testid="button-restart-cancel">{t('projects.cancelContinue')}</button>
-              <button onClick={() => restart(restartConfirm)} disabled={busyProjectId === restartConfirm.id} className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-40" data-testid="button-restart-confirm">
+              <button onClick={() => setRestartConfirm(null)} className="btn-secondary text-sm" data-testid="button-restart-cancel">{t('projects.cancelContinue')}</button>
+              <button onClick={() => restart(restartConfirm)} disabled={busyProjectId === restartConfirm.id} className="btn-danger text-sm" data-testid="button-restart-confirm">
                 {busyProjectId === restartConfirm.id ? t('common.loading') : t('projects.restart')}
               </button>
             </div>
@@ -273,8 +273,8 @@ export function ProjectsPage() {
               data-testid="input-invite-code"
             />
             <div className="flex gap-2 justify-end mt-4">
-              <button onClick={() => { setJoinDialog(false); setInviteCode(''); }} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">{t('projects.cancel')}</button>
-              <button onClick={joinByCode} disabled={!inviteCode.trim()} className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40" data-testid="button-confirm-join">
+              <button onClick={() => { setJoinDialog(false); setInviteCode(''); }} className="btn-secondary text-sm">{t('projects.cancel')}</button>
+              <button onClick={joinByCode} disabled={!inviteCode.trim()} className="btn-primary text-sm" data-testid="button-confirm-join">
                 {t('projects.join')}
               </button>
             </div>

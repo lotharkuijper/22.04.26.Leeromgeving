@@ -734,7 +734,7 @@ export function ProjectRoomPage() {
   return (
     <div className="h-[calc(100vh-8rem)] flex flex-col gap-3">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-white/80 backdrop-blur-sm rounded-xl border border-slate-200/70 ring-1 ring-slate-100/60 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.10)] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 chic-card-sm px-4 py-3">
         <div className="flex items-center gap-3 min-w-0">
           <button onClick={() => navigate('/projects')} className="p-2 hover:bg-gray-100 rounded-lg" data-testid="button-back-projects">
             <ArrowLeft className="w-5 h-5" />
@@ -816,7 +816,7 @@ export function ProjectRoomPage() {
       {/* 3-column body */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 min-h-0">
         {/* LEFT: persona-chat */}
-        <div className="lg:col-span-7 flex flex-col bg-white/80 backdrop-blur-sm rounded-xl border border-slate-200/70 ring-1 ring-slate-100/60 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.10)] min-h-0">
+        <div className="lg:col-span-7 flex flex-col chic-card-sm min-h-0">
           <div className="border-b border-gray-200 p-3 space-y-2">
             <div className="flex items-center gap-2">
               <label htmlFor="persona-select" className="text-xs font-medium text-gray-600 flex items-center gap-1">
@@ -939,7 +939,7 @@ export function ProjectRoomPage() {
         {/* RIGHT col container: groepschat + briefing/checkpoints */}
         <div className="lg:col-span-5 flex flex-col gap-3 min-h-0">
           {/* Groepschat */}
-          <div className="flex-1 flex flex-col bg-white/80 backdrop-blur-sm rounded-xl border border-slate-200/70 ring-1 ring-slate-100/60 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.10)] min-h-0">
+          <div className="flex-1 flex flex-col chic-card-sm min-h-0">
             <div className="border-b border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 flex items-center gap-2">
               <MessageCircle className="w-4 h-4" /> {t('room.groupChat')}
             </div>
@@ -1001,7 +1001,7 @@ export function ProjectRoomPage() {
           </div>
 
           {/* Briefing / Logboek tabs */}
-          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-slate-200/70 ring-1 ring-slate-100/60 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.10)] max-h-[40%] flex flex-col">
+          <div className="chic-card-sm max-h-[40%] flex flex-col">
             {/* Tab-balk */}
             <div className="flex border-b border-gray-200 shrink-0">
               <button
