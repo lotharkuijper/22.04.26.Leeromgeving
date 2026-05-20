@@ -357,10 +357,14 @@ export function ExplainPage() {
 
   const filterConcepts = () => {
     let filtered = concepts;
-    if (searchTerm) {
-      filtered = filtered.filter(c =>
-        c.name.toLowerCase().includes(searchTerm.toLowerCase())
-      );
+    const term = searchTerm.trim().toLowerCase();
+    if (term) {
+      filtered = filtered.filter(c => {
+        if (c.name.toLowerCase().includes(term)) return true;
+        if (c.definition && c.definition.toLowerCase().includes(term)) return true;
+        if (Array.isArray(c.key_points) && c.key_points.some(kp => kp.toLowerCase().includes(term))) return true;
+        return false;
+      });
     }
     setFilteredConcepts(filtered);
   };
