@@ -286,13 +286,10 @@ export function DashboardPage() {
   const name = firstName(profile?.full_name);
 
   return (
-    <div
-      className="-m-4 md:-m-8 p-4 md:p-8 min-h-[calc(100vh-4rem)] space-y-8 bg-gradient-to-br from-sky-50 via-indigo-50/40 to-emerald-50"
-      data-testid="page-dashboard"
-    >
+    <div className="space-y-8" data-testid="page-dashboard">
       {/* Welcome hero */}
       <section
-        className="rounded-3xl p-8 md:p-10 bg-white/70 backdrop-blur-md border border-white/60 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(56,189,248,0.25)] ring-1 ring-sky-100/60"
+        className="rounded-3xl p-8 md:p-10 bg-gradient-to-br from-sky-100 via-white to-emerald-100 border border-sky-200/60 shadow-sm"
         data-testid="hero-welcome"
       >
         <p className="text-sm font-medium text-sky-800/80 mb-1" data-testid="text-greeting">
@@ -333,7 +330,7 @@ export function DashboardPage() {
               key={tile.key}
               to={tile.to}
               data-testid={`tile-${tile.key}`}
-              className={`group relative block rounded-2xl border bg-white/75 backdrop-blur-md p-6 transition-all hover:shadow-xl hover:-translate-y-0.5 hover:bg-white/90 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.15)] ${tile.border} ${tile.hoverBorder} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500`}
+              className={`group relative block rounded-2xl border bg-white p-6 transition-all hover:shadow-lg ${tile.border} ${tile.hoverBorder} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500`}
             >
               <div className={`absolute inset-x-0 top-0 h-1 rounded-t-2xl bg-gradient-to-r ${tile.accent}`} aria-hidden />
               <div className="flex items-start gap-4">
@@ -373,7 +370,7 @@ export function DashboardPage() {
 
       {/* Journal snippet */}
       <section
-        className="rounded-2xl border border-emerald-200/70 bg-white/70 backdrop-blur-md p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(16,185,129,0.25)] ring-1 ring-emerald-100/60"
+        className="rounded-2xl border border-green-200 bg-green-50/60 p-6"
         data-testid="section-journal-snippet"
         aria-label={t('dashboard.journal.title')}
       >
@@ -423,7 +420,7 @@ export function DashboardPage() {
       {/* Admin/docent compact block */}
       {(isAdmin || isDocent) && (
         <section
-          className="rounded-2xl border border-slate-200/70 bg-white/65 backdrop-blur-md p-4 flex flex-wrap items-center justify-between gap-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ring-1 ring-slate-100/60"
+          className="rounded-2xl border border-slate-200 bg-slate-50 p-4 flex flex-wrap items-center justify-between gap-3"
           data-testid="section-admin-access"
         >
           <div className="flex items-center gap-3 min-w-0">
