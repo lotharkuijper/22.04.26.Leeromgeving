@@ -148,7 +148,7 @@ export function ExplainPage() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<'all' | 'epidemiologie' | 'biostatistiek'>('all');
+  const [showAllConcepts, setShowAllConcepts] = useState(false);
   const [profileTimeout, setProfileTimeout] = useState(false);
   const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string }>>([]);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
@@ -206,7 +206,7 @@ export function ExplainPage() {
 
   useEffect(() => {
     filterConcepts();
-  }, [searchTerm, categoryFilter, concepts]);
+  }, [searchTerm, concepts]);
 
   const loadHistory = async () => {
     const session = (await supabase.auth.getSession()).data.session;
@@ -357,17 +357,11 @@ export function ExplainPage() {
 
   const filterConcepts = () => {
     let filtered = concepts;
-
-    if (categoryFilter !== 'all') {
-      filtered = filtered.filter(c => c.category === categoryFilter);
-    }
-
     if (searchTerm) {
       filtered = filtered.filter(c =>
         c.name.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
-
     setFilteredConcepts(filtered);
   };
 
@@ -561,70 +555,20 @@ export function ExplainPage() {
                 placeholder={t('explain.searchConceptPlaceholder')}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+                className="w-full pl-10 pr-4 py-2 chic-input text-sm"
+                data-testid="input-search-concept"
               />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => setCategoryFilter('all')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-                  categoryFilter === 'all'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {t('explain.all')}
-              </button>
-              <button
-                onClick={() => setCategoryFilter('epidemiologie')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-                  categoryFilter === 'epidemiologie'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {t('explain.epidemiology')}
-              </button>
-              <button
-                onClick={() => setCategoryFilter('biostatistiek')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-                  categoryFilter === 'biostatistiek'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                {t('explain.biostatistics')}
-              </button>
             </div>
           </div>
 
-          <div className="space-y-2 max-h-[500px] overflow-y-auto">
-            {conceptsLoading && (
-              <div className="text-center py-6">
-                <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                <p className="text-xs text-gray-500">{t('explain.loadingConcepts')}</p>
-              </div>
-            )}
-            {!conceptsLoading && (conceptSource === 'empty' || (conceptSource === 'global' && !!activeCourse)) && (
-              <div className="text-center py-6 px-2">
-                <Sparkles className="w-8 h-8 mx-auto mb-2 text-purple-300" />
-                <p className="text-sm font-medium text-gray-700 mb-1">{t('explain.noConceptsForCourse')}</p>
-                <p className="text-xs text-gray-500">
-                  {t('explain.noConceptsForCourseHint')}
-                </p>
-              </div>
-            )}
-            {!conceptsLoading && (conceptSource === 'course' || (conceptSource === 'global' && !activeCourse)) && filteredConcepts.length === 0 && (
-              <p className="text-sm text-gray-500 text-center py-4">
-                {t('explain.noConcepts')}
-              </p>
-            )}
-            {(conceptSource === 'course' || (conceptSource === 'global' && !activeCourse)) && filteredConcepts.map((concept) => {
+          {(() => {
+            const hasConcepts = conceptSource === 'course' || (conceptSource === 'global' && !activeCourse);
+            const renderConceptButton = (concept: Concept) => {
               const isRagExtracted = concept.key_points?.includes('[RAG-geëxtraheerd uit cursusmateriaal]');
               return (
                 <button
                   key={concept.id}
+                  id={`concept-item-${concept.id}`}
                   onClick={() => {
                     setSelectedConcept(concept);
                     setExplanation('');
@@ -636,19 +580,140 @@ export function ExplainPage() {
                       ? 'bg-gradient-to-r from-blue-100 to-blue-200 text-blue-900 font-medium'
                       : 'hover:bg-gray-100 text-gray-700'
                   }`}
+                  data-testid={`button-concept-${concept.id}`}
                 >
                   <div className="flex items-center gap-2">
                     <BookOpen className="w-4 h-4 flex-shrink-0" />
-                    <span className="text-sm">{concept.name}</span>
+                    <span className="text-sm flex-1 truncate">{concept.name}</span>
                     {isRagExtracted && (
-                      <span className="ml-auto text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium shrink-0">AI</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium shrink-0">AI</span>
+                    )}
+                    {concept.category && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium shrink-0 max-w-[8rem] truncate" title={concept.category}>
+                        {concept.category}
+                      </span>
                     )}
                   </div>
-                  <span className="text-xs text-gray-500 ml-6">{concept.category}</span>
                 </button>
               );
-            })}
-          </div>
+            };
+
+            if (conceptsLoading) {
+              return (
+                <div className="text-center py-6">
+                  <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+                  <p className="text-xs text-gray-500">{t('explain.loadingConcepts')}</p>
+                </div>
+              );
+            }
+
+            if (!hasConcepts) {
+              return (
+                <div className="text-center py-6 px-2">
+                  <Sparkles className="w-8 h-8 mx-auto mb-2 text-purple-300" />
+                  <p className="text-sm font-medium text-gray-700 mb-1">{t('explain.noConceptsForCourse')}</p>
+                  <p className="text-xs text-gray-500">{t('explain.noConceptsForCourseHint')}</p>
+                </div>
+              );
+            }
+
+            const total = concepts.length;
+            const sortedAlpha = [...concepts].sort((a, b) =>
+              a.name.localeCompare(b.name, lang === 'nl' ? 'nl' : 'en', { sensitivity: 'base' })
+            );
+
+            if (searchTerm) {
+              if (filteredConcepts.length === 0) {
+                return (
+                  <div className="text-center py-6 px-2 space-y-3">
+                    <p className="text-sm text-gray-500">{t('explain.noConceptsFound')}</p>
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className="btn-secondary text-xs"
+                      data-testid="button-clear-search"
+                    >
+                      {t('explain.clearSearch')}
+                    </button>
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-2 max-h-[500px] overflow-y-auto" data-testid="list-search-results">
+                  {filteredConcepts.map(renderConceptButton)}
+                </div>
+              );
+            }
+
+            const seen = new Set<string>();
+            const recentConcepts: Concept[] = [];
+            for (const h of history) {
+              if (seen.has(h.conceptId)) continue;
+              const match = concepts.find(c => c.id === h.conceptId);
+              if (!match) continue;
+              seen.add(h.conceptId);
+              recentConcepts.push(match);
+              if (recentConcepts.length >= 5) break;
+            }
+            const usingRecent = recentConcepts.length > 0;
+            const shortList = usingRecent ? recentConcepts : sortedAlpha.slice(0, 5);
+            const shortHeading = usingRecent ? t('explain.recentlyViewed') : t('explain.recommendedStart');
+
+            const letters = Array.from(new Set(sortedAlpha.map(c => (c.name[0] || '#').toUpperCase()))).sort();
+            const jumpToLetter = (letter: string) => {
+              const target = sortedAlpha.find(c => (c.name[0] || '#').toUpperCase() === letter);
+              if (!target) return;
+              const el = document.getElementById(`concept-item-${target.id}`);
+              if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            return (
+              <div className="space-y-3">
+                {!showAllConcepts && (
+                  <>
+                    <h3 className="text-xs uppercase tracking-wide text-gray-500 font-semibold">{shortHeading}</h3>
+                    <div className="space-y-2" data-testid="list-short-concepts">
+                      {shortList.map(renderConceptButton)}
+                    </div>
+                  </>
+                )}
+                {showAllConcepts && (
+                  <>
+                    <div
+                      className="flex flex-wrap gap-1"
+                      role="navigation"
+                      aria-label={t('explain.azStripAria')}
+                      data-testid="strip-az"
+                    >
+                      {letters.map(letter => (
+                        <button
+                          key={letter}
+                          onClick={() => jumpToLetter(letter)}
+                          className="w-6 h-6 text-[11px] font-semibold rounded bg-slate-100 hover:bg-slate-200 text-slate-700"
+                          data-testid={`button-az-${letter}`}
+                        >
+                          {letter}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="space-y-2 max-h-[500px] overflow-y-auto" data-testid="list-all-concepts">
+                      {sortedAlpha.map(renderConceptButton)}
+                    </div>
+                  </>
+                )}
+                {total > shortList.length && (
+                  <button
+                    onClick={() => setShowAllConcepts(v => !v)}
+                    className="w-full text-center text-sm text-blue-700 hover:underline py-1"
+                    data-testid="button-toggle-all-concepts"
+                  >
+                    {showAllConcepts
+                      ? t('explain.showLess')
+                      : t('explain.viewAllN', { n: String(total) })}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         <div className="chic-card p-6">
