@@ -12,3 +12,9 @@ id = "EEUO_djbr7G2XJTobrMmK"
 uri = "file://attached_assets/lairvu_promo_en.mp4"
 type = "video"
 title = "LAIR-VU Promo Video — English (97s, 1080p)"
+
+[[outputs]]
+id = "PhgTtQBXWLdMSJzRtbjrV"
+uri = "file://exports/migratie-naar-azure.md"
+type = "text"
+title = "Migratie naar VU Azure — overzicht"
