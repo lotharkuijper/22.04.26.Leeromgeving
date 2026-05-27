@@ -238,6 +238,10 @@ export function AdminPage() {
   const [addTeacherSelect, setAddTeacherSelect] = useState<Record<string, string>>({});
   const [teacherMutBusy, setTeacherMutBusy] = useState<string | null>(null);
   const [teacherMutError, setTeacherMutError] = useState<Record<string, string | null>>({});
+  // In-app modaal voor het forceren van "laatste docent weghalen".
+  const [lastTeacherConfirm, setLastTeacherConfirm] = useState<
+    { userId: string; courseId: string; message: string } | null
+  >(null);
   const [docMsg, setDocMsg] = useState<string | null>(null);
   const [promptMsg, setPromptMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<ChatbotPrompt | null>(null);
@@ -670,12 +674,8 @@ export function AdminPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (res.status === 409 && json.code === 'last_teacher' && !force) {
-          const ok = window.confirm(`${json.error}\n\n${t('admin.users.confirmLastTeacherForce')}`);
-          if (ok) {
-            setTeacherMutBusy(null);
-            return removeAsTeacher(userId, courseId, true);
-          }
-          setTeacherMutError((e) => ({ ...e, [userId]: json.error }));
+          setTeacherMutBusy(null);
+          setLastTeacherConfirm({ userId, courseId, message: json.error });
           return;
         }
         throw new Error(json.error || `Verwijderen mislukt (${res.status})`);
@@ -1136,6 +1136,44 @@ const tabGroups = [
               {roleMsg && (
                 <div className={`rounded-lg px-4 py-2 text-sm ${roleMsg.type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
                   {roleMsg.text}
+                </div>
+              )}
+              {lastTeacherConfirm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" data-testid="modal-last-teacher-confirm">
+                  <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+                    <div className="flex items-start gap-3 mb-4">
+                      <AlertTriangle className="w-6 h-6 text-amber-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <h3 className="text-base font-semibold text-gray-900 mb-1">
+                          {t('admin.users.lastTeacherTitle')}
+                        </h3>
+                        <p className="text-sm text-gray-700">{lastTeacherConfirm.message}</p>
+                        <p className="text-sm text-gray-700 mt-2">{t('admin.users.confirmLastTeacherForce')}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setLastTeacherConfirm(null)}
+                        className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+                        data-testid="button-cancel-last-teacher"
+                      >
+                        {t('admin.cancel')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const c = lastTeacherConfirm;
+                          setLastTeacherConfirm(null);
+                          if (c) removeAsTeacher(c.userId, c.courseId, true);
+                        }}
+                        className="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700"
+                        data-testid="button-confirm-last-teacher"
+                      >
+                        {t('admin.users.forceRemove')}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
               {roleConfirm && (
