@@ -1040,15 +1040,9 @@ const tabGroups = [
                         <td className="py-3 px-4">
                           {isAdmin && user.id !== profile?.id && (
                             <div className="flex gap-2">
-                              {user.role !== 'docent' && (
-                                <button
-                                  onClick={() => handleChangeUserRole(user.id, 'docent')}
-                                  disabled={loading}
-                                  className="px-3 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors disabled:opacity-50"
-                                >
-                                  {t('admin.users.toDocent')}
-                                </button>
-                              )}
+                              {/* Per-cursus docentrol beheer je via Cursussen →
+                                  Beheer leden. De globale 'docent'-rol bestaat
+                                  niet meer als toegangscriterium. */}
                               {user.role !== 'student' && (
                                 <button
                                   onClick={() => handleChangeUserRole(user.id, 'student')}

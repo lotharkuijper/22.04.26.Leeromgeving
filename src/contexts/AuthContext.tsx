@@ -28,6 +28,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  // True zodra de user in minstens één cursus member_role='teacher' heeft.
+  // Wordt geherlaadd via fetchTeacherFlag bij login/profile-refresh.
+  const [isTeacherAnywhere, setIsTeacherAnywhere] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -123,6 +126,26 @@ const {
     }
   };
 
+  const fetchTeacherFlag = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('course_members')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('member_role', 'teacher')
+        .limit(1);
+      if (error) {
+        console.warn('[AUTH] teacher-flag fetch failed:', error.message);
+        setIsTeacherAnywhere(false);
+        return;
+      }
+      setIsTeacherAnywhere((data?.length || 0) > 0);
+    } catch (err) {
+      console.warn('[AUTH] teacher-flag exception:', err);
+      setIsTeacherAnywhere(false);
+    }
+  };
+
   const fetchProfile = async (userId: string) => {
     console.log('[AUTH] Fetching profile for user:', userId);
 
@@ -173,6 +196,7 @@ const {
 
         console.log('[AUTH] Profile created successfully:', newProfile.email, newProfile.role);
         setProfile(newProfile);
+        await fetchTeacherFlag(userId);
         return;
       }
 
@@ -183,6 +207,7 @@ const {
       }
 
       setProfile(data);
+      await fetchTeacherFlag(userId);
 
     } catch (error) {
       console.error('[AUTH] Unexpected error fetching profile:', error);
@@ -250,8 +275,14 @@ const {
   const email = user?.email;
   const superuser = email === SUPERUSER_EMAIL;
   const isAdmin = superuser || profile?.role === 'admin';
-  const isDocent = !superuser && profile?.role === 'docent';
-  const isStudent = !superuser && profile?.role === 'student';
+  // 'isDocent' = docent in minstens één cursus (per-course rol via
+  // course_members.member_role='teacher'). De globale profiles.role='docent'
+  // bestaat niet meer als entry-criterium; admins zijn altijd ook staff.
+  const isDocent = !isAdmin && isTeacherAnywhere;
+  // Een gebruiker is 'student' wanneer hij/zij geen admin én geen docent is.
+  // Een per-cursus docent kan in een andere cursus gewoon student zijn — de
+  // student-rol verwijst hier naar de globale UI-fallback, niet per cursus.
+  const isStudent = !isAdmin && !isTeacherAnywhere;
 
 
   const value = {

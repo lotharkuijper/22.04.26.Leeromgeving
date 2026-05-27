@@ -58,6 +58,17 @@ export default function CoursesAdmin() {
   const [rowCounts, setRowCounts] = useState<Record<string, DeleteCounts | null>>({});
   const [confirmBulkMembersId, setConfirmBulkMembersId] = useState<string | null>(null);
 
+  // Leden-beheerdialoog (per-cursus rol: 'student' | 'teacher').
+  const [membersTarget, setMembersTarget] = useState<CourseRow | null>(null);
+  const [membersList, setMembersList] = useState<Array<{
+    user_id: string; member_role: 'student' | 'teacher';
+    email: string | null; full_name: string | null;
+    global_role: string;
+  }>>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersError, setMembersError] = useState<string | null>(null);
+  const [memberRoleBusy, setMemberRoleBusy] = useState<string | null>(null);
+
   // Bevestigingsdialoog voor het verwijderen van een cursus.
   const [deleteTarget, setDeleteTarget] = useState<CourseRow | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -118,6 +129,64 @@ export default function CoursesAdmin() {
       setRowError(c.id, msg);
     } finally {
       setRowBusyId(null);
+    }
+  }
+
+  async function openMembersDialog(c: CourseRow) {
+    setMembersTarget(c);
+    setMembersList([]);
+    setMembersError(null);
+    setMembersLoading(true);
+    const token = session?.access_token;
+    if (!token) {
+      setMembersError('Niet ingelogd.');
+      setMembersLoading(false);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/courses/${c.id}/members`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMembersError(json.error || `Laden mislukt (${res.status})`);
+      } else {
+        setMembersList(json.members || []);
+      }
+    } catch (err: unknown) {
+      setMembersError(err instanceof Error ? err.message : 'Onbekende fout');
+    } finally {
+      setMembersLoading(false);
+    }
+  }
+
+  async function changeMemberRole(userId: string, newRole: 'student' | 'teacher') {
+    if (!membersTarget) return;
+    const token = session?.access_token;
+    if (!token) {
+      setMembersError('Niet ingelogd.');
+      return;
+    }
+    setMemberRoleBusy(userId);
+    setMembersError(null);
+    try {
+      const res = await fetch(`/api/admin/courses/${membersTarget.id}/members/${userId}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_role: newRole }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMembersError(json.error || `Bijwerken mislukt (${res.status})`);
+        return;
+      }
+      setMembersList((prev) => prev.map((m) =>
+        m.user_id === userId ? { ...m, member_role: newRole } : m
+      ));
+    } catch (err: unknown) {
+      setMembersError(err instanceof Error ? err.message : 'Onbekende fout');
+    } finally {
+      setMemberRoleBusy(null);
     }
   }
 
@@ -696,7 +765,7 @@ export default function CoursesAdmin() {
                                   )}
                                   <button
                                     type="button"
-                                    onClick={() => goToAdminTab(c.id, 'users')}
+                                    onClick={() => openMembersDialog(c)}
                                     className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 px-2 py-1 rounded border border-blue-200 hover:bg-blue-50 transition-colors"
                                     data-testid={`button-manage-members-${c.id}`}
                                   >
@@ -996,6 +1065,110 @@ export default function CoursesAdmin() {
           </AlertDialogContent>
         )}
       </AlertDialog>
+
+      {/* Leden-beheerdialoog: per-cursus rol student/docent wijzigen. */}
+      {membersTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setMembersTarget(null)}
+          data-testid="dialog-manage-members"
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Leden van "{membersTarget.name}"
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Stel per cursus in wie student of docent is. Alleen admins
+                  mogen rollen wijzigen.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMembersTarget(null)}
+                className="p-1 hover:bg-gray-100 rounded"
+                data-testid="button-close-members-dialog"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {membersError && (
+                <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-800">
+                  {membersError}
+                </div>
+              )}
+              {membersLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-500">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                  Leden laden…
+                </div>
+              ) : membersList.length === 0 ? (
+                <p className="text-sm text-gray-500 py-8 text-center">
+                  Nog geen leden in deze cursus.
+                </p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="text-left py-2 px-2 font-semibold text-gray-700">Naam</th>
+                      <th className="text-left py-2 px-2 font-semibold text-gray-700">E-mail</th>
+                      <th className="text-left py-2 px-2 font-semibold text-gray-700">Rol in deze cursus</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {membersList.map((m) => (
+                      <tr key={m.user_id} className="border-b border-gray-100" data-testid={`row-member-${m.user_id}`}>
+                        <td className="py-2 px-2">{m.full_name || '—'}</td>
+                        <td className="py-2 px-2 text-gray-600">{m.email || '—'}</td>
+                        <td className="py-2 px-2">
+                          {isAdmin ? (
+                            <select
+                              value={m.member_role}
+                              disabled={memberRoleBusy === m.user_id}
+                              onChange={(e) => changeMemberRole(m.user_id, e.target.value as 'student' | 'teacher')}
+                              className="border border-gray-300 rounded px-2 py-1 text-xs bg-white disabled:opacity-50"
+                              data-testid={`select-member-role-${m.user_id}`}
+                            >
+                              <option value="student">Student</option>
+                              <option value="teacher">Docent</option>
+                            </select>
+                          ) : (
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              m.member_role === 'teacher'
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'bg-green-100 text-green-700'
+                            }`}>
+                              {m.member_role === 'teacher' ? 'Docent' : 'Student'}
+                            </span>
+                          )}
+                          {memberRoleBusy === m.user_id && (
+                            <Loader2 className="w-3 h-3 inline-block ml-2 animate-spin text-gray-400" />
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="px-6 py-3 border-t border-gray-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setMembersTarget(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg"
+                data-testid="button-close-members-dialog-footer"
+              >
+                Sluiten
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

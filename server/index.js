@@ -610,11 +610,11 @@ app.put('/api/rag-settings', async (req, res) => {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
 
-    const isAllowed = profile && (
-      profile.role === 'admin' ||
-      profile.role === 'docent' ||
-      profile.email === SUPERUSER_EMAIL
-    );
+    // Per-cursus RAG: vereist staff voor die cursus. Globale defaults:
+    // alleen admin.
+    const isAllowed = courseId
+      ? await isStaffForCourse(user, profile, courseId)
+      : (profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL);
     if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
 
     // Valideer en clamp settings per module
@@ -722,11 +722,7 @@ app.get('/api/rag-settings/overrides', async (req, res) => {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
 
-    const isAllowed = profile && (
-      profile.role === 'admin' ||
-      profile.role === 'docent' ||
-      profile.email === SUPERUSER_EMAIL
-    );
+    const isAllowed = await isStaffAnywhere(user, profile);
     if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
 
     const { data, error } = await supabaseAdmin
@@ -766,11 +762,7 @@ app.delete('/api/rag-settings/:courseId', async (req, res) => {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
 
-    const isAllowed = profile && (
-      profile.role === 'admin' ||
-      profile.role === 'docent' ||
-      profile.email === SUPERUSER_EMAIL
-    );
+    const isAllowed = await isStaffForCourse(user, profile, courseId);
     if (!isAllowed) return res.status(403).json({ error: 'Onvoldoende rechten' });
 
     const settingsKey = `__rag_settings_${courseId}__`;
@@ -817,27 +809,14 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
     // (consistent met /api/rag-settings: zelfde gebruikers die drempels mogen aanpassen,
     // mogen ook diagnoseren waarom bepaalde scores gehaald worden).
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
-    const isDocent = profile && profile.role === 'docent';
-    if (!isAdmin && !isDocent) return res.status(403).json({ error: 'Onvoldoende rechten' });
-
-    // Voor docenten: course-membership controleren wanneer een courseId is opgegeven,
-    // anders kunnen ze willekeurige cursussen aftasten.
-    if (isDocent && !isAdmin) {
+    // Toegestaan: admin/superuser overal; anders docent (member_role='teacher')
+    // van de opgegeven cursus.
+    if (!isAdmin) {
       if (!courseId) {
         return res.status(403).json({ error: 'Docenten moeten een cursus opgeven om diagnose te draaien' });
       }
-      const { data: membership, error: memberErr } = await supabaseAdmin
-        .from('course_members')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('course_id', courseId)
-        .maybeSingle();
-      if (memberErr) {
-        console.error('[test-rag-similarity] Course membership check error:', memberErr);
-        return res.status(500).json({ error: 'Cursustoestemming kon niet worden gecontroleerd' });
-      }
-      if (!membership) {
-        return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+      if (!(await isCourseTeacher(user.id, courseId))) {
+        return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
       }
     }
 
@@ -1006,7 +985,11 @@ async function resolveAdminUser(req) {
     .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
   if (!profile) return { error: { status: 403, body: { error: 'Profiel niet gevonden' } } };
   const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
-  const isDocent = profile.role === 'docent';
+  // Task #165: 'docent' is geen globale rol meer. Voor backward-compat
+  // betekent isDocent nu "deze user is in minstens één cursus docent".
+  // Per-endpoint moeten extra controles op de specifieke cursus gebeuren
+  // (via isStaffForCourse / isCourseTeacher).
+  const isDocent = !isAdmin && await userIsTeacherAnywhere(auth.user.id);
   return { user: auth.user, profile, isAdmin, isDocent };
 }
 
@@ -1617,6 +1600,74 @@ app.delete('/api/admin/courses/:id/members', async (req, res) => {
   if (delErr) return res.status(500).json({ error: delErr.message });
 
   return res.json({ ok: true, removed: count ?? 0, course: { id: course.id, name: course.name } });
+});
+
+// GET /api/admin/courses/:id/members — lijst alle leden van een cursus met
+// hun member_role ('student'|'teacher'). Toegankelijk voor admin/superuser
+// en voor docenten van deze cursus. Joins met profiles voor weergave.
+app.get('/api/admin/courses/:id/members', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  const courseId = req.params.id;
+  if (!courseId) return res.status(400).json({ error: 'Cursus-ID ontbreekt' });
+
+  if (!r.isAdmin && !(await isCourseTeacher(r.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('course_members')
+    .select('user_id, member_role, joined_at, profiles(id, email, full_name, role)')
+    .eq('course_id', courseId)
+    .order('joined_at', { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+
+  const members = (data || []).map((row) => ({
+    user_id: row.user_id,
+    member_role: row.member_role || 'student',
+    joined_at: row.joined_at,
+    email: row.profiles?.email || null,
+    full_name: row.profiles?.full_name || null,
+    global_role: row.profiles?.role || 'student',
+  }));
+  return res.json({ members });
+});
+
+// PUT /api/admin/courses/:id/members/:userId — wijzig de per-cursus rol
+// ('student' of 'teacher'). Alleen admin/superuser. Per-cursus docenten
+// kunnen wel leden zien (GET) maar niet zelf rollen wijzigen.
+app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen ledenrollen wijzigen' });
+
+  const { id: courseId, userId } = req.params;
+  const { member_role } = req.body || {};
+  if (!courseId || !userId) return res.status(400).json({ error: 'Cursus-ID of user-ID ontbreekt' });
+  if (member_role !== 'student' && member_role !== 'teacher') {
+    return res.status(400).json({ error: 'member_role moet "student" of "teacher" zijn' });
+  }
+
+  const { data: existing, error: fetchErr } = await supabaseAdmin
+    .from('course_members')
+    .select('id, member_role')
+    .eq('course_id', courseId).eq('user_id', userId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: 'Lid niet gevonden in deze cursus' });
+
+  const { error: updErr } = await supabaseAdmin
+    .from('course_members')
+    .update({ member_role })
+    .eq('id', existing.id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+
+  return res.json({ ok: true, user_id: userId, course_id: courseId, member_role });
 });
 
 // PATCH /api/admin/courses/:id — hernoem en/of werk beschrijving bij van een
@@ -2335,14 +2386,8 @@ app.post('/api/admin/record-doc-mutation', async (req, res) => {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
 
-    const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
-    const isDocent = profile?.role === 'docent';
-    if (!isAdmin && !isDocent) return res.status(403).json({ error: 'Admin of docent rol vereist' });
-
-    if (isDocent && !isAdmin) {
-      const { data: membership } = await supabaseAdmin
-        .from('course_members').select('id').eq('user_id', user.id).eq('course_id', courseId).maybeSingle();
-      if (!membership) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    if (!(await isStaffForCourse(user, profile, courseId))) {
+      return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
     }
 
     const mutationKey = `__doc_mutation_${courseId}__`;
@@ -2407,26 +2452,8 @@ app.get('/api/admin/concepts-meta', async (req, res) => {
       return res.status(403).json({ error: 'Could not verify user role' });
     }
 
-    const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
-    const isDocent = profile.role === 'docent';
-    if (!isAdmin && !isDocent) {
-      return res.status(403).json({ error: 'Admin of docent rol vereist' });
-    }
-
-    if (isDocent && !isAdmin) {
-      const { data: membership, error: memberErr } = await supabaseAdmin
-        .from('course_members')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('course_id', courseId)
-        .maybeSingle();
-      if (memberErr) {
-        console.error('[concepts-meta] Course membership check error:', memberErr);
-        return res.status(500).json({ error: 'Cursustoestemming kon niet worden gecontroleerd' });
-      }
-      if (!membership) {
-        return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
-      }
+    if (!(await isStaffForCourse(user, profile, courseId))) {
+      return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
     }
 
     const courseMarker = `[RAG-geëxtraheerd uit cursusmateriaal]`;
@@ -2602,9 +2629,9 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     }
 
     const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
-    const isDocent = profile.role === 'docent';
+    const isDocent = !isAdmin && await isCourseTeacher(user.id, courseId);
     if (!isAdmin && !isDocent) {
-      return res.status(403).json({ error: 'Admin of docent rol vereist' });
+      return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
     }
 
     if (isDocent && !isAdmin) {
@@ -3276,7 +3303,8 @@ app.patch('/api/journal/:id', async (req, res) => {
 
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
-    const isAdmin = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    // Alleen admin/superuser mag andermans journal-entries bewerken.
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
 
     const { id } = req.params;
     const { title, content, activity_type } = req.body;
@@ -3317,7 +3345,8 @@ app.delete('/api/journal/:id', async (req, res) => {
 
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
-    const isAdmin = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    // Alleen admin/superuser mag andermans journal-entries verwijderen.
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
 
     const { id } = req.params;
 
@@ -4246,7 +4275,8 @@ app.get('/api/admin/prompts-migration-status', async (req, res) => {
     const { data: { user }, error: userError } = await callerClient.auth.getUser();
     if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
     const { data: profile } = await supabaseAdmin.from('profiles').select('role').eq('id', user.id).maybeSingle();
-    if (!profile || !['admin', 'docent'].includes(profile.role)) {
+    const isAdminCheck = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    if (!isAdminCheck && !(await userIsTeacherAnywhere(user.id))) {
       return res.status(403).json({ error: 'Geen toegang' });
     }
   } catch {
@@ -4303,7 +4333,10 @@ app.get('/api/health', (req, res) => {
 app.get('/api/debug/active-prompts', async (req, res) => {
   const auth = await requireAuthUser(req, res);
   if (!auth) return;
-  if (auth.profile.role !== 'admin' && auth.profile.role !== 'teacher') {
+  // Admin/superuser overal; anders moet de user in minstens één cursus
+  // docent zijn (course_members.member_role='teacher').
+  const isAdminDbg = auth.profile?.role === 'admin' || auth.profile?.email === SUPERUSER_EMAIL;
+  if (!isAdminDbg && !(await userIsTeacherAnywhere(auth.user.id))) {
     return res.status(403).json({ error: 'Alleen beschikbaar voor admins en docenten' });
   }
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
@@ -4695,6 +4728,50 @@ async function requireAuthUser(req, res) {
   }
 }
 
+// ── Per-cursus rollen (Task #165) ───────────────────────────────────────────
+// 'docent' is geen globale rol meer. Iemand is docent IN een cursus als
+// course_members.member_role = 'teacher' voor die cursus. Admin/superuser
+// blijft overal staff.
+
+async function isCourseTeacher(userId, courseId) {
+  if (!userId || !courseId || !supabaseAdmin) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('course_members')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
+      .eq('member_role', 'teacher')
+      .maybeSingle();
+    return !!data;
+  } catch { return false; }
+}
+
+async function isStaffForCourse(user, profile, courseId) {
+  if (!user) return false;
+  if (profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL) return true;
+  return isCourseTeacher(user.id, courseId);
+}
+
+async function userIsTeacherAnywhere(userId) {
+  if (!userId || !supabaseAdmin) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('course_members')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('member_role', 'teacher')
+      .limit(1);
+    return !!(data && data.length);
+  } catch { return false; }
+}
+
+async function isStaffAnywhere(user, profile) {
+  if (!user) return false;
+  if (profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL) return true;
+  return userIsTeacherAnywhere(user.id);
+}
+
 // Controleer of een gebruiker toegang heeft tot een specifieke cursus.
 // Admins/superuser hebben altijd toegang; anderen moeten lid zijn via
 // course_members. Geen cursus = geen toegang.
@@ -4742,11 +4819,14 @@ async function requireAdminOrDocent(req, res) {
       .eq('id', user.id)
       .maybeSingle();
     const isSuperuser = profile?.email === SUPERUSER_EMAIL;
-    if (!profile || (!isSuperuser && !['admin', 'docent'].includes(profile.role))) {
+    // Toegestaan voor superuser/admin, of voor wie in minstens één cursus
+    // docent is. Per-cursus checks volgen in de aanroepende endpoint.
+    const isAdminLocal = isSuperuser || profile?.role === 'admin';
+    if (!profile || (!isAdminLocal && !(await userIsTeacherAnywhere(user.id)))) {
       res.status(403).json({ error: 'Geen toegang' });
       return null;
     }
-    return { user, profile, role: profile.role };
+    return { user, profile, role: isAdminLocal ? 'admin' : 'teacher' };
   } catch (err) {
     res.status(401).json({ error: 'Authenticatie mislukt: ' + err.message });
     return null;
@@ -4851,8 +4931,11 @@ app.get('/api/admin/itembank-mappings/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
   const { courseId } = req.params;
-  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
-    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
+  // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
+  // teacher-anywhere docent instellingen van een andere cursus wijzigt.
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
@@ -4873,8 +4956,11 @@ app.put('/api/admin/itembank-mappings/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
   const { courseId } = req.params;
-  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
-    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
+  // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
+  // teacher-anywhere docent instellingen van een andere cursus wijzigt.
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
@@ -4931,8 +5017,11 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
   if (!courseId || (!hasSelected && !hasSegments)) {
     return res.status(400).json({ error: 'courseId en (niet-lege selectedTopics of topSegments) vereist' });
   }
-  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
-    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
+  // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
+  // teacher-anywhere docent instellingen van een andere cursus wijzigt.
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
@@ -5162,8 +5251,11 @@ app.get('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
   const { courseId } = req.params;
-  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
-    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
+  // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
+  // teacher-anywhere docent instellingen van een andere cursus wijzigt.
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
@@ -5184,8 +5276,11 @@ app.put('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
   const { courseId } = req.params;
-  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
-    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
+  // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
+  // teacher-anywhere docent instellingen van een andere cursus wijzigt.
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
@@ -5239,8 +5334,11 @@ app.get('/api/quiz-sources-mix/:courseId', async (req, res) => {
   const auth = await requireAuthUser(req, res);
   if (!auth) return;
   const { courseId } = req.params;
-  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
-    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
+  // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
+  // teacher-anywhere docent instellingen van een andere cursus wijzigt.
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
     return res.json({ mix: { pct_rag: 50, pct_itembank: 0, pct_llm: 50 }, schema_ready: false });
@@ -5266,8 +5364,11 @@ app.put('/api/admin/quiz-sources-mix/:courseId', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
   const { courseId } = req.params;
-  if (!await userHasCourseAccess(auth.user, auth.profile, courseId)) {
-    return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+  // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
+  // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
+  // teacher-anywhere docent instellingen van een andere cursus wijzigt.
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
@@ -5841,7 +5942,7 @@ async function ensureProjectPersonaFromCourse(projectId, coursePersonaId) {
 // student met access tot project.course_id (gebruikt userHasCourseAccess).
 async function userHasProjectAccess(user, profile, project) {
   if (!project) return false;
-  const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+  const isStaff = await isStaffForCourse(user, profile, project.course_id);
   if (isStaff) return true;
   if (project.course_id) {
     if (await userHasCourseAccess(user, profile, project.course_id)) return true;
@@ -5876,7 +5977,7 @@ app.post('/api/projects/groups', async (req, res) => {
     // groepen aanmaakt op andermans projecten.
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
     if (!isStaff) {
       if (!project.course_id || !(await userHasCourseAccess(auth.user, profile, project.course_id))) {
         return res.status(403).json({ error: 'Geen toegang tot de cursus van dit project' });
@@ -5949,7 +6050,7 @@ app.post('/api/projects/groups/join', async (req, res) => {
       .from('projects').select('id, course_id').eq('id', group.project_id).maybeSingle();
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const isStaff = await isStaffForCourse(auth.user, profile, project?.course_id);
     if (!isStaff && project?.course_id && !(await userHasCourseAccess(auth.user, profile, project.course_id))) {
       return res.status(403).json({ error: 'Geen toegang tot de cursus van dit project' });
     }
@@ -6008,7 +6109,7 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
     // user, ongeacht cursus-toegang).
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
     if (!isStaff && !(await userHasProjectAccess(auth.user, profile, project))) {
       return res.status(403).json({ error: 'Geen toegang tot dit project' });
     }
@@ -6543,7 +6644,11 @@ app.get('/api/projects/groups/:groupId/conversation-log', async (req, res) => {
     const isMember = await isGroupMember(groupId, auth.user.id);
     const { data: prof } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaffUser = prof && (prof.role === 'admin' || prof.role === 'docent' || prof.email === SUPERUSER_EMAIL);
+    // Cursus van de groep ophalen om docent-staff per cursus te checken.
+    const { data: grpRow } = await supabaseAdmin
+      .from('project_groups').select('project_id, projects(course_id)').eq('id', groupId).maybeSingle();
+    const grpCourseId = grpRow?.projects?.course_id || null;
+    const isStaffUser = await isStaffForCourse(auth.user, prof, grpCourseId);
     if (!isMember && !isStaffUser) return res.status(403).json({ error: 'Geen toegang tot deze groep' });
 
     const { data: threads } = await supabaseAdmin
@@ -7182,8 +7287,11 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
   try {
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
-    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin' });
+    // Cursus van het project ophalen om docent-status per cursus te checken.
+    const { data: projForRole } = await supabaseAdmin
+      .from('projects').select('course_id').eq('id', projectId).maybeSingle();
+    const isStaff = await isStaffForCourse(auth.user, profile, projForRole?.course_id);
+    if (!isStaff) return res.status(403).json({ error: 'Alleen docent/admin van deze cursus' });
 
     const { data: existing } = await supabaseAdmin
       .from('project_personas').select('id').eq('project_id', projectId);
@@ -7229,16 +7337,13 @@ async function requireProjectStaff(projectId, user, profile) {
     if (!project) return { ok: false, status: 404, error: 'Project niet gevonden' };
     return { ok: true, project };
   }
-  if (!profile || profile.role !== 'docent') {
-    return { ok: false, status: 403, error: 'Alleen docent/admin' };
-  }
   const { data: project } = await supabaseAdmin
     .from('projects').select('*').eq('id', projectId).maybeSingle();
   if (!project) return { ok: false, status: 404, error: 'Project niet gevonden' };
   if (!project.course_id) {
     return { ok: false, status: 403, error: 'Project zonder cursus is alleen door admin te beheren' };
   }
-  if (!(await userHasCourseAccess(user, profile, project.course_id))) {
+  if (!(await isCourseTeacher(user.id, project.course_id))) {
     return { ok: false, status: 403, error: 'Je bent geen docent van de cursus van dit project' };
   }
   return { ok: true, project };
@@ -7532,7 +7637,10 @@ app.post('/api/projects/:projectId/personas/:personaId/documents',
     // uploaden (bijv. om voor een groep een document recht te zetten);
     // docent zonder groepslidmaatschap mag niet schrijven.
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
-    const isStaffForProject = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    // Cursus van het project ophalen om docent-staff per cursus te checken.
+    const { data: projForStaff } = await supabaseAdmin
+      .from('projects').select('course_id').eq('id', projectId).maybeSingle();
+    const isStaffForProject = await isStaffForCourse(auth.user, profile, projForStaff?.course_id);
     // Groepslidmaatschap is alleen vereist voor reguliere uploads.
     if (groupId) {
       if (!isAdmin && !(await isGroupMember(groupId, auth.user.id))) {
@@ -7733,7 +7841,7 @@ app.post('/api/projects/student-restart', async (req, res) => {
 
     const { data: profile } = await supabaseAdmin
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
-    const isStaff = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
     if (!isStaff && project.course_id && !(await userHasCourseAccess(auth.user, profile, project.course_id))) {
       return res.status(403).json({ error: 'Geen toegang tot de cursus van dit project' });
     }
@@ -7793,7 +7901,7 @@ app.get('/api/projects/:projectId/documents', async (req, res) => {
     if (!(await userHasProjectAccess(auth.user, profile, project))) {
       return res.status(403).json({ error: 'Geen toegang tot dit project' });
     }
-    const isStaffDocs = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const isStaffDocs = await isStaffForCourse(auth.user, profile, project.course_id);
     let docsQuery = supabaseAdmin
       .from('project_documents')
       .select('id, filename, byte_size, mime_type, document_ref_id, is_visible_to_students, uploaded_by, created_at')
@@ -8065,7 +8173,7 @@ app.get('/api/projects/:projectId/documents/:docId/download', async (req, res) =
     if (!(await userHasProjectAccess(auth.user, profile, project))) {
       return res.status(403).json({ error: 'Geen toegang tot dit project' });
     }
-    const isStaffDl = profile && (profile.role === 'admin' || profile.role === 'docent' || profile.email === SUPERUSER_EMAIL);
+    const isStaffDl = await isStaffForCourse(auth.user, profile, project.course_id);
     const { data: doc } = await supabaseAdmin
       .from('project_documents')
       .select('filename, content_text, mime_type, document_ref_id, is_visible_to_students')
@@ -8198,7 +8306,7 @@ async function listProjectSubmissionsHandler(req, res) {
     // van een andere cursus mag deze submissions niet zien.
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
     const isCourseStaff = isAdmin
-      || (profile?.role === 'docent' && project.course_id && await userHasCourseAccess(auth.user, profile, project.course_id));
+      || (project.course_id && await isCourseTeacher(auth.user.id, project.course_id));
 
     if (!isCourseStaff) {
       // Niet-staff: moet lid zijn van de opgevraagde groep.
@@ -8344,7 +8452,7 @@ app.get('/api/projects/:projectId/submissions/:subId/download', async (req, res)
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
     const isCourseStaff = isAdmin
-      || (profile?.role === 'docent' && project.course_id && await userHasCourseAccess(auth.user, profile, project.course_id));
+      || (project.course_id && await isCourseTeacher(auth.user.id, project.course_id));
 
     const { data: sub } = await supabaseAdmin
       .from('project_submissions')
@@ -8422,7 +8530,7 @@ app.get('/api/admin/courses/:courseId/submissions', async (req, res) => {
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
     const isCourseStaff = isAdmin
-      || (profile?.role === 'docent' && await userHasCourseAccess(auth.user, profile, courseId));
+      || (await isCourseTeacher(auth.user.id, courseId));
     if (!isCourseStaff) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
 
     const { data: projects } = await supabaseAdmin
@@ -8494,7 +8602,7 @@ app.get('/api/admin/uploads-folder/:folderId/submissions', async (req, res) => {
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
     const isCourseStaff = isAdmin
-      || (profile?.role === 'docent' && await userHasCourseAccess(auth.user, profile, courseId));
+      || (await isCourseTeacher(auth.user.id, courseId));
     if (!isCourseStaff) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
 
     const { data: projects } = await supabaseAdmin
