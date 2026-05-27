@@ -227,6 +227,12 @@ export function AdminPage() {
     loading: boolean; error: string | null;
     courses: Array<{ courseId: string; courseName: string; isActive: boolean | null }>;
   }>>({});
+  // State voor de "Voeg toe als docent"-dropdown in de uitklap-rij van de
+  // Gebruikers-tab. De cursussenlijst hergebruikt de bestaande `allCourses`
+  // state hieronder (uitgebreid met `is_active`).
+  const [addTeacherSelect, setAddTeacherSelect] = useState<Record<string, string>>({});
+  const [teacherMutBusy, setTeacherMutBusy] = useState<string | null>(null);
+  const [teacherMutError, setTeacherMutError] = useState<Record<string, string | null>>({});
   const [docMsg, setDocMsg] = useState<string | null>(null);
   const [promptMsg, setPromptMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<ChatbotPrompt | null>(null);
@@ -248,7 +254,7 @@ export function AdminPage() {
   const [ragSettingsSaving, setRagSettingsSaving] = useState(false);
   const [ragSettingsMsg, setRagSettingsMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [ragSelectedCourseId, setRagSelectedCourseId] = useState<string | null>(null);
-  const [allCourses, setAllCourses] = useState<Array<{ id: string; name: string }>>([]);
+  const [allCourses, setAllCourses] = useState<Array<{ id: string; name: string; is_active?: boolean | null }>>([]);
   const [coursesWithOverrides, setCoursesWithOverrides] = useState<Set<string>>(new Set());
   const [ragDeletingOverride, setRagDeletingOverride] = useState(false);
   const [diagnosticQuery, setDiagnosticQuery] = useState('');
@@ -443,7 +449,7 @@ export function AdminPage() {
 
   const loadAllCourses = async () => {
     try {
-      const { data } = await supabase.from('courses').select('id, name').order('name');
+      const { data } = await supabase.from('courses').select('id, name, is_active').order('name');
       setAllCourses(data || []);
     } catch (err) {
       console.warn('[admin] Cursussen laden mislukt');
@@ -580,6 +586,93 @@ export function AdminPage() {
   const handleChangeUserRole = async (userId: string, newRole: UserRole) => {
     if (!isAdmin) return;
     setRoleConfirm({ userId, newRole });
+  };
+
+  // Zorg dat de cursussenlijst geladen is wanneer admin de Gebruikers-tab
+  // opent (gebruikt door de "Voeg toe als docent"-dropdown). Hergebruikt
+  // de bestaande loader.
+  useEffect(() => {
+    if (!isAdmin || activeTab !== 'users') return;
+    if (allCourses.length > 0) return;
+    loadAllCourses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, activeTab, allCourses.length]);
+
+  // Refetch docent-cursussen voor één user (na add/remove). Idempotent.
+  const refetchTeacherCourses = async (userId: string) => {
+    const token = session?.access_token;
+    if (!token) return;
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/teacher-courses`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Laden mislukt (${res.status})`);
+      setTeacherCoursesByUser((m) => ({
+        ...m, [userId]: { loading: false, error: null, courses: json.courses || [] },
+      }));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setTeacherCoursesByUser((m) => ({ ...m, [userId]: { loading: false, error: msg, courses: [] } }));
+    }
+  };
+
+  const addAsTeacher = async (userId: string, courseId: string) => {
+    if (!courseId) return;
+    const token = session?.access_token;
+    if (!token) { setTeacherMutError((e) => ({ ...e, [userId]: t('admin.users.notLoggedIn') })); return; }
+    setTeacherMutBusy(`${userId}:add`);
+    setTeacherMutError((e) => ({ ...e, [userId]: null }));
+    try {
+      const res = await fetch(`/api/admin/courses/${courseId}/members/${userId}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_role: 'teacher' }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Toevoegen mislukt (${res.status})`);
+      setAddTeacherSelect((s) => ({ ...s, [userId]: '' }));
+      await refetchTeacherCourses(userId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setTeacherMutError((e) => ({ ...e, [userId]: msg }));
+    } finally {
+      setTeacherMutBusy(null);
+    }
+  };
+
+  const removeAsTeacher = async (userId: string, courseId: string, force = false) => {
+    const token = session?.access_token;
+    if (!token) { setTeacherMutError((e) => ({ ...e, [userId]: t('admin.users.notLoggedIn') })); return; }
+    setTeacherMutBusy(`${userId}:${courseId}`);
+    setTeacherMutError((e) => ({ ...e, [userId]: null }));
+    try {
+      const url = `/api/admin/courses/${courseId}/members/${userId}${force ? '?force=1' : ''}`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_role: 'student' }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409 && json.code === 'last_teacher' && !force) {
+          const ok = window.confirm(`${json.error}\n\n${t('admin.users.confirmLastTeacherForce')}`);
+          if (ok) {
+            setTeacherMutBusy(null);
+            return removeAsTeacher(userId, courseId, true);
+          }
+          setTeacherMutError((e) => ({ ...e, [userId]: json.error }));
+          return;
+        }
+        throw new Error(json.error || `Verwijderen mislukt (${res.status})`);
+      }
+      await refetchTeacherCourses(userId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setTeacherMutError((e) => ({ ...e, [userId]: msg }));
+    } finally {
+      setTeacherMutBusy(null);
+    }
   };
 
   // Klap een gebruikersrij open/dicht en lazy-load de lijst cursussen
@@ -1094,19 +1187,27 @@ const tabGroups = [
                               </span>
                             </td>
                             <td className="py-3 px-4">
-                              {isAdmin && user.id !== profile?.id && user.role !== 'student' && (
+                              {isAdmin && user.id !== profile?.id && user.email !== 'l.d.j.kuijper@vu.nl' && (
                                 <div className="flex gap-2">
-                                  {/* Admin↔student promotie. De per-cursus
-                                      docentrol beheer je via Cursussen →
-                                      Beheer leden. */}
-                                  <button
-                                    onClick={() => handleChangeUserRole(user.id, 'student')}
-                                    disabled={loading}
-                                    className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors disabled:opacity-50"
-                                    data-testid={`button-to-student-${user.id}`}
-                                  >
-                                    {t('admin.users.toStudent')}
-                                  </button>
+                                  {globalRole === 'student' ? (
+                                    <button
+                                      onClick={() => handleChangeUserRole(user.id, 'admin')}
+                                      disabled={loading}
+                                      className="px-3 py-1 text-xs font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors disabled:opacity-50"
+                                      data-testid={`button-promote-admin-${user.id}`}
+                                    >
+                                      {t('admin.users.toAdmin')}
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() => handleChangeUserRole(user.id, 'student')}
+                                      disabled={loading}
+                                      className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors disabled:opacity-50"
+                                      data-testid={`button-demote-student-${user.id}`}
+                                    >
+                                      {t('admin.users.toStudent')}
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </td>
@@ -1149,9 +1250,55 @@ const tabGroups = [
                                           <Users className="w-3.5 h-3.5" />
                                           {t('admin.users.manageCourseMembers')}
                                         </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => removeAsTeacher(user.id, c.courseId)}
+                                          disabled={teacherMutBusy === `${user.id}:${c.courseId}`}
+                                          className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:text-red-900 px-2 py-1 rounded border border-red-200 hover:bg-red-50 transition-colors disabled:opacity-50"
+                                          data-testid={`button-remove-teacher-${user.id}-${c.courseId}`}
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                          {t('admin.users.removeAsTeacher')}
+                                        </button>
                                       </li>
                                     ))}
                                   </ul>
+                                )}
+                                {/* Voeg toe als docent in cursus */}
+                                {isAdmin && tcState && !tcState.loading && (() => {
+                                  const taken = new Set(tcState.courses.map((c) => c.courseId));
+                                  const options = allCourses.filter((c) => !taken.has(c.id) && c.is_active !== false);
+                                  if (options.length === 0) return null;
+                                  const selected = addTeacherSelect[user.id] || '';
+                                  return (
+                                    <div className="mt-3 pt-3 border-t border-gray-200 flex items-center gap-2 flex-wrap" data-testid={`row-add-teacher-${user.id}`}>
+                                      <span className="text-xs font-semibold text-gray-600">{t('admin.users.addAsTeacherInCourse')}</span>
+                                      <select
+                                        value={selected}
+                                        onChange={(e) => setAddTeacherSelect((s) => ({ ...s, [user.id]: e.target.value }))}
+                                        className="text-sm px-2 py-1 rounded border border-gray-300 bg-white"
+                                        data-testid={`select-add-teacher-course-${user.id}`}
+                                      >
+                                        <option value="">{t('admin.users.selectCoursePlaceholder')}</option>
+                                        {options.map((c) => (
+                                          <option key={c.id} value={c.id}>{c.name}</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        onClick={() => addAsTeacher(user.id, selected)}
+                                        disabled={!selected || teacherMutBusy === `${user.id}:add`}
+                                        className="inline-flex items-center gap-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded transition-colors disabled:opacity-50"
+                                        data-testid={`button-add-teacher-${user.id}`}
+                                      >
+                                        <Plus className="w-3.5 h-3.5" />
+                                        {t('admin.users.addAsTeacher')}
+                                      </button>
+                                    </div>
+                                  );
+                                })()}
+                                {teacherMutError[user.id] && (
+                                  <div className="mt-2 text-sm text-red-700" data-testid={`text-teacher-mut-error-${user.id}`}>{teacherMutError[user.id]}</div>
                                 )}
                               </td>
                             </tr>

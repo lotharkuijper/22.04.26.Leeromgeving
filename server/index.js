@@ -1681,7 +1681,7 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
       // Lock alle membership-rijen van deze cursus om concurrent demoties
       // te serialiseren. We hebben de hele set nodig om correct te tellen.
       const { rows: lockedRows } = await client.query(
-        'SELECT id, user_id, member_role FROM course_members WHERE course_id = $1 FOR UPDATE',
+        'SELECT user_id, member_role FROM course_members WHERE course_id = $1 FOR UPDATE',
         [courseId]
       );
       const existing = lockedRows.find((row) => row.user_id === userId);
@@ -1702,8 +1702,8 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
         return res.status(guard.status).json(guard.body);
       }
       await client.query(
-        'UPDATE course_members SET member_role = $1 WHERE id = $2',
-        [member_role, existing.id]
+        'UPDATE course_members SET member_role = $1 WHERE course_id = $2 AND user_id = $3',
+        [member_role, courseId, userId]
       );
       await client.query('COMMIT');
       return res.json({ ok: true, user_id: userId, course_id: courseId, member_role });
@@ -1719,14 +1719,14 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
   // Fallback zonder directe DB-verbinding (best-effort, niet race-safe).
   const { data: existing, error: fetchErr } = await supabaseAdmin
     .from('course_members')
-    .select('id, member_role')
+    .select('member_role')
     .eq('course_id', courseId).eq('user_id', userId).maybeSingle();
   if (fetchErr) return res.status(500).json({ error: fetchErr.message });
   if (!existing) return res.status(404).json({ error: 'Lid niet gevonden in deze cursus' });
   {
     const { count, error: cntErr } = await supabaseAdmin
       .from('course_members')
-      .select('id', { count: 'exact', head: true })
+      .select('user_id', { count: 'exact', head: true })
       .eq('course_id', courseId)
       .eq('member_role', 'teacher');
     if (cntErr) return res.status(500).json({ error: cntErr.message });
@@ -1742,9 +1742,60 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
   const { error: updErr } = await supabaseAdmin
     .from('course_members')
     .update({ member_role })
-    .eq('id', existing.id);
+    .eq('course_id', courseId)
+    .eq('user_id', userId);
   if (updErr) return res.status(500).json({ error: updErr.message });
   return res.json({ ok: true, user_id: userId, course_id: courseId, member_role });
+});
+
+// POST /api/admin/courses/:id/members/:userId — voeg een gebruiker toe aan
+// een cursus met een gegeven member_role ('student' of 'teacher'). Idempotent:
+// als de gebruiker al lid is, wordt diens member_role bijgewerkt (handig om
+// vanuit /admin → Gebruikers iemand direct als docent toe te voegen aan een
+// cursus). Admin-only.
+app.post('/api/admin/courses/:id/members/:userId', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen leden toevoegen' });
+  const { id: courseId, userId } = req.params;
+  const { member_role } = req.body || {};
+  if (!courseId || !userId) return res.status(400).json({ error: 'Cursus-ID of user-ID ontbreekt' });
+  // Dit endpoint is bedoeld om iemand als docent (of student) toe te voegen.
+  // Demoties van bestaande docenten lopen via PUT (met last-teacher-bescherming);
+  // hier laten we daarom een bestaande teacher-rol NOOIT door dit endpoint
+  // omlaag worden gezet, zodat de invariant "elke cursus houdt minstens één
+  // docent" niet via een upsert kan worden omzeild.
+  if (member_role !== 'student' && member_role !== 'teacher') {
+    return res.status(400).json({ error: 'member_role moet "student" of "teacher" zijn' });
+  }
+  try {
+    const { data: course } = await supabaseAdmin
+      .from('courses').select('id').eq('id', courseId).maybeSingle();
+    if (!course) return res.status(404).json({ error: 'Cursus niet gevonden' });
+    const { data: prof } = await supabaseAdmin
+      .from('profiles').select('id').eq('id', userId).maybeSingle();
+    if (!prof) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+    const { data: existing } = await supabaseAdmin
+      .from('course_members')
+      .select('member_role')
+      .eq('course_id', courseId).eq('user_id', userId).maybeSingle();
+    if (existing && existing.member_role === 'teacher' && member_role === 'student') {
+      return res.status(409).json({
+        error: 'Gebruik PUT /api/admin/courses/:id/members/:userId om een docent te degraderen (last-teacher-bescherming).',
+        code: 'use_put_for_demotion',
+      });
+    }
+    const { error: upErr } = await supabaseAdmin
+      .from('course_members')
+      .upsert({ course_id: courseId, user_id: userId, member_role }, { onConflict: 'course_id,user_id' });
+    if (upErr) return res.status(500).json({ error: upErr.message });
+    return res.json({ ok: true, user_id: userId, course_id: courseId, member_role });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // Helper — gemeenschappelijk voor admin- en self-endpoint hieronder.
@@ -4872,7 +4923,7 @@ async function isCourseTeacher(userId, courseId) {
   try {
     const { data } = await supabaseAdmin
       .from('course_members')
-      .select('id')
+      .select('user_id')
       .eq('user_id', userId)
       .eq('course_id', courseId)
       .eq('member_role', 'teacher')
@@ -4892,7 +4943,7 @@ async function userIsTeacherAnywhere(userId) {
   try {
     const { data } = await supabaseAdmin
       .from('course_members')
-      .select('id')
+      .select('user_id')
       .eq('user_id', userId)
       .eq('member_role', 'teacher')
       .limit(1);

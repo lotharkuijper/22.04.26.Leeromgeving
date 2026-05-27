@@ -130,7 +130,7 @@ const {
     try {
       const { data, error } = await supabase
         .from('course_members')
-        .select('id')
+        .select('user_id')
         .eq('user_id', userId)
         .eq('member_role', 'teacher')
         .limit(1);
