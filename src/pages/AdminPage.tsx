@@ -219,7 +219,12 @@ export function AdminPage() {
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [conceptsMeta, setConceptsMeta] = useState<{ ragCount: number; manualCount: number; lastExtraction: string | null; lastDocumentChange: string | null; lastSuccessfulRegeneration: string | null } | null>(null);
   const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole } | null>(null);
+  const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole; requireText?: string } | null>(null);
+  const [roleConfirmInput, setRoleConfirmInput] = useState('');
+  // Verzameling user-ids die in minstens één cursus docent zijn — wordt
+  // gebruikt om de hoogste hiërarchische rol (admin > docent > student) in
+  // de Rol-kolom te tonen.
+  const [teacherUserIds, setTeacherUserIds] = useState<Set<string>>(new Set());
   // Uitklap-state voor de Gebruikers-tab: per user → lijst cursussen waarin
   // die user docent is. Lazy geladen via /api/admin/users/:id/teacher-courses.
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
@@ -360,6 +365,14 @@ export function AdminPage() {
     }
 
     setUsers(data || []);
+
+    // Laad in dezelfde stap welke gebruikers in minstens één cursus docent zijn,
+    // zodat de Rol-kolom de hoogste hiërarchische rol kan tonen.
+    const { data: tRows } = await supabase
+      .from('course_members')
+      .select('user_id')
+      .eq('member_role', 'teacher');
+    setTeacherUserIds(new Set((tRows || []).map((r: { user_id: string }) => r.user_id)));
   };
 
   const loadDocuments = async () => {
@@ -583,9 +596,10 @@ export function AdminPage() {
     }
   };
 
-  const handleChangeUserRole = async (userId: string, newRole: UserRole) => {
+  const handleChangeUserRole = async (userId: string, newRole: UserRole, requireText?: string) => {
     if (!isAdmin) return;
-    setRoleConfirm({ userId, newRole });
+    setRoleConfirmInput('');
+    setRoleConfirm({ userId, newRole, requireText });
   };
 
   // Zorg dat de cursussenlijst geladen is wanneer admin de Gebruikers-tab
@@ -706,8 +720,12 @@ export function AdminPage() {
 
   const confirmRoleChange = async () => {
     if (!roleConfirm) return;
+    if (roleConfirm.requireText && roleConfirmInput.trim().toLowerCase() !== roleConfirm.requireText.toLowerCase()) {
+      return;
+    }
     const { userId, newRole } = roleConfirm;
     setRoleConfirm(null);
+    setRoleConfirmInput('');
     setRoleMsg(null);
     setLoading(true);
     const { error } = await supabase
@@ -1121,10 +1139,34 @@ const tabGroups = [
                 </div>
               )}
               {roleConfirm && (
-                <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm">
+                <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm flex-wrap">
                   <span className="text-amber-800">{t('admin.users.changeRoleTo')} <strong>{roleConfirm.newRole}</strong>?</span>
-                  <button onClick={confirmRoleChange} className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-medium">{t('admin.confirm')}</button>
-                  <button onClick={() => setRoleConfirm(null)} className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium">{t('admin.cancel')}</button>
+                  {roleConfirm.requireText && (
+                    <>
+                      <span className="text-amber-800">
+                        {t('admin.users.typeToConfirm')} <code className="px-1 py-0.5 bg-white border border-amber-300 rounded text-xs">{roleConfirm.requireText}</code>
+                      </span>
+                      <input
+                        type="text"
+                        autoFocus
+                        value={roleConfirmInput}
+                        onChange={(e) => setRoleConfirmInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') confirmRoleChange(); }}
+                        placeholder={roleConfirm.requireText}
+                        className="px-2 py-1 text-xs border border-amber-300 rounded bg-white"
+                        data-testid="input-confirm-role-text"
+                      />
+                    </>
+                  )}
+                  <button
+                    onClick={confirmRoleChange}
+                    disabled={!!roleConfirm.requireText && roleConfirmInput.trim().toLowerCase() !== roleConfirm.requireText.toLowerCase()}
+                    className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="button-confirm-role-change"
+                  >
+                    {t('admin.confirm')}
+                  </button>
+                  <button onClick={() => { setRoleConfirm(null); setRoleConfirmInput(''); }} className="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium">{t('admin.cancel')}</button>
                 </div>
               )}
               <div className="flex items-center gap-4">
@@ -1147,17 +1189,20 @@ const tabGroups = [
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.nameCol')}</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.emailCol')}</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.roleCol')}</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-900">{t('admin.users.actionsCol')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredUsers.map(user => {
                       const expanded = expandedUserId === user.id;
                       const tcState = teacherCoursesByUser[user.id];
-                      // 'docent' bestaat niet meer als globale rol — render
-                      // alleen admin / student als badge; per-cursus
-                      // docentschap zie je in de uitklap hieronder.
-                      const globalRole: 'admin' | 'student' = user.role === 'admin' ? 'admin' : 'student';
+                      // Hoogste hiërarchische rol: admin > docent (in ≥1 cursus)
+                      // > student. 'docent' is geen globale profiles.role meer
+                      // (sinds #165), maar wel een per-cursus role; we vatten
+                      // dat hier samen voor de Rol-kolom.
+                      const isTeacherSomewhere = teacherUserIds.has(user.id);
+                      const globalRole: 'admin' | 'docent' | 'student' =
+                        user.role === 'admin' ? 'admin' : isTeacherSomewhere ? 'docent' : 'student';
+                      const isSelfOrSuperuser = user.id === profile?.id || user.email === 'l.d.j.kuijper@vu.nl';
                       return (
                         <Fragment key={user.id}>
                           <tr className="border-b border-gray-100 hover:bg-gray-50" data-testid={`row-user-${user.id}`}>
@@ -1181,40 +1226,17 @@ const tabGroups = [
                               <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
                                 globalRole === 'admin'
                                   ? 'bg-red-100 text-red-700'
+                                  : globalRole === 'docent'
+                                  ? 'bg-blue-100 text-blue-700'
                                   : 'bg-green-100 text-green-700'
                               }`} data-testid={`badge-role-${user.id}`}>
                                 {globalRole}
                               </span>
                             </td>
-                            <td className="py-3 px-4">
-                              {isAdmin && user.id !== profile?.id && user.email !== 'l.d.j.kuijper@vu.nl' && (
-                                <div className="flex gap-2">
-                                  {globalRole === 'student' ? (
-                                    <button
-                                      onClick={() => handleChangeUserRole(user.id, 'admin')}
-                                      disabled={loading}
-                                      className="px-3 py-1 text-xs font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors disabled:opacity-50"
-                                      data-testid={`button-promote-admin-${user.id}`}
-                                    >
-                                      {t('admin.users.toAdmin')}
-                                    </button>
-                                  ) : (
-                                    <button
-                                      onClick={() => handleChangeUserRole(user.id, 'student')}
-                                      disabled={loading}
-                                      className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors disabled:opacity-50"
-                                      data-testid={`button-demote-student-${user.id}`}
-                                    >
-                                      {t('admin.users.toStudent')}
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </td>
                           </tr>
                           {expanded && (
                             <tr className="border-b border-gray-100 bg-gray-50/60" data-testid={`row-user-expand-${user.id}`}>
-                              <td colSpan={4} className="px-4 py-3">
+                              <td colSpan={3} className="px-4 py-3">
                                 <div className="text-xs font-semibold text-gray-600 mb-2">
                                   {t('admin.users.teacherInCourses')}
                                 </div>
@@ -1299,6 +1321,34 @@ const tabGroups = [
                                 })()}
                                 {teacherMutError[user.id] && (
                                   <div className="mt-2 text-sm text-red-700" data-testid={`text-teacher-mut-error-${user.id}`}>{teacherMutError[user.id]}</div>
+                                )}
+                                {/* Onopvallende admin-promotie/-demotie. Promotie naar admin
+                                    vereist dat de admin het woord "admin" intypt ter
+                                    bevestiging. */}
+                                {isAdmin && !isSelfOrSuperuser && (
+                                  <div className="mt-3 pt-3 border-t border-gray-200 flex items-center gap-3 text-xs text-gray-500" data-testid={`row-admin-actions-${user.id}`}>
+                                    {user.role === 'admin' ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleChangeUserRole(user.id, 'student')}
+                                        disabled={loading}
+                                        className="underline underline-offset-2 hover:text-gray-800 disabled:opacity-50"
+                                        data-testid={`button-demote-student-${user.id}`}
+                                      >
+                                        {t('admin.users.removeAdminRights')}
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleChangeUserRole(user.id, 'admin', 'admin')}
+                                        disabled={loading}
+                                        className="underline underline-offset-2 hover:text-gray-800 disabled:opacity-50"
+                                        data-testid={`button-promote-admin-${user.id}`}
+                                      >
+                                        {t('admin.users.makeAdmin')}
+                                      </button>
+                                    )}
+                                  </div>
                                 )}
                               </td>
                             </tr>

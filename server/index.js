@@ -1788,9 +1788,15 @@ app.post('/api/admin/courses/:id/members/:userId', async (req, res) => {
         code: 'use_put_for_demotion',
       });
     }
+    // course_members.role is een legacy NOT NULL kolom (default 'member' sinds
+    // migratie 20260527220000); we vullen 'm expliciet zodat upserts ook werken
+    // in omgevingen waar die migratie nog niet is toegepast.
     const { error: upErr } = await supabaseAdmin
       .from('course_members')
-      .upsert({ course_id: courseId, user_id: userId, member_role }, { onConflict: 'course_id,user_id' });
+      .upsert(
+        { course_id: courseId, user_id: userId, member_role, role: 'member' },
+        { onConflict: 'course_id,user_id' }
+      );
     if (upErr) return res.status(500).json({ error: upErr.message });
     return res.json({ ok: true, user_id: userId, course_id: courseId, member_role });
   } catch (err) {
