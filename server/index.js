@@ -16,6 +16,11 @@ import { createClient } from '@supabase/supabase-js';
 import { expandQuery } from './queryExpansion.js';
 import pkg from 'pg';
 const { Pool } = pkg;
+import {
+  authorizeMemberRoleChange,
+  checkLastTeacherProtection,
+  parseForceFlag,
+} from './memberRoleAuth.js';
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
 // uitvoeren, zoals bytea-inserts van binaire bestanden.
@@ -1658,11 +1663,11 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
 
   // Autorisatie: admin OR per-cursus docent van déze cursus. Strikt
   // courseId-gescoped — een docent van een andere cursus krijgt 403.
-  if (!r.isAdmin && !(await isCourseTeacher(r.user.id, courseId))) {
-    return res.status(403).json({ error: 'Alleen admin of docent van deze cursus mag rollen wijzigen' });
-  }
+  const callerIsCourseTeacher = r.isAdmin ? false : await isCourseTeacher(r.user.id, courseId);
+  const authz = authorizeMemberRoleChange({ isAdmin: r.isAdmin, isCourseTeacher: callerIsCourseTeacher });
+  if (!authz.allowed) return res.status(authz.status).json(authz.body);
 
-  const force = req.query.force === '1' || req.query.force === 'true';
+  const force = parseForceFlag(req.query.force);
 
   // Atomair pad via pgPool — voorkomt een race waarbij twee gelijktijdige
   // demoties beide "count=2" zien en de cursus docentloos achterlaten. We
@@ -1684,15 +1689,17 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'Lid niet gevonden in deze cursus' });
       }
-      if (existing.member_role === 'teacher' && member_role === 'student') {
-        const teacherCount = lockedRows.filter((row) => row.member_role === 'teacher').length;
-        if (teacherCount <= 1 && !(r.isAdmin && force)) {
-          await client.query('ROLLBACK');
-          return res.status(409).json({
-            error: 'Dit is de laatste docent van de cursus. Wijs eerst een andere docent aan, of laat een admin de wijziging forceren.',
-            code: 'last_teacher',
-          });
-        }
+      const teacherCount = lockedRows.filter((row) => row.member_role === 'teacher').length;
+      const guard = checkLastTeacherProtection({
+        existingMemberRole: existing.member_role,
+        newMemberRole: member_role,
+        teacherCount,
+        isAdmin: r.isAdmin,
+        force,
+      });
+      if (!guard.ok) {
+        await client.query('ROLLBACK');
+        return res.status(guard.status).json(guard.body);
       }
       await client.query(
         'UPDATE course_members SET member_role = $1 WHERE id = $2',
@@ -1716,19 +1723,21 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
     .eq('course_id', courseId).eq('user_id', userId).maybeSingle();
   if (fetchErr) return res.status(500).json({ error: fetchErr.message });
   if (!existing) return res.status(404).json({ error: 'Lid niet gevonden in deze cursus' });
-  if (existing.member_role === 'teacher' && member_role === 'student') {
+  {
     const { count, error: cntErr } = await supabaseAdmin
       .from('course_members')
       .select('id', { count: 'exact', head: true })
       .eq('course_id', courseId)
       .eq('member_role', 'teacher');
     if (cntErr) return res.status(500).json({ error: cntErr.message });
-    if ((count || 0) <= 1 && !(r.isAdmin && force)) {
-      return res.status(409).json({
-        error: 'Dit is de laatste docent van de cursus. Wijs eerst een andere docent aan, of laat een admin de wijziging forceren.',
-        code: 'last_teacher',
-      });
-    }
+    const guard = checkLastTeacherProtection({
+      existingMemberRole: existing.member_role,
+      newMemberRole: member_role,
+      teacherCount: count || 0,
+      isAdmin: r.isAdmin,
+      force,
+    });
+    if (!guard.ok) return res.status(guard.status).json(guard.body);
   }
   const { error: updErr } = await supabaseAdmin
     .from('course_members')
@@ -1738,10 +1747,27 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
   return res.json({ ok: true, user_id: userId, course_id: courseId, member_role });
 });
 
-// GET /api/admin/users/:userId/teacher-courses — lijst van cursussen
-// waarin deze gebruiker per-cursus docent is. Toegestaan voor admin OF
-// voor de gebruiker zélf (zodat de frontend van een ingelogde docent kan
-// vragen "in welke cursussen ben ik docent?").
+// Helper — gemeenschappelijk voor admin- en self-endpoint hieronder.
+async function fetchTeacherCoursesForUser(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('course_members')
+    .select('course_id, courses(id, name, is_active)')
+    .eq('user_id', userId)
+    .eq('member_role', 'teacher');
+  if (error) throw new Error(error.message);
+  return (data || [])
+    .map((row) => ({
+      courseId: row.course_id,
+      courseName: row.courses?.name || null,
+      isActive: row.courses?.is_active ?? null,
+    }))
+    .filter((c) => c.courseName) // verwijderde cursussen weglaten
+    .sort((a, b) => (a.courseName || '').localeCompare(b.courseName || '', 'nl'));
+}
+
+// GET /api/admin/users/:userId/teacher-courses — admin-only. Gebruikt door
+// de /admin Gebruikers-tab om per gebruiker te tonen in welke cursussen
+// zij/hij docent is. Niet-admins krijgen 403 (zij gebruiken /api/me/...).
 app.get('/api/admin/users/:userId/teacher-courses', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
@@ -1750,24 +1776,32 @@ app.get('/api/admin/users/:userId/teacher-courses', async (req, res) => {
   if (r.error) return res.status(r.error.status).json(r.error.body);
   const { userId } = req.params;
   if (!userId) return res.status(400).json({ error: 'user-ID ontbreekt' });
-  if (!r.isAdmin && r.user.id !== userId) {
-    return res.status(403).json({ error: 'Alleen admin mag andermans docent-cursussen opvragen' });
+  if (!r.isAdmin) {
+    return res.status(403).json({ error: 'Alleen admins mogen andermans docent-cursussen opvragen' });
   }
-  const { data, error } = await supabaseAdmin
-    .from('course_members')
-    .select('course_id, courses(id, name, is_active)')
-    .eq('user_id', userId)
-    .eq('member_role', 'teacher');
-  if (error) return res.status(500).json({ error: error.message });
-  const courses = (data || [])
-    .map((row) => ({
-      courseId: row.course_id,
-      courseName: row.courses?.name || null,
-      isActive: row.courses?.is_active ?? null,
-    }))
-    .filter((c) => c.courseName) // verwijderde cursussen weglaten
-    .sort((a, b) => (a.courseName || '').localeCompare(b.courseName || '', 'nl'));
-  return res.json({ courses });
+  try {
+    const courses = await fetchTeacherCoursesForUser(userId);
+    return res.json({ courses });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/me/teacher-courses — geeft de ingelogde gebruiker de lijst
+// cursussen waarin zij/hij per-cursus docent is. Wordt door CoursesAdmin
+// gebruikt om de 'Beheer leden'-knop te tonen voor non-admin docenten.
+app.get('/api/me/teacher-courses', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  try {
+    const courses = await fetchTeacherCoursesForUser(r.user.id);
+    return res.json({ courses });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // PATCH /api/admin/courses/:id — hernoem en/of werk beschrijving bij van een

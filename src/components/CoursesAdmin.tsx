@@ -236,7 +236,7 @@ export default function CoursesAdmin() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/admin/users/${user.id}/teacher-courses`, {
+        const res = await fetch(`/api/me/teacher-courses`, {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
         const json = await res.json().catch(() => ({}));
