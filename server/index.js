@@ -22,6 +22,16 @@ import {
   parseForceFlag,
 } from './memberRoleAuth.js';
 import { validateReviewResponse, canRequestDocumentReview } from './documentReview.js';
+import {
+  applyDelta as applyRelDelta,
+  scoreToLabel as relScoreToLabel,
+  scoreToBucket as relScoreToBucket,
+  appendHistory as relAppendHistory,
+  hasHistoryRef as relHasHistoryRef,
+  isBlocked as relIsBlocked,
+  blockedMessage as relBlockedMessage,
+  buildRelationshipPromptBlock as relBuildPromptBlock,
+} from './personaRelationship.js';
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
 // uitvoeren, zoals bytea-inserts van binaire bestanden.
@@ -6522,6 +6532,31 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       return res.status(403).json({ error: 'Deze persona is een beoordelaar en kan niet worden aangesproken via de chat.' });
     }
 
+    // Task #167: relatie-staat ophalen vóór alles wat schrijft of LLM-calls
+    // doet. Bij score ≤ -8 blokkeren we nieuwe chat-turns met een vaste
+    // melding en slaan we niets op (geen thread-creatie, geen user-bericht).
+    let relationship = { score: 0, history: [] };
+    if (persona.id !== '__default__') {
+      try {
+        relationship = await loadRelationship(project.id, groupId, persona.id);
+      } catch (e) {
+        console.warn('[persona-chat] relatie laden mislukte:', e.message);
+      }
+      if (relIsBlocked(relationship.score)) {
+        return res.json({
+          reply: relBlockedMessage(lang),
+          ragSources: [],
+          threadId: null,
+          relationshipBlocked: true,
+          relationship: {
+            score: relationship.score,
+            bucket: relScoreToBucket(relationship.score),
+            label: relScoreToLabel(relationship.score, lang),
+          },
+        });
+      }
+    }
+
     // Thread ophalen of aanmaken (alleen voor echte persona's met uuid).
     let threadId = null;
     if (persona.id !== '__default__') {
@@ -6652,7 +6687,13 @@ app.post('/api/projects/persona-chat', async (req, res) => {
     const projectDocBlock = projectDocContext ? `\n\nProjectmateriaal van de docent:\n${projectDocContext}` : '';
     const LANG_INSTR_EN = '\n\nIMPORTANT: Always respond in English. Use English for all your answers, feedback, and explanations.';
     const langSuffix = lang === 'en' ? LANG_INSTR_EN : '';
-    const systemContent = `${persona.system_prompt}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}${langSuffix}`;
+    // Task #167: relatie-blok altijd injecteren voor echte persona's, ook bij
+    // score 0 — zo blijft de instructie consistent en weet de persona dat de
+    // verstandhouding gewogen wordt.
+    const relationshipBlock = persona.id !== '__default__'
+      ? relBuildPromptBlock(relationship.score, relationship.history, lang, 3)
+      : '';
+    const systemContent = `${persona.system_prompt}${relationshipBlock}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}${langSuffix}`;
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
@@ -8807,9 +8848,249 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
       }
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // Task #167: persoonlijke relatie-score bijwerken op basis van de
+    // relationship_delta. Idempotent op review-id (refId). Best-effort:
+    // valt stil terug als de tabel nog niet bestaat (migratie ontbreekt).
+    // ────────────────────────────────────────────────────────────────────
+    try {
+      await applyRelationshipDelta({
+        projectId,
+        groupId,
+        personaId: persona.id,
+        delta: validation.value.relationship_delta,
+        event: {
+          source: 'document_review',
+          refId: inserted.id,
+          delta: validation.value.relationship_delta,
+          note: validation.value.verdict,
+        },
+      });
+    } catch (relErr) {
+      console.warn('[document_review] relationship-update mislukte:', relErr.message);
+    }
+
     return res.json({ review: inserted });
   } catch (err) {
     console.error('[document_review]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
+// Task #167 — Persona-relaties (Fase 2). Eén rij per (project, groep, persona)
+// met score (-10..+10) + history-events. Deltas komen uit Fase 1 of uit een
+// handmatige staff-correctie. De huidige staat wordt geïnjecteerd in de
+// systeemprompt van elke persona-chat en gate't nieuwe turns bij score ≤ -8.
+// =============================================================================
+
+// Pas een delta toe op de relatie en append history. Idempotent: als
+// event.refId al in history zit (zelfde source+refId), wordt niets bijgewerkt.
+// Retourneert de bijgewerkte rij of null als de tabel nog niet bestaat.
+async function applyRelationshipDelta({ projectId, groupId, personaId, delta, event }) {
+  if (!supabaseAdmin) return null;
+  const { data: existing, error: selErr } = await supabaseAdmin
+    .from('project_persona_relationships')
+    .select('id, score, history')
+    .eq('project_id', projectId).eq('group_id', groupId).eq('persona_id', personaId)
+    .maybeSingle();
+  if (selErr) {
+    if (selErr.code === '42P01' || /project_persona_relationships/i.test(selErr.message || '')) {
+      return null;
+    }
+    throw selErr;
+  }
+  const curScore   = existing?.score ?? 0;
+  const curHistory = Array.isArray(existing?.history) ? existing.history : [];
+  if (event?.refId && relHasHistoryRef(curHistory, event.source, event.refId)) {
+    return existing || null; // al verwerkt
+  }
+  const newScore   = applyRelDelta(curScore, delta);
+  const newHistory = relAppendHistory(curHistory, event);
+  if (existing) {
+    const { data: updated, error: upErr } = await supabaseAdmin
+      .from('project_persona_relationships')
+      .update({ score: newScore, history: newHistory, updated_at: new Date().toISOString() })
+      .eq('id', existing.id)
+      .select('id, score, history, updated_at')
+      .single();
+    if (upErr) throw upErr;
+    return updated;
+  }
+  const { data: inserted, error: insErr } = await supabaseAdmin
+    .from('project_persona_relationships')
+    .insert({
+      project_id: projectId,
+      group_id: groupId,
+      persona_id: personaId,
+      score: newScore,
+      history: newHistory,
+    })
+    .select('id, score, history, updated_at')
+    .single();
+  if (insErr) throw insErr;
+  return inserted;
+}
+
+// Lees de huidige relatie-rij of geef een neutrale defaults-rij terug.
+async function loadRelationship(projectId, groupId, personaId) {
+  if (!supabaseAdmin) return { score: 0, history: [] };
+  const { data, error } = await supabaseAdmin
+    .from('project_persona_relationships')
+    .select('score, history')
+    .eq('project_id', projectId).eq('group_id', groupId).eq('persona_id', personaId)
+    .maybeSingle();
+  if (error) {
+    if (error.code === '42P01' || /project_persona_relationships/i.test(error.message || '')) {
+      return { score: 0, history: [] };
+    }
+    throw error;
+  }
+  return {
+    score: data?.score ?? 0,
+    history: Array.isArray(data?.history) ? data.history : [],
+  };
+}
+
+// GET /api/projects/:projectId/groups/:groupId/relationships — overzicht per
+// project-persona. Staff krijgt score + laatste 5 history-events; studenten
+// krijgen alleen score+label (geen exact getal in UI; getal blijft hier
+// voor consistentie maar de student-UI toont enkel het label).
+app.get('/api/projects/:projectId/groups/:groupId/relationships', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, groupId } = req.params;
+  const lang = (req.query.lang === 'en') ? 'en' : 'nl';
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
+    const memberOfGroup = await isGroupMember(groupId, auth.user.id);
+    if (!isStaff && !memberOfGroup) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    const { data: groupCheck } = await supabaseAdmin
+      .from('project_groups').select('id, project_id').eq('id', groupId).maybeSingle();
+    if (!groupCheck || groupCheck.project_id !== projectId) {
+      return res.status(404).json({ error: 'Groep niet gevonden in dit project' });
+    }
+    const { data: personas } = await supabaseAdmin
+      .from('project_personas')
+      .select('id, name, avatar_emoji, persona_type, sort_order')
+      .eq('project_id', projectId)
+      .order('sort_order');
+    const personaList = personas || [];
+    const { data: rels, error: relErr } = await supabaseAdmin
+      .from('project_persona_relationships')
+      .select('persona_id, score, history, updated_at')
+      .eq('project_id', projectId).eq('group_id', groupId);
+    if (relErr && !(relErr.code === '42P01' || /project_persona_relationships/i.test(relErr.message || ''))) {
+      return res.status(500).json({ error: relErr.message });
+    }
+    const byPersona = new Map((rels || []).map(r => [r.persona_id, r]));
+    const out = personaList.map(p => {
+      const r = byPersona.get(p.id);
+      const score = r?.score ?? 0;
+      const history = Array.isArray(r?.history) ? r.history : [];
+      const recent = history.slice(-5).reverse();
+      return {
+        personaId: p.id,
+        personaName: p.name,
+        avatarEmoji: p.avatar_emoji,
+        personaType: p.persona_type || 'conversational',
+        score: isStaff ? score : null,
+        bucket: relScoreToBucket(score),
+        label: relScoreToLabel(score, lang),
+        blocked: relIsBlocked(score),
+        updatedAt: r?.updated_at || null,
+        history: isStaff ? recent : recent.map(e => ({
+          ts: e?.ts || null,
+          source: e?.source || null,
+        })),
+      };
+    });
+    return res.json({ relationships: out, isStaff });
+  } catch (err) {
+    console.error('[relationships]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/:projectId/groups/:groupId/personas/:personaId/relationship-adjust
+// — staff-only handmatige correctie van de relatie. `delta` in -10..+10
+// (wordt na clamp toegepast); `note` is een verplichte korte motivatie.
+app.post('/api/projects/:projectId/groups/:groupId/personas/:personaId/relationship-adjust', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, groupId, personaId } = req.params;
+  const { delta, note } = req.body || {};
+  const deltaNum = Math.round(Number(delta));
+  if (!Number.isFinite(deltaNum) || deltaNum === 0) {
+    return res.status(400).json({ error: 'delta moet een geheel getal ≠ 0 zijn' });
+  }
+  if (deltaNum > 10 || deltaNum < -10) {
+    return res.status(400).json({ error: 'delta moet tussen -10 en +10 liggen' });
+  }
+  const noteStr = typeof note === 'string' ? note.trim() : '';
+  if (noteStr.length === 0) {
+    return res.status(400).json({ error: 'note (korte motivatie) is verplicht' });
+  }
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
+    if (!isStaff) return res.status(403).json({ error: 'Alleen staff van deze cursus mag de relatie aanpassen' });
+
+    const { data: groupCheck } = await supabaseAdmin
+      .from('project_groups').select('id, project_id').eq('id', groupId).maybeSingle();
+    if (!groupCheck || groupCheck.project_id !== projectId) {
+      return res.status(404).json({ error: 'Groep niet gevonden in dit project' });
+    }
+    const { data: personaCheck } = await supabaseAdmin
+      .from('project_personas').select('id, project_id').eq('id', personaId).maybeSingle();
+    if (!personaCheck || personaCheck.project_id !== projectId) {
+      return res.status(404).json({ error: 'Persona niet gevonden in dit project' });
+    }
+
+    const refId = `staff_adjust:${auth.user.id}:${Date.now()}`;
+    let updated;
+    try {
+      updated = await applyRelationshipDelta({
+        projectId, groupId, personaId,
+        delta: deltaNum,
+        event: { source: 'staff_adjust', refId, by: auth.user.id, delta: deltaNum, note: noteStr },
+      });
+    } catch (e) {
+      if (e.code === '42P01') {
+        return res.status(503).json({
+          error: 'Migratie 20260529100000_project_persona_relationships.sql is nog niet toegepast in Supabase.',
+        });
+      }
+      throw e;
+    }
+    if (!updated) {
+      return res.status(503).json({
+        error: 'Migratie 20260529100000_project_persona_relationships.sql is nog niet toegepast in Supabase.',
+      });
+    }
+    return res.json({
+      relationship: {
+        score: updated.score,
+        bucket: relScoreToBucket(updated.score),
+        history: updated.history,
+        updated_at: updated.updated_at,
+      },
+    });
+  } catch (err) {
+    console.error('[relationship-adjust]', err);
     return res.status(500).json({ error: err.message });
   }
 });

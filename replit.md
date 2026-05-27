@@ -52,6 +52,16 @@ Per module (`chat`, `explain`, `quiz`, `project`) en per cursus instelbaar via `
 - `chatbot_prompts` sectie `project`, name `document_review`: editor-baar systeemsjabloon (`DEFAULT_DOCUMENT_REVIEW_PROMPT`). Geseed met `is_active=false` zodat docenten zelf activeren.
 - `/api/projects/:projectId/room` retourneert nu ook `evaluators: [{id,name,avatar_emoji}]` zodat de UI per upload de oordelen-strip + "Vraag oordeel"-knoppen kan tonen, óók voor niet-staff (evaluator-persona's blijven uit de `personas`-dropdown gefilterd voor studenten).
 
+## Persona-relaties (Task #167, Fase 2)
+- Tabel `project_persona_relationships` (migratie `20260529100000_project_persona_relationships.sql` + RLS-verstrenging `20260529110000_project_persona_relationships_rls_tighten.sql`): unieke rij per (project, group, persona) met `score` (CHECK -10..+10, default 0) en `history` jsonb-array van events `{ts, source, refId, delta, note, by?}`. RLS na verstrenging: SELECT alleen voor staff (admin/superuser/teacher van de cursus). Studenten lezen uitsluitend via de server-endpoints die met service-role draaien en zelf score/history maskeren. INSERT/UPDATE alleen via service-role (server).
+- `server/personaRelationship.js` — pure helpers (`clampScore`, `applyDelta`, `scoreToBucket`/`scoreToLabel` NL+EN, `appendHistory` met `maxItems`-rotatie (default 50), `hasHistoryRef`, `isBlocked`, `blockedMessage`, `buildPromptBlock`); constants `SCORE_MIN=-10`, `SCORE_MAX=+10`, `BLOCK_THRESHOLD=-8`. Getest via `server/__tests__/personaRelationship.test.js`.
+- Server-hooks in `server/index.js`:
+  - Persona-chat (`POST /api/projects/:projectId/persona-chat`): laadt vooraf de relatie, retourneert bij `score ≤ -8` direct `{ reply: blockedMessage, relationshipBlocked: true, relationship }` zonder thread- of user-bericht-save. Bij doorgang wordt `buildPromptBlock` voor elke echte persona in de systeemprompt geïnjecteerd (vóór RAG/projectmateriaal-blokken).
+  - Document-review (`POST /api/projects/:projectId/documents/:docId/reviews`): na succesvolle persist roept `applyRelationshipDelta` aan met `source='document_review'`, `refId=review.id`, `note=verdict`. Idempotent via `refId` in history.
+  - `GET /api/projects/:projectId/groups/:groupId/relationships?lang=` — overzicht per project-persona. Staff ziet score+volle history (laatste 5); studenten alleen label+timestamp+source.
+  - `POST /api/projects/:projectId/groups/:groupId/personas/:personaId/relationship-adjust` — staff-only handmatige correctie (`delta` -10..+10, `note` verplicht). Schrijft event met `source='staff_adjust'`, `refId=staff_adjust:<userId>:<ts>`, `by=userId`.
+- `ProjectRoomPage`: badge naast persona-dropdown met label + (staff) numerieke score; blokkade-banner boven de chat-textarea + disable van invoer/send bij `blocked`; staff-paneel onder de project-materialen met tabel persona × score × label × laatste 5 events + Corrigeer-dialog (delta number ±10, motivatie-textarea); relaties worden herladen na elke review en na elke correctie.
+
 ## Conventies
 - TypeScript strict, geen package.json edits.
 - Data-testids op interactieve elementen.

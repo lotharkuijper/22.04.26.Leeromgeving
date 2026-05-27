@@ -122,6 +122,27 @@ interface DocumentReview {
   requested_by: string | null;
   created_at: string;
 }
+type RelationshipBucket = 'cold' | 'strained' | 'neutral' | 'positive' | 'warm';
+interface RelationshipHistoryEvent {
+  ts: string | null;
+  source: string | null;
+  delta?: number;
+  note?: string;
+  by?: string;
+  refId?: string;
+}
+interface RelationshipInfo {
+  personaId: string;
+  personaName: string;
+  avatarEmoji: string | null;
+  personaType: 'conversational' | 'evaluator';
+  score: number | null;
+  bucket: RelationshipBucket;
+  label: string;
+  blocked: boolean;
+  updatedAt: string | null;
+  history: RelationshipHistoryEvent[];
+}
 interface ClosedConversation {
   threadId: string;
   personaId: string;
@@ -174,6 +195,13 @@ export function ProjectRoomPage() {
   const [reviewsByDoc, setReviewsByDoc] = useState<Record<string, DocumentReview[]>>({});
   const [reviewingKey, setReviewingKey] = useState<string | null>(null);
   const [expandedReviewId, setExpandedReviewId] = useState<string | null>(null);
+  // Task #167 — Persona-relaties
+  const [relationships, setRelationships] = useState<RelationshipInfo[]>([]);
+  const [adjustingPersona, setAdjustingPersona] = useState<RelationshipInfo | null>(null);
+  const [adjustDelta, setAdjustDelta] = useState<number>(1);
+  const [adjustNote, setAdjustNote] = useState<string>('');
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const [adjustError, setAdjustError] = useState<string | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -444,6 +472,47 @@ export function ProjectRoomPage() {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [chatMessages]);
 
+  const loadRelationships = useCallback(async () => {
+    if (!projectId || !groupId || !token) return;
+    try {
+      const r = await fetch(`/api/projects/${projectId}/groups/${groupId}/relationships?lang=${lang}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) setRelationships(d.relationships || []);
+      else if (r.status !== 503) console.warn('[relationships load]', d.error);
+    } catch (e) { console.warn('[relationships load]', e); }
+  }, [projectId, groupId, token, lang]);
+
+  useEffect(() => { loadRelationships(); }, [loadRelationships]);
+
+  const submitAdjust = async () => {
+    if (!adjustingPersona || !projectId || !groupId || !token) return;
+    if (!adjustNote.trim()) { setAdjustError(t('room.relationship.noteLabel')); return; }
+    setAdjustSaving(true);
+    setAdjustError(null);
+    try {
+      const r = await fetch(
+        `/api/projects/${projectId}/groups/${groupId}/personas/${adjustingPersona.personaId}/relationship-adjust`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ delta: adjustDelta, note: adjustNote.trim() }),
+        },
+      );
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || t('room.relationship.adjustFailed'));
+      setAdjustingPersona(null);
+      setAdjustNote('');
+      setAdjustDelta(1);
+      await loadRelationships();
+    } catch (e: any) {
+      setAdjustError(e.message);
+    } finally {
+      setAdjustSaving(false);
+    }
+  };
+
   const loadReviewsForDoc = useCallback(async (docId: string) => {
     if (!projectId || !groupId || !token) return;
     try {
@@ -495,6 +564,8 @@ export function ProjectRoomPage() {
       }
       setInfo(t('room.review.success', { name: persona.name }));
       setTimeout(() => setInfo(null), 5000);
+      // Task #167: relatie kan verschoven zijn — herlaad zodat label/banner kloppen.
+      loadRelationships();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -549,6 +620,9 @@ export function ProjectRoomPage() {
         id: `reply-${Date.now()}`, role: 'assistant', content: data.reply,
         created_at: new Date().toISOString(), user_id: null,
       }]);
+      // Task #167: server kan een blokkade signaleren — herlaad relaties zodat
+      // de banner + dropdown-label direct synchroniseren.
+      if (data.relationshipBlocked) loadRelationships();
     } catch (e: any) {
       setPersonaMessages(prev => [...prev, {
         id: `err-${Date.now()}`, role: 'assistant',
@@ -911,12 +985,47 @@ export function ProjectRoomPage() {
                 data-testid="select-persona"
               >
                 {personas.length === 0 && <option value="">{t('room.noPersonas')}</option>}
-                {personas.map(p => (
-                  <option key={p.id} value={p.id} data-testid={`option-persona-${p.id}`}>
-                    {(p.avatar_emoji || '🤖')} {p.name}
-                  </option>
-                ))}
+                {personas.map(p => {
+                  const rel = relationships.find(r => r.personaId === p.id);
+                  const labelSuffix = rel ? ` • ${rel.label}${rel.blocked ? ' ⛔' : ''}` : '';
+                  return (
+                    <option key={p.id} value={p.id} data-testid={`option-persona-${p.id}`}>
+                      {(p.avatar_emoji || '🤖')} {p.name}{labelSuffix}
+                    </option>
+                  );
+                })}
               </select>
+              {(() => {
+                const rel = relationships.find(r => r.personaId === activePersonaId);
+                if (!rel) return null;
+                const bucketCls: Record<RelationshipBucket, string> = {
+                  cold:     'bg-blue-50 text-blue-700 border-blue-200',
+                  strained: 'bg-amber-50 text-amber-700 border-amber-200',
+                  neutral:  'bg-gray-50 text-gray-600 border-gray-200',
+                  positive: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                  warm:     'bg-rose-50 text-rose-700 border-rose-200',
+                };
+                const bucketDot: Record<RelationshipBucket, string> = {
+                  cold: 'bg-blue-500', strained: 'bg-amber-500', neutral: 'bg-gray-400',
+                  positive: 'bg-emerald-500', warm: 'bg-rose-500',
+                };
+                return (
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[10px] font-medium shrink-0 ${bucketCls[rel.bucket]}`}
+                    title={isStaff && rel.score !== null ? `score ${rel.score}` : rel.label}
+                    data-testid={`badge-relationship-${rel.personaId}`}
+                  >
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${bucketDot[rel.bucket]}`} />
+                    {rel.label}
+                    {isStaff && rel.score !== null && (
+                      <span className="text-gray-500 ml-1">({rel.score >= 0 ? '+' : ''}{rel.score})</span>
+                    )}
+                    {rel.blocked && (
+                      <span className="ml-1 px-1 rounded bg-red-100 text-red-700 border border-red-200">{t('room.relationship.blockedBadge')}</span>
+                    )}
+                  </span>
+                );
+              })()}
             </div>
             {activePersona && activePersonaId !== '__default__' && (
               <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
@@ -977,6 +1086,19 @@ export function ProjectRoomPage() {
             )}
           </div>
           <div className="border-t border-gray-200 p-3">
+            {(() => {
+              const rel = relationships.find(r => r.personaId === activePersonaId);
+              if (!rel || !rel.blocked) return null;
+              return (
+                <div
+                  className="mb-2 px-3 py-2 rounded-lg border border-red-200 bg-red-50 text-xs text-red-700 flex items-start gap-2"
+                  data-testid="banner-relationship-blocked"
+                >
+                  <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>{t('room.relationship.blockedBanner')}</span>
+                </div>
+              );
+            })()}
             <div className="flex gap-2 items-end">
               <textarea
                 ref={personaInputRef}
@@ -989,7 +1111,10 @@ export function ProjectRoomPage() {
                   }
                 }}
                 placeholder={activePersona ? t('room.chatPlaceholderWith', { name: activePersona.name }) : t('room.chatPlaceholderNoPersona')}
-                disabled={!activePersona || personaLoading || isFinalized}
+                disabled={
+                  !activePersona || personaLoading || isFinalized
+                  || !!relationships.find(r => r.personaId === activePersonaId && r.blocked)
+                }
                 rows={6}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[150px] max-h-[300px]"
                 data-testid="input-persona-message"
@@ -997,7 +1122,10 @@ export function ProjectRoomPage() {
               <div className="flex flex-col gap-1">
                 <button
                   onClick={sendPersona}
-                  disabled={!personaInput.trim() || personaLoading || isFinalized}
+                  disabled={
+                    !personaInput.trim() || personaLoading || isFinalized
+                    || !!relationships.find(r => r.personaId === activePersonaId && r.blocked)
+                  }
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40"
                   data-testid="button-send-persona"
                 >
@@ -1397,6 +1525,101 @@ export function ProjectRoomPage() {
                 </ul>
               </div>
             )}
+            {isStaff && (
+              <div className="mt-3 pt-3 border-t border-gray-100" data-testid="panel-relationships">
+                <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
+                  <ShieldAlert className="w-3 h-3" /> {t('room.relationship.panelTitle')}
+                </div>
+                <p className="text-[10px] text-gray-400 mb-2">{t('room.relationship.panelHint')}</p>
+                {relationships.length === 0 ? (
+                  <p className="text-[11px] text-gray-400 italic">{t('room.relationship.noPersonas')}</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px]">
+                      <thead className="text-gray-500">
+                        <tr>
+                          <th className="text-left py-1 pr-2">Persona</th>
+                          <th className="text-left py-1 pr-2">{t('room.relationship.colScore')}</th>
+                          <th className="text-left py-1 pr-2">{t('room.relationship.colLabel')}</th>
+                          <th className="text-left py-1 pr-2">{t('room.relationship.colHistory')}</th>
+                          <th className="text-right py-1">{t('room.relationship.colActions')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {relationships.map(rel => {
+                          const bucketCls: Record<RelationshipBucket, string> = {
+                            cold:     'text-blue-700',
+                            strained: 'text-amber-700',
+                            neutral:  'text-gray-600',
+                            positive: 'text-emerald-700',
+                            warm:     'text-rose-700',
+                          };
+                          return (
+                            <tr key={rel.personaId} className="border-t border-gray-100 align-top" data-testid={`row-relationship-${rel.personaId}`}>
+                              <td className="py-1 pr-2">
+                                <span className="mr-1">{rel.avatarEmoji || '🤖'}</span>
+                                <span className="text-gray-800">{rel.personaName}</span>
+                                {rel.personaType === 'evaluator' && (
+                                  <span className="ml-1 text-[9px] text-purple-600 uppercase">eval</span>
+                                )}
+                              </td>
+                              <td className="py-1 pr-2 font-mono" data-testid={`text-relationship-score-${rel.personaId}`}>
+                                {rel.score === null ? '—' : (rel.score >= 0 ? `+${rel.score}` : rel.score)}
+                              </td>
+                              <td className={`py-1 pr-2 ${bucketCls[rel.bucket]}`}>
+                                {rel.label}{rel.blocked && <span className="ml-1 text-red-600">⛔</span>}
+                              </td>
+                              <td className="py-1 pr-2">
+                                {rel.history.length === 0 ? (
+                                  <span className="text-gray-400 italic">{t('room.relationship.noHistory')}</span>
+                                ) : (
+                                  <ul className="space-y-0.5">
+                                    {rel.history.slice(0, 5).map((ev, i) => {
+                                      const d = Number(ev.delta);
+                                      const deltaStr = Number.isFinite(d) ? (d >= 0 ? `+${d}` : `${d}`) : '0';
+                                      const sourceKey = ev.source === 'document_review' || ev.source === 'staff_adjust'
+                                        ? `room.relationship.eventSource.${ev.source}` : null;
+                                      const sourceLabel = sourceKey ? t(sourceKey) : (ev.source || '');
+                                      return (
+                                        <li key={i} className="text-gray-600">
+                                          <span className="font-mono mr-1">{deltaStr}</span>
+                                          <span className="text-gray-500">{sourceLabel}</span>
+                                          {ev.note && <span className="text-gray-400"> — {ev.note}</span>}
+                                          {ev.ts && (
+                                            <span className="text-gray-300 ml-1">
+                                              {new Date(ev.ts).toLocaleDateString(t('common.locale'), { day: 'numeric', month: 'short' })}
+                                            </span>
+                                          )}
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                )}
+                              </td>
+                              <td className="py-1 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAdjustingPersona(rel);
+                                    setAdjustDelta(1);
+                                    setAdjustNote('');
+                                    setAdjustError(null);
+                                  }}
+                                  className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded hover:bg-blue-100 text-[10px]"
+                                  data-testid={`button-adjust-relationship-${rel.personaId}`}
+                                >
+                                  {t('room.relationship.adjustBtn')}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
             {checkpoints.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
                 <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
@@ -1432,6 +1655,74 @@ export function ProjectRoomPage() {
         <div className="fixed bottom-4 right-4 bg-green-50 border border-green-200 text-green-800 px-4 py-2 rounded-lg text-sm" data-testid="text-info">
           {info}
           <button onClick={() => setInfo(null)} className="ml-2 font-bold">×</button>
+        </div>
+      )}
+
+      {/* Task #167 — Relatie corrigeren modal (staff) */}
+      {adjustingPersona && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="modal-adjust-relationship">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">
+              {t('room.relationship.adjustTitle', { name: adjustingPersona.personaName })}
+            </h2>
+            <p className="text-sm text-gray-600 mb-4">{t('room.relationship.adjustSub')}</p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  {t('room.relationship.deltaLabel')}
+                </label>
+                <input
+                  type="number"
+                  min={-10}
+                  max={10}
+                  step={1}
+                  value={adjustDelta}
+                  onChange={e => setAdjustDelta(parseInt(e.target.value || '0', 10))}
+                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                  data-testid="input-adjust-delta"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  {t('room.relationship.noteLabel')}
+                </label>
+                <textarea
+                  value={adjustNote}
+                  onChange={e => setAdjustNote(e.target.value)}
+                  rows={3}
+                  placeholder={t('room.relationship.notePlaceholder')}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  data-testid="input-adjust-note"
+                />
+              </div>
+              {adjustError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-xs" data-testid="text-adjust-error">
+                  {adjustError}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2 justify-end mt-5">
+              <button
+                onClick={() => { setAdjustingPersona(null); setAdjustError(null); }}
+                disabled={adjustSaving}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                data-testid="button-cancel-adjust"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={submitAdjust}
+                disabled={adjustSaving || !adjustNote.trim() || adjustDelta === 0}
+                className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
+                data-testid="button-confirm-adjust"
+              >
+                {adjustSaving
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <ShieldAlert className="w-4 h-4" />}
+                {adjustSaving ? t('room.relationship.saving') : t('room.relationship.save')}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
