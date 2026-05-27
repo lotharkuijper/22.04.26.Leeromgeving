@@ -21,6 +21,7 @@ import {
   checkLastTeacherProtection,
   parseForceFlag,
 } from './memberRoleAuth.js';
+import { validateReviewResponse, canRequestDocumentReview } from './documentReview.js';
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
 // uitvoeren, zoals bytea-inserts van binaire bestanden.
@@ -4629,6 +4630,32 @@ Geef je feedback in vier onderdelen:
 
 Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student in de gezondheidswetenschappen.`;
 
+// Task #166: standaard prompt-template voor document-reviews. De docent kan
+// dit in de admin-UI overschrijven (Prompts → sectie 'project'). De template
+// gebruikt geen placeholder-syntax — de server vouwt de runtime-velden
+// (persona-prompt, rubric, document-tekst, etc.) als losse blokken eronder
+// in zodat de prompt zelf-redactiebaar blijft zonder vaste sleutels.
+const DEFAULT_DOCUMENT_REVIEW_PROMPT = `Je bent een formatieve beoordelaar voor een groep VU-studenten epi/biostat. Geef een gestructureerd oordeel over het hieronder bijgevoegde studentdocument.
+
+Aanspraakvorm: spreek de groep aan met "jullie". Wees concreet, vermijd derde-persoonsformuleringen ("de groep heeft …").
+
+Antwoord ALTIJD met geldig JSON, zonder extra tekst eromheen, volgens dit schema:
+{
+  "verdict": "accepted" | "conditional" | "rejected",
+  "reasoning": "2-4 zinnen onderbouwing in het Nederlands, in tweede persoon",
+  "relationship_delta": geheel getal tussen -5 en +5
+}
+
+Betekenis verdict:
+- "accepted" = je vindt het document inhoudelijk voldoende.
+- "conditional" = bruikbaar mits jullie de genoemde punten aanpakken.
+- "rejected" = nog niet op niveau; geef duidelijk aan wat eerst anders moet.
+
+Betekenis relationship_delta: hoeveel verschuift jouw verstandhouding met deze groep door dit document?
++5 = sterk positief, 0 = neutraal, -5 = sterk negatief. Wees terughoudend; gebruik extremen alleen bij duidelijke aanleiding.
+
+Geef GEEN markdown, GEEN code fences, alléén het JSON-object.`;
+
 let promptsHasSection = false;
 
 async function initChatbotPromptSection() {
@@ -4844,6 +4871,34 @@ async function initChatbotPromptSection() {
       }
     } catch (chatSyncErr) {
       console.warn('[init] Chat-prompt rapportage exception:', chatSyncErr.message);
+    }
+
+    // Task #166: zorg dat er een 'document_review'-prompt in sectie 'project'
+    // bestaat. Idempotent op (section='project', name='document_review').
+    try {
+      const { data: existingDR } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('id')
+        .eq('section', 'project')
+        .eq('name', 'document_review')
+        .maybeSingle();
+      if (!existingDR) {
+        const { error: drErr } = await supabaseAdmin
+          .from('chatbot_prompts')
+          .insert({
+            name: 'document_review',
+            content: DEFAULT_DOCUMENT_REVIEW_PROMPT,
+            is_active: false,
+            section: 'project',
+          });
+        if (drErr) {
+          console.warn('[init] document_review-prompt aanmaken mislukt:', drErr.message);
+        } else {
+          console.log('[init] Standaard document_review-prompt aangemaakt (sectie "project")');
+        }
+      }
+    } catch (drSeedErr) {
+      console.warn('[init] document_review-prompt seed exception:', drSeedErr.message);
     }
 
     console.log('[init] chatbot_prompts sectie-migratie voltooid (section kolom beschikbaar)');
@@ -6378,9 +6433,26 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
     if (!isStaff) pdQuery = pdQuery.eq('is_visible_to_students', true);
     const { data: projectDocs } = await pdQuery;
 
+    // Task #166: minimale evaluator-info voor non-staff zodat de
+    // document-review UI per upload de avatars + "Vraag oordeel aan"-knop kan
+    // tonen, zonder de evaluators door de persona-dropdown te leaken.
+    let evaluators = [];
+    {
+      const { data: evRows } = await supabaseAdmin
+        .from('project_personas')
+        .select('id, name, avatar_emoji, persona_type')
+        .eq('project_id', projectId)
+        .eq('persona_type', 'evaluator')
+        .order('sort_order');
+      evaluators = (evRows || []).map(p => ({
+        id: p.id, name: p.name, avatar_emoji: p.avatar_emoji,
+      }));
+    }
+
     return res.json({
       project, group, members, personas, checkpoints,
       projectDocuments: projectDocs || [],
+      evaluators,
       hasEvaluator: evaluatorCount > 0,
     });
   } catch (err) {
@@ -8463,6 +8535,281 @@ app.delete('/api/projects/:projectId/documents/:docId', async (req, res) => {
     }
     return res.json({ ok: true });
   } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================================================
+// Task #166 — Documentoordelen (Fase 1). Een evaluator-persona geeft een
+// gestructureerd JSON-oordeel over een geüpload student-document. Het oordeel
+// (verdict, reasoning, relationship_delta) wordt opgeslagen in
+// project_document_reviews én gespiegeld in learning_journal_entries per
+// groepslid (idempotent op source_ref).
+// =============================================================================
+
+const VERDICT_LABELS_NL = {
+  accepted: 'Aanvaard',
+  conditional: 'Onder voorwaarden',
+  rejected: 'Afgewezen',
+};
+
+app.get('/api/projects/:projectId/documents/:docId/reviews', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, docId } = req.params;
+  const groupId = req.query.groupId;
+  if (!groupId) return res.status(400).json({ error: 'groupId is vereist' });
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    if (!(await userHasProjectAccess(auth.user, profile, project))) {
+      return res.status(403).json({ error: 'Geen toegang tot dit project' });
+    }
+    // Coherentie-check: groep + document moeten écht bij dit project horen,
+    // anders kan een docent uit project A reviews uit project B uitlezen door
+    // een vreemde groupId/docId in de URL te zetten (IDOR).
+    const [{ data: groupCheck }, { data: docCheck }] = await Promise.all([
+      supabaseAdmin.from('project_groups').select('id, project_id').eq('id', groupId).maybeSingle(),
+      supabaseAdmin.from('project_documents').select('id, project_id').eq('id', docId).maybeSingle(),
+    ]);
+    if (!groupCheck || groupCheck.project_id !== projectId) {
+      return res.status(404).json({ error: 'Groep niet gevonden in dit project' });
+    }
+    if (!docCheck || docCheck.project_id !== projectId) {
+      return res.status(404).json({ error: 'Document niet gevonden in dit project' });
+    }
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
+    const memberOfGroup = await isGroupMember(groupId, auth.user.id);
+    if (!isStaff && !memberOfGroup) {
+      return res.status(403).json({ error: 'Geen toegang tot deze groep' });
+    }
+    const { data, error: e } = await supabaseAdmin
+      .from('project_document_reviews')
+      .select('id, document_id, persona_id, group_id, verdict, reasoning, relationship_delta, requested_by, created_at')
+      .eq('document_id', docId).eq('group_id', groupId)
+      .order('created_at', { ascending: false });
+    if (e) {
+      // Tabel bestaat nog niet → defensief leeg antwoord met duidelijke uitleg.
+      if (e.code === '42P01' || /project_document_reviews/i.test(e.message || '')) {
+        return res.status(503).json({
+          error: 'Migratie 20260528100000_project_document_reviews.sql is nog niet toegepast in Supabase.',
+          reviews: [],
+        });
+      }
+      return res.status(500).json({ error: e.message });
+    }
+    return res.json({ reviews: data || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/projects/:projectId/documents/:docId/reviews', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, docId } = req.params;
+  const { personaId, groupId } = req.body || {};
+  if (!personaId || !groupId) {
+    return res.status(400).json({ error: 'personaId en groupId zijn vereist' });
+  }
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id, title, research_question, goals, briefing_markdown')
+      .eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
+    const memberOfGroup = await isGroupMember(groupId, auth.user.id);
+    const authzCheck = canRequestDocumentReview({ isStaff, isGroupMember: memberOfGroup });
+    if (!authzCheck.allowed) {
+      return res.status(authzCheck.status).json({ error: authzCheck.error });
+    }
+
+    // Groep moet bij dit project horen.
+    const { data: group } = await supabaseAdmin
+      .from('project_groups').select('id, project_id, name').eq('id', groupId).maybeSingle();
+    if (!group || group.project_id !== projectId) {
+      return res.status(404).json({ error: 'Groep niet gevonden in dit project' });
+    }
+
+    // Persona moet evaluator zijn én bij dit project horen.
+    const { data: persona } = await supabaseAdmin
+      .from('project_personas').select('id, project_id, name, avatar_emoji, system_prompt, persona_type')
+      .eq('id', personaId).maybeSingle();
+    if (!persona || persona.project_id !== projectId) {
+      return res.status(404).json({ error: 'Persona niet gevonden in dit project' });
+    }
+    if (persona.persona_type !== 'evaluator') {
+      return res.status(400).json({ error: 'Alleen evaluator-persona\'s kunnen oordelen afgeven' });
+    }
+
+    // Document moet bij dit project horen en moet tekst-extraheerbaar zijn.
+    const { data: doc } = await supabaseAdmin
+      .from('project_documents')
+      .select('id, project_id, filename, content_text, is_visible_to_students')
+      .eq('id', docId).eq('project_id', projectId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    if (BINARY_DOWNLOAD_EXT_RE.test(doc.filename || '')) {
+      return res.status(400).json({
+        error: 'Dit bestand is binair (bv. Jamovi/SPSS) — daarover kan geen tekstueel oordeel worden gegeven.',
+      });
+    }
+    if (!doc.content_text || !doc.content_text.trim()) {
+      return res.status(400).json({ error: 'Document bevat geen leesbare tekst om te beoordelen' });
+    }
+    if (!isStaff && !doc.is_visible_to_students) {
+      return res.status(403).json({ error: 'Dit document is niet zichtbaar voor studenten' });
+    }
+
+    // Hidden rubrics van deze evaluator (alleen verborgen — voorkomt
+    // prompt-injection via door studenten geüploade rubric-bestanden).
+    const { data: rubricDocs } = await supabaseAdmin
+      .from('project_persona_documents').select('filename, content_text')
+      .eq('project_id', projectId).eq('persona_id', persona.id)
+      .eq('is_hidden_rubric', true);
+    const rubricBlock = (rubricDocs || []).map(d =>
+      `[Rubric: ${d.filename}]\n${(d.content_text || '').slice(0, 6000)}`
+    ).join('\n\n').slice(0, 20000);
+
+    // Actieve document_review-prompt uit chatbot_prompts (sectie 'project').
+    const { data: drPromptRow } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('content')
+      .eq('section', 'project').eq('name', 'document_review')
+      .maybeSingle();
+    const systemTemplate = (drPromptRow?.content || DEFAULT_DOCUMENT_REVIEW_PROMPT).trim();
+
+    const documentText = doc.content_text.slice(0, 20000);
+    const personaIntro = (persona.system_prompt || '').trim();
+
+    const userBlock = `Persona-achtergrond:
+${personaIntro || '(geen extra persona-instructies)'}
+
+Project: ${project.title || '(naamloos)'}
+Onderzoeksvraag: ${project.research_question || '(geen)'}
+Leerdoelen: ${project.goals || '(geen)'}
+
+Verborgen rubric/criteria (alleen voor jou):
+${rubricBlock || '(geen rubric-bestand gekoppeld; gebruik dan de leerdoelen hierboven)'}
+
+Groep: ${group.name}
+
+Studentdocument "${doc.filename}":
+${documentText}
+
+Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
+
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+
+    // Roep de LLM aan in JSON-mode. Bij ongeldig JSON-antwoord doen we één
+    // retry met een striktere herinnering; daarna geven we netjes op.
+    async function callModel(extraReminder) {
+      const messages = [
+        { role: 'system', content: systemTemplate },
+        { role: 'user', content: userBlock + (extraReminder ? `\n\n${extraReminder}` : '') },
+      ];
+      const r = await fetch(OPENAI_CHAT_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages,
+          temperature: 0.2,
+          response_format: { type: 'json_object' },
+          [MAX_TOKENS_PARAM]: 800,
+        }),
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(`Taalmodel-fout (${r.status}): ${txt.slice(0, 200)}`);
+      }
+      const j = await r.json();
+      return (j.choices?.[0]?.message?.content || '').trim();
+    }
+
+    let rawResponse;
+    let validation;
+    try {
+      rawResponse = await callModel(null);
+      validation = validateReviewResponse(rawResponse);
+      if (!validation.ok) {
+        rawResponse = await callModel(`Je vorige antwoord was ongeldig: ${validation.error}. Antwoord nu uitsluitend met het JSON-object volgens het schema.`);
+        validation = validateReviewResponse(rawResponse);
+      }
+    } catch (modelErr) {
+      return res.status(502).json({ error: modelErr.message });
+    }
+    if (!validation.ok) {
+      return res.status(502).json({
+        error: `Persona gaf geen geldig JSON-oordeel: ${validation.error}`,
+        raw: rawResponse?.slice(0, 500),
+      });
+    }
+
+    // Persisteer review.
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from('project_document_reviews')
+      .insert({
+        document_id: docId,
+        persona_id: persona.id,
+        group_id: groupId,
+        verdict: validation.value.verdict,
+        reasoning: validation.value.reasoning,
+        relationship_delta: validation.value.relationship_delta,
+        requested_by: auth.user.id,
+        raw_llm_response: { content: rawResponse },
+      })
+      .select('id, document_id, persona_id, group_id, verdict, reasoning, relationship_delta, requested_by, created_at')
+      .single();
+    if (insErr) {
+      if (insErr.code === '42P01') {
+        return res.status(503).json({
+          error: 'Migratie 20260528100000_project_document_reviews.sql is nog niet toegepast in Supabase.',
+        });
+      }
+      return res.status(500).json({ error: insErr.message });
+    }
+
+    // Spiegel in journal per groepslid (idempotent op source_ref).
+    const sourceRef = `document_review:${docId}:${persona.id}:${inserted.id}`;
+    const verdictLabel = VERDICT_LABELS_NL[validation.value.verdict] || validation.value.verdict;
+    const titleLabel = `${persona.avatar_emoji || '🧑‍⚖️'} Oordeel ${verdictLabel} — ${persona.name} over "${doc.filename}"`;
+    const journalContent = `${verdictLabel}: ${validation.value.reasoning}`;
+    const { data: groupMembers } = await supabaseAdmin
+      .from('project_group_members').select('user_id').eq('group_id', groupId);
+    const rows = (groupMembers || []).map(m => ({
+      user_id: m.user_id,
+      title: titleLabel,
+      content: journalContent,
+      activity_type: 'project_reflection',
+      source_ref: sourceRef,
+    }));
+    if (rows.length > 0) {
+      const { error: jErr } = await supabaseAdmin.from('learning_journal_entries').insert(rows);
+      if (jErr) {
+        // Defensief: source_ref-kolom kan ontbreken in oudere DBs, en unique
+        // violation duidt op idempotentie (dubbele post).
+        if (jErr.code === '42703' || /source_ref/i.test(jErr.message || '')) {
+          await supabaseAdmin.from('learning_journal_entries').insert(
+            rows.map(({ source_ref: _ignored, ...rest }) => rest)
+          );
+        } else if (jErr.code !== '23505') {
+          console.warn('[document_review] journal-spiegeling mislukte:', jErr.message);
+        }
+      }
+    }
+
+    return res.json({ review: inserted });
+  } catch (err) {
+    console.error('[document_review]', err);
     return res.status(500).json({ error: err.message });
   }
 });

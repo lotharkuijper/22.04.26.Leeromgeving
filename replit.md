@@ -43,6 +43,15 @@ Per module (`chat`, `explain`, `quiz`, `project`) en per cursus instelbaar via `
 - Persona-creatie zit in **Projecten → Beheer**; `PersonaLibraryTab` is read-only en dient als hergebruik-bibliotheek.
 - ProjectRoomPage: persona als `<select>`-dropdown, persona-input is auto-resize textarea (Enter=verzenden, Shift+Enter=nieuwe regel, max ≈ 6 regels).
 
+## Documentoordelen (Task #166, Fase 1)
+- Tabel `project_document_reviews` (migratie `20260528100000_project_document_reviews.sql`): id, document_id, persona_id, group_id, verdict (enum `project_document_verdict` ∈ {`accepted`,`conditional`,`rejected`}), reasoning, relationship_delta (CHECK -5..+5), requested_by, raw_llm_response jsonb, created_at. RLS: SELECT voor groepsleden + staff van de cursus.
+- `server/documentReview.js` — pure helpers: `validateReviewResponse` (parse + clamp delta, verdict-enum, reasoning niet leeg) en `canRequestDocumentReview({isStaff,isGroupMember})`. Getest via `server/__tests__/documentReview.test.js`.
+- Endpoints onder `/api/projects/:projectId/documents/:docId/reviews`:
+  - `GET ?groupId=` — lijst reviews voor (doc, groep). Toegang: staff of groepslid.
+  - `POST { personaId, groupId }` — vraagt evaluator-persona om gestructureerd JSON-oordeel. Server gebruikt `OPENAI_CHAT_URL` + `OPENAI_MODEL` met `response_format: json_object` (1 retry bij ongeldig JSON), persisteert review + spiegelt per groepslid een `learning_journal_entries`-regel (`source_ref="document_review:<docId>:<personaId>:<reviewId>"`). Weigert binaire bestanden (`BINARY_DOWNLOAD_EXT_RE`) en docs zonder `content_text`. Verborgen rubrics van de evaluator (`is_hidden_rubric=true`) worden meegestuurd.
+- `chatbot_prompts` sectie `project`, name `document_review`: editor-baar systeemsjabloon (`DEFAULT_DOCUMENT_REVIEW_PROMPT`). Geseed met `is_active=false` zodat docenten zelf activeren.
+- `/api/projects/:projectId/room` retourneert nu ook `evaluators: [{id,name,avatar_emoji}]` zodat de UI per upload de oordelen-strip + "Vraag oordeel"-knoppen kan tonen, óók voor niet-staff (evaluator-persona's blijven uit de `personas`-dropdown gefilterd voor studenten).
+
 ## Conventies
 - TypeScript strict, geen package.json edits.
 - Data-testids op interactieve elementen.

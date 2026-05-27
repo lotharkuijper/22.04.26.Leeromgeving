@@ -7,6 +7,7 @@ import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
   Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database, EyeOff,
   LogOut, ScrollText, ChevronDown, ChevronRight, UploadCloud,
+  Gavel, XCircle, AlertTriangle,
 } from 'lucide-react';
 
 interface Persona {
@@ -104,6 +105,23 @@ interface ProjectMaterialDoc {
   is_visible_to_students: boolean;
   created_at: string;
 }
+interface EvaluatorPersona {
+  id: string;
+  name: string;
+  avatar_emoji: string | null;
+}
+type ReviewVerdict = 'accepted' | 'conditional' | 'rejected';
+interface DocumentReview {
+  id: string;
+  document_id: string;
+  persona_id: string;
+  group_id: string;
+  verdict: ReviewVerdict;
+  reasoning: string;
+  relationship_delta: number;
+  requested_by: string | null;
+  created_at: string;
+}
 interface ClosedConversation {
   threadId: string;
   personaId: string;
@@ -152,6 +170,10 @@ export function ProjectRoomPage() {
   const [projectMaterials, setProjectMaterials] = useState<ProjectMaterialDoc[]>([]);
   const [bestandenOpen, setBestandenOpen] = useState(false);
   const [hasEvaluator, setHasEvaluator] = useState(false);
+  const [evaluators, setEvaluators] = useState<EvaluatorPersona[]>([]);
+  const [reviewsByDoc, setReviewsByDoc] = useState<Record<string, DocumentReview[]>>({});
+  const [reviewingKey, setReviewingKey] = useState<string | null>(null);
+  const [expandedReviewId, setExpandedReviewId] = useState<string | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -201,6 +223,7 @@ export function ProjectRoomPage() {
       setPersonas(data.personas || []);
       setCheckpoints(data.checkpoints || []);
       setProjectMaterials(data.projectDocuments || []);
+      setEvaluators(data.evaluators || []);
       setHasEvaluator(!!data.hasEvaluator);
       if (!activePersonaId && data.personas?.length > 0) {
         setActivePersonaId(data.personas[0].id);
@@ -420,6 +443,64 @@ export function ProjectRoomPage() {
   useEffect(() => {
     chatScrollRef.current?.scrollTo({ top: chatScrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [chatMessages]);
+
+  const loadReviewsForDoc = useCallback(async (docId: string) => {
+    if (!projectId || !groupId || !token) return;
+    try {
+      const r = await fetch(`/api/projects/${projectId}/documents/${docId}/reviews?groupId=${groupId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setReviewsByDoc(prev => ({ ...prev, [docId]: data.reviews || [] }));
+      } else if (r.status !== 503) {
+        // 503 = migratie nog niet toegepast: stil leeg laten, geen fout-pop-up.
+        console.warn('[reviews load]', data.error);
+      }
+    } catch (e) {
+      console.warn('[reviews load]', e);
+    }
+  }, [projectId, groupId, token]);
+
+  // Laad reviews voor elk zichtbaar document zodra de materialenlijst en
+  // groep beschikbaar zijn. Binaire bestanden slaan we over — daar kan geen
+  // tekstueel oordeel op gegeven worden.
+  useEffect(() => {
+    if (!projectMaterials.length) return;
+    for (const d of projectMaterials) {
+      if (/\.(omv|omt|sav|jasp|rdata|rds|sps|do|dta)$/i.test(d.filename || '')) continue;
+      loadReviewsForDoc(d.id);
+    }
+  }, [projectMaterials, loadReviewsForDoc]);
+
+  const requestDocumentReview = async (docId: string, persona: EvaluatorPersona) => {
+    if (!projectId || !groupId || !token) return;
+    const key = `${docId}:${persona.id}`;
+    setReviewingKey(key);
+    setError(null);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/documents/${docId}/reviews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ personaId: persona.id, groupId }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || t('room.review.failed'));
+      if (data.review) {
+        setReviewsByDoc(prev => ({
+          ...prev,
+          [docId]: [data.review, ...(prev[docId] || []).filter((x: DocumentReview) => x.id !== data.review.id)],
+        }));
+        setExpandedReviewId(data.review.id);
+      }
+      setInfo(t('room.review.success', { name: persona.name }));
+      setTimeout(() => setInfo(null), 5000);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setReviewingKey(null);
+    }
+  };
 
   const downloadMaterial = async (d: ProjectMaterialDoc) => {
     if (!projectId || !token) return;
@@ -1212,6 +1293,92 @@ export function ProjectRoomPage() {
                               <EyeOff className="w-2.5 h-2.5" /> {t('room.hidden')}
                             </span>
                           )}
+                          {(() => {
+                            const isBinary = /\.(omv|omt|sav|jasp|rdata|rds|sps|do|dta)$/i.test(d.filename || '');
+                            if (isBinary || evaluators.length === 0) return null;
+                            const docReviews = reviewsByDoc[d.id] || [];
+                            const verdictMeta: Record<ReviewVerdict, { Icon: any; cls: string; label: string }> = {
+                              accepted:    { Icon: CheckCircle2, cls: 'bg-green-50 text-green-700 border-green-200',  label: t('room.review.verdictAccepted') },
+                              conditional: { Icon: AlertTriangle, cls: 'bg-amber-50 text-amber-700 border-amber-200', label: t('room.review.verdictConditional') },
+                              rejected:    { Icon: XCircle,       cls: 'bg-red-50 text-red-700 border-red-200',       label: t('room.review.verdictRejected') },
+                            };
+                            return (
+                              <div className="basis-full mt-1 pl-4" data-testid={`reviews-${d.id}`}>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="text-[10px] text-gray-500 inline-flex items-center gap-1">
+                                    <Gavel className="w-2.5 h-2.5" /> {t('room.review.title')}:
+                                  </span>
+                                  {docReviews.length === 0 && (
+                                    <span className="text-[10px] text-gray-400 italic" data-testid={`reviews-empty-${d.id}`}>
+                                      {t('room.review.empty')}
+                                    </span>
+                                  )}
+                                  {evaluators.map(ev => {
+                                    const review = docReviews.find(r => r.persona_id === ev.id) || null;
+                                    const meta = review ? verdictMeta[review.verdict] : null;
+                                    const isReviewing = reviewingKey === `${d.id}:${ev.id}`;
+                                    // Zowel staff als groepsleden mogen een oordeel aanvragen
+                                    // (server doet de definitieve autz-check via canRequestDocumentReview).
+                                    const showButton = true;
+                                    return (
+                                      <div key={ev.id} className="inline-flex items-center gap-1">
+                                        {review && meta ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => setExpandedReviewId(prev => prev === review.id ? null : review.id)}
+                                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] hover:opacity-80 ${meta.cls}`}
+                                            title={`${ev.avatar_emoji || '🤖'} ${ev.name} — ${meta.label}`}
+                                            data-testid={`badge-review-${d.id}-${ev.id}`}
+                                          >
+                                            <span>{ev.avatar_emoji || '🤖'}</span>
+                                            <meta.Icon className="w-2.5 h-2.5" />
+                                            <span className="hidden sm:inline">{ev.name}</span>
+                                          </button>
+                                        ) : (
+                                          <span
+                                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-dashed border-gray-200 text-[10px] text-gray-400"
+                                            title={`${ev.avatar_emoji || '🤖'} ${ev.name} — ${t('room.review.empty')}`}
+                                            data-testid={`badge-review-pending-${d.id}-${ev.id}`}
+                                          >
+                                            <span>{ev.avatar_emoji || '🤖'}</span>
+                                            <span className="hidden sm:inline">{ev.name}</span>
+                                          </span>
+                                        )}
+                                        {showButton && !isFinalized && (
+                                          <button
+                                            type="button"
+                                            onClick={() => requestDocumentReview(d.id, ev)}
+                                            disabled={isReviewing}
+                                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 disabled:opacity-50"
+                                            title={t('room.review.requestTitle', { name: ev.name })}
+                                            data-testid={`button-request-review-${d.id}-${ev.id}`}
+                                          >
+                                            {isReviewing
+                                              ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                              : (review ? t('room.review.requestAgain') : t('room.review.requestShort'))}
+                                          </button>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                {docReviews.map(review => expandedReviewId === review.id && (
+                                  <div
+                                    key={review.id}
+                                    className="mt-1 ml-1 p-2 bg-white border border-gray-200 rounded text-[11px] text-gray-700"
+                                    data-testid={`review-detail-${review.id}`}
+                                  >
+                                    <div className="text-[10px] text-gray-400 mb-1">
+                                      {new Date(review.created_at).toLocaleString(t('common.locale'), {
+                                        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                                      })}
+                                    </div>
+                                    <div className="whitespace-pre-wrap">{review.reasoning}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </li>
                       ))}
                     </ul>
