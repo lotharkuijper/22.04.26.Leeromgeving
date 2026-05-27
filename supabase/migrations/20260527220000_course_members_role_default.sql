@@ -1,16 +1,19 @@
 -- Task #168 follow-up: course_members.role is een legacy NOT NULL kolom
--- zonder default. Nieuwe inserts via /api/admin/courses/:id/members/:userId
--- crashen daardoor met "null value in column 'role' ... violates not-null".
+-- met CHECK (role IN ('superuser','teacher','student')) en zonder default.
+-- Nieuwe inserts via /api/admin/courses/:id/members/:userId crashen daardoor
+-- met "null value in column 'role' ... violates not-null" of "violates check
+-- constraint course_members_role_check".
 --
--- We zetten een veilige default zodat upserts blijven werken, en we
--- backfillen eventuele NULLs. De inhoudelijke rol leeft sinds #165 in
--- course_members.member_role; deze kolom is puur compatibility.
+-- We zetten 'student' als veilige default (komt overeen met member_role-default
+-- en valt binnen de check-constraint) en backfillen eventuele NULLs / legacy
+-- 'member'-waardes. De inhoudelijke rol leeft sinds #165 in member_role; deze
+-- kolom is puur compatibility.
 
 BEGIN;
 
-UPDATE course_members SET role = 'member' WHERE role IS NULL;
+UPDATE course_members SET role = 'student' WHERE role IS NULL OR role = 'member';
 
 ALTER TABLE course_members
-  ALTER COLUMN role SET DEFAULT 'member';
+  ALTER COLUMN role SET DEFAULT 'student';
 
 COMMIT;
