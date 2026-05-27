@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, Sparkles, AlertTriangle } from 'lucide-react';
+import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, ChevronRight, Sparkles, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
@@ -220,6 +220,13 @@ export function AdminPage() {
   const [conceptsMeta, setConceptsMeta] = useState<{ ragCount: number; manualCount: number; lastExtraction: string | null; lastDocumentChange: string | null; lastSuccessfulRegeneration: string | null } | null>(null);
   const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole } | null>(null);
+  // Uitklap-state voor de Gebruikers-tab: per user → lijst cursussen waarin
+  // die user docent is. Lazy geladen via /api/admin/users/:id/teacher-courses.
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+  const [teacherCoursesByUser, setTeacherCoursesByUser] = useState<Record<string, {
+    loading: boolean; error: string | null;
+    courses: Array<{ courseId: string; courseName: string; isActive: boolean | null }>;
+  }>>({});
   const [docMsg, setDocMsg] = useState<string | null>(null);
   const [promptMsg, setPromptMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<ChatbotPrompt | null>(null);
@@ -573,6 +580,35 @@ export function AdminPage() {
   const handleChangeUserRole = async (userId: string, newRole: UserRole) => {
     if (!isAdmin) return;
     setRoleConfirm({ userId, newRole });
+  };
+
+  // Klap een gebruikersrij open/dicht en lazy-load de lijst cursussen
+  // waarin die gebruiker per-cursus docent is. Cache per user-id, zodat
+  // sluiten en heropenen niet opnieuw fetcht.
+  const toggleExpandUser = async (userId: string) => {
+    if (expandedUserId === userId) {
+      setExpandedUserId(null);
+      return;
+    }
+    setExpandedUserId(userId);
+    if (teacherCoursesByUser[userId]) return;
+    setTeacherCoursesByUser((m) => ({ ...m, [userId]: { loading: true, error: null, courses: [] } }));
+    try {
+      const token = session?.access_token;
+      if (!token) throw new Error('Niet ingelogd.');
+      const res = await fetch(`/api/admin/users/${userId}/teacher-courses`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Laden mislukt (${res.status})`);
+      setTeacherCoursesByUser((m) => ({
+        ...m,
+        [userId]: { loading: false, error: null, courses: json.courses || [] },
+      }));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setTeacherCoursesByUser((m) => ({ ...m, [userId]: { loading: false, error: msg, courses: [] } }));
+    }
   };
 
   const confirmRoleChange = async () => {
@@ -1022,41 +1058,107 @@ const tabGroups = [
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredUsers.map(user => (
-                      <tr key={user.id} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="py-3 px-4">{user.full_name || '-'}</td>
-                        <td className="py-3 px-4">{user.email}</td>
-                        <td className="py-3 px-4">
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            user.role === 'admin'
-                              ? 'bg-red-100 text-red-700'
-                              : user.role === 'docent'
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'bg-green-100 text-green-700'
-                          }`}>
-                            {user.role}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
-                          {isAdmin && user.id !== profile?.id && (
-                            <div className="flex gap-2">
-                              {/* Per-cursus docentrol beheer je via Cursussen →
-                                  Beheer leden. De globale 'docent'-rol bestaat
-                                  niet meer als toegangscriterium. */}
-                              {user.role !== 'student' && (
-                                <button
-                                  onClick={() => handleChangeUserRole(user.id, 'student')}
-                                  disabled={loading}
-                                  className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors disabled:opacity-50"
-                                >
-                                  {t('admin.users.toStudent')}
-                                </button>
+                    {filteredUsers.map(user => {
+                      const expanded = expandedUserId === user.id;
+                      const tcState = teacherCoursesByUser[user.id];
+                      // 'docent' bestaat niet meer als globale rol — render
+                      // alleen admin / student als badge; per-cursus
+                      // docentschap zie je in de uitklap hieronder.
+                      const globalRole: 'admin' | 'student' = user.role === 'admin' ? 'admin' : 'student';
+                      return (
+                        <Fragment key={user.id}>
+                          <tr className="border-b border-gray-100 hover:bg-gray-50" data-testid={`row-user-${user.id}`}>
+                            <td className="py-3 px-4">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandUser(user.id)}
+                                className="inline-flex items-center gap-2 text-left hover:text-blue-700"
+                                aria-expanded={expanded}
+                                aria-label={expanded ? t('admin.users.collapseTeacherCourses') : t('admin.users.expandTeacherCourses')}
+                                data-testid={`button-expand-user-${user.id}`}
+                              >
+                                {expanded
+                                  ? <ChevronDown className="w-4 h-4 text-gray-500" />
+                                  : <ChevronRight className="w-4 h-4 text-gray-500" />}
+                                <span>{user.full_name || '-'}</span>
+                              </button>
+                            </td>
+                            <td className="py-3 px-4">{user.email}</td>
+                            <td className="py-3 px-4">
+                              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                globalRole === 'admin'
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-green-100 text-green-700'
+                              }`} data-testid={`badge-role-${user.id}`}>
+                                {globalRole}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              {isAdmin && user.id !== profile?.id && user.role !== 'student' && (
+                                <div className="flex gap-2">
+                                  {/* Admin↔student promotie. De per-cursus
+                                      docentrol beheer je via Cursussen →
+                                      Beheer leden. */}
+                                  <button
+                                    onClick={() => handleChangeUserRole(user.id, 'student')}
+                                    disabled={loading}
+                                    className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors disabled:opacity-50"
+                                    data-testid={`button-to-student-${user.id}`}
+                                  >
+                                    {t('admin.users.toStudent')}
+                                  </button>
+                                </div>
                               )}
-                            </div>
+                            </td>
+                          </tr>
+                          {expanded && (
+                            <tr className="border-b border-gray-100 bg-gray-50/60" data-testid={`row-user-expand-${user.id}`}>
+                              <td colSpan={4} className="px-4 py-3">
+                                <div className="text-xs font-semibold text-gray-600 mb-2">
+                                  {t('admin.users.teacherInCourses')}
+                                </div>
+                                {tcState?.loading && (
+                                  <div className="flex items-center gap-2 text-sm text-gray-500">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    {t('admin.users.loadingTeacherCourses')}
+                                  </div>
+                                )}
+                                {tcState?.error && !tcState.loading && (
+                                  <div className="text-sm text-red-700">{tcState.error}</div>
+                                )}
+                                {tcState && !tcState.loading && !tcState.error && tcState.courses.length === 0 && (
+                                  <div className="text-sm text-gray-500" data-testid={`text-no-teacher-courses-${user.id}`}>
+                                    {t('admin.users.noTeacherCourses')}
+                                  </div>
+                                )}
+                                {tcState && !tcState.loading && !tcState.error && tcState.courses.length > 0 && (
+                                  <ul className="space-y-1.5">
+                                    {tcState.courses.map((c) => (
+                                      <li key={c.courseId} className="flex items-center gap-3 flex-wrap" data-testid={`row-teacher-course-${user.id}-${c.courseId}`}>
+                                        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-100 text-blue-700">Docent</span>
+                                        <span className="text-sm text-gray-900" data-testid={`text-teacher-course-${c.courseId}`}>{c.courseName}</span>
+                                        {c.isActive === false && (
+                                          <span className="text-[11px] text-gray-500">(inactief)</span>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => navigate(`/admin/courses?manageMembers=${c.courseId}`)}
+                                          className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 px-2 py-1 rounded border border-blue-200 hover:bg-blue-50 transition-colors"
+                                          data-testid={`link-manage-members-${c.courseId}`}
+                                        >
+                                          <Users className="w-3.5 h-3.5" />
+                                          {t('admin.users.manageCourseMembers')}
+                                        </button>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                      </tr>
-                    ))}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

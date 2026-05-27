@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2, Users, FolderTree, FolderOpen, UserX, Flame } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCourseAccess } from '../contexts/CourseAccessContext';
@@ -33,10 +33,14 @@ interface DeleteCounts {
 }
 
 export default function CoursesAdmin() {
-  const { session, isAdmin } = useAuth();
+  const { session, isAdmin, user } = useAuth();
   const { refreshCourses } = useCourseAccess();
   const { setActiveCourse } = useActiveCourse();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Cursussen waarin de huidige user per-cursus docent is — bepaalt of
+  // de 'Beheer leden'-knop in een rij zichtbaar is voor non-admins.
+  const [myTeacherCourseIds, setMyTeacherCourseIds] = useState<Set<string>>(new Set());
   const [courses, setCourses] = useState<CourseRow[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [name, setName] = useState('');
@@ -160,7 +164,7 @@ export default function CoursesAdmin() {
     }
   }
 
-  async function changeMemberRole(userId: string, newRole: 'student' | 'teacher') {
+  async function changeMemberRole(userId: string, newRole: 'student' | 'teacher', force = false) {
     if (!membersTarget) return;
     const token = session?.access_token;
     if (!token) {
@@ -170,13 +174,27 @@ export default function CoursesAdmin() {
     setMemberRoleBusy(userId);
     setMembersError(null);
     try {
-      const res = await fetch(`/api/admin/courses/${membersTarget.id}/members/${userId}`, {
+      const url = `/api/admin/courses/${membersTarget.id}/members/${userId}${force ? '?force=1' : ''}`;
+      const res = await fetch(url, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ member_role: newRole }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // Bij last_teacher-409 mag een admin de wijziging forceren. We
+        // vragen expliciet om bevestiging in plaats van stilletjes door te
+        // duwen — zo blijft de bescherming zichtbaar.
+        if (res.status === 409 && json.code === 'last_teacher' && isAdmin && !force) {
+          const ok = window.confirm(
+            `${json.error}\n\nWeet je zeker dat je deze cursus zonder docent achterlaat? (Alleen admins kunnen dit forceren.)`
+          );
+          if (ok) {
+            return changeMemberRole(userId, newRole, true);
+          }
+          setMembersError(json.error);
+          return;
+        }
         setMembersError(json.error || `Bijwerken mislukt (${res.status})`);
         return;
       }
@@ -206,6 +224,53 @@ export default function CoursesAdmin() {
   useEffect(() => {
     loadCourses();
   }, []);
+
+  // Laad de set cursussen waarin de huidige user docent is, zodat we de
+  // 'Beheer leden'-knop ook tonen voor per-cursus docenten (niet alleen
+  // admin). Admins krijgen de knop sowieso, dus voor hen is dit overbodig.
+  useEffect(() => {
+    if (isAdmin || !user?.id || !session?.access_token) {
+      setMyTeacherCourseIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/users/${user.id}/teacher-courses`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          console.warn('[CoursesAdmin] teacher-courses fetch failed:', json.error);
+          return;
+        }
+        const ids = new Set<string>((json.courses || []).map((c: { courseId: string }) => c.courseId));
+        setMyTeacherCourseIds(ids);
+      } catch (err) {
+        if (!cancelled) console.warn('[CoursesAdmin] teacher-courses exception:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAdmin, user?.id, session?.access_token]);
+
+  // Open automatisch de members-dialog wanneer ?manageMembers=<id>
+  // meegegeven is (bijv. via een link uit /admin → Gebruikers-uitklap).
+  // Wacht tot de cursussenlijst geladen is en de bevoegdheid bekend.
+  useEffect(() => {
+    const wanted = searchParams.get('manageMembers');
+    if (!wanted || loadingList || courses.length === 0) return;
+    const course = courses.find((c) => c.id === wanted);
+    if (!course) return;
+    const allowed = isAdmin || myTeacherCourseIds.has(wanted);
+    if (!allowed) return;
+    if (membersTarget?.id === wanted) return;
+    openMembersDialog(course);
+    const next = new URLSearchParams(searchParams);
+    next.delete('manageMembers');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, loadingList, courses, isAdmin, myTeacherCourseIds]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -678,6 +743,19 @@ export default function CoursesAdmin() {
                             )}
                             {c.is_active ? 'Deactiveren' : 'Activeren'}
                           </button>
+                          {(isAdmin || myTeacherCourseIds.has(c.id)) && (
+                            <button
+                              type="button"
+                              onClick={() => openMembersDialog(c)}
+                              disabled={rowBusyId === c.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                              title="Beheer leden en hun rol in deze cursus"
+                              data-testid={`button-manage-members-primary-${c.id}`}
+                            >
+                              <Users className="w-3.5 h-3.5" />
+                              Beheer leden
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => requestDelete(c)}
@@ -1083,8 +1161,10 @@ export default function CoursesAdmin() {
                   Leden van "{membersTarget.name}"
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Stel per cursus in wie student of docent is. Alleen admins
-                  mogen rollen wijzigen.
+                  Stel per cursus in wie student of docent is. Admins en
+                  docenten van deze cursus mogen rollen wijzigen. De laatste
+                  docent kan niet zomaar gedemoteerd worden — wijs eerst een
+                  vervanger aan.
                 </p>
               </div>
               <button
@@ -1121,37 +1201,55 @@ export default function CoursesAdmin() {
                     </tr>
                   </thead>
                   <tbody>
-                    {membersList.map((m) => (
-                      <tr key={m.user_id} className="border-b border-gray-100" data-testid={`row-member-${m.user_id}`}>
-                        <td className="py-2 px-2">{m.full_name || '—'}</td>
-                        <td className="py-2 px-2 text-gray-600">{m.email || '—'}</td>
-                        <td className="py-2 px-2">
-                          {isAdmin ? (
-                            <select
-                              value={m.member_role}
-                              disabled={memberRoleBusy === m.user_id}
-                              onChange={(e) => changeMemberRole(m.user_id, e.target.value as 'student' | 'teacher')}
-                              className="border border-gray-300 rounded px-2 py-1 text-xs bg-white disabled:opacity-50"
-                              data-testid={`select-member-role-${m.user_id}`}
-                            >
-                              <option value="student">Student</option>
-                              <option value="teacher">Docent</option>
-                            </select>
-                          ) : (
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                              m.member_role === 'teacher'
-                                ? 'bg-blue-100 text-blue-700'
-                                : 'bg-green-100 text-green-700'
-                            }`}>
-                              {m.member_role === 'teacher' ? 'Docent' : 'Student'}
-                            </span>
-                          )}
-                          {memberRoleBusy === m.user_id && (
-                            <Loader2 className="w-3 h-3 inline-block ml-2 animate-spin text-gray-400" />
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      const teacherCount = membersList.filter((mm) => mm.member_role === 'teacher').length;
+                      const canEdit = isAdmin || (membersTarget && myTeacherCourseIds.has(membersTarget.id));
+                      return membersList.map((m) => {
+                        // Voorkom dat de laatste docent zichzelf demoteert
+                        // (UI-hint; server blokkeert hetzelfde scenario met 409).
+                        const isSoleTeacherSelf = m.member_role === 'teacher'
+                          && teacherCount <= 1
+                          && m.user_id === user?.id
+                          && !isAdmin;
+                        return (
+                          <tr key={m.user_id} className="border-b border-gray-100" data-testid={`row-member-${m.user_id}`}>
+                            <td className="py-2 px-2">{m.full_name || '—'}</td>
+                            <td className="py-2 px-2 text-gray-600">{m.email || '—'}</td>
+                            <td className="py-2 px-2">
+                              {canEdit ? (
+                                <select
+                                  value={m.member_role}
+                                  disabled={memberRoleBusy === m.user_id || isSoleTeacherSelf}
+                                  onChange={(e) => changeMemberRole(m.user_id, e.target.value as 'student' | 'teacher')}
+                                  className="border border-gray-300 rounded px-2 py-1 text-xs bg-white disabled:opacity-50"
+                                  data-testid={`select-member-role-${m.user_id}`}
+                                  title={isSoleTeacherSelf ? 'Je bent de laatste docent — wijs eerst een vervanger aan.' : undefined}
+                                >
+                                  <option value="student">Student</option>
+                                  <option value="teacher">Docent</option>
+                                </select>
+                              ) : (
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                  m.member_role === 'teacher'
+                                    ? 'bg-blue-100 text-blue-700'
+                                    : 'bg-green-100 text-green-700'
+                                }`}>
+                                  {m.member_role === 'teacher' ? 'Docent' : 'Student'}
+                                </span>
+                              )}
+                              {isSoleTeacherSelf && (
+                                <span className="ml-2 text-[11px] text-amber-700" data-testid={`text-sole-teacher-${m.user_id}`}>
+                                  laatste docent
+                                </span>
+                              )}
+                              {memberRoleBusy === m.user_id && (
+                                <Loader2 className="w-3 h-3 inline-block ml-2 animate-spin text-gray-400" />
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()}
                   </tbody>
                 </table>
               )}

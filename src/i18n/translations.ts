@@ -602,6 +602,12 @@ export const translations = {
     'admin.users.toStudent': '→ Student',
     'admin.users.roleChanged': 'Rol succesvol gewijzigd.',
     'admin.users.roleError': 'Fout bij wijzigen van rol: ',
+    'admin.users.expandTeacherCourses': 'Toon cursussen waarvan deze gebruiker docent is',
+    'admin.users.collapseTeacherCourses': 'Verberg cursussen',
+    'admin.users.teacherInCourses': 'Docent in cursussen',
+    'admin.users.noTeacherCourses': 'Deze gebruiker is in geen enkele cursus docent.',
+    'admin.users.manageCourseMembers': 'Beheer leden',
+    'admin.users.loadingTeacherCourses': 'Cursussen laden…',
 
     // ── Admin — RAG beheer tab ─────────────────────────────────────
     'admin.ragBeheer.docsChanged': 'Documenten gewijzigd',
@@ -1689,6 +1695,12 @@ export const translations = {
     'admin.users.toStudent': '→ Student',
     'admin.users.roleChanged': 'Role changed successfully.',
     'admin.users.roleError': 'Error changing role: ',
+    'admin.users.expandTeacherCourses': 'Show courses where this user is a lecturer',
+    'admin.users.collapseTeacherCourses': 'Hide courses',
+    'admin.users.teacherInCourses': 'Lecturer in courses',
+    'admin.users.noTeacherCourses': 'This user is not a lecturer in any course.',
+    'admin.users.manageCourseMembers': 'Manage members',
+    'admin.users.loadingTeacherCourses': 'Loading courses…',
 
     // ── Admin — RAG beheer tab ─────────────────────────────────────
     'admin.ragBeheer.docsChanged': 'Documents changed',
