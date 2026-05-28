@@ -295,13 +295,19 @@ export function AdminPage() {
 
   useEffect(() => {
     if (!isAdmin) return;
+    let cancelled = false;
     (async () => {
       try {
         const { data: { session: s } } = await supabase.auth.getSession();
-        if (!s?.access_token) return;
+        if (!s?.access_token || cancelled) return;
         const r = await fetch('/api/admin/backfill-project-doc-folder-links/status', {
           headers: { Authorization: `Bearer ${s.access_token}` },
         });
+        if (cancelled) return;
+        if (r.status === 404) {
+          setAutoBackfillStatus(null);
+          return;
+        }
         if (r.ok) {
           const d = await r.json();
           const status = d.status;
@@ -320,6 +326,7 @@ export function AdminPage() {
         }
       } catch {}
     })();
+    return () => { cancelled = true; };
   }, [isAdmin]);
 
   useEffect(() => {

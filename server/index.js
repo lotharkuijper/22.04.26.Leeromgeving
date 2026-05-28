@@ -4502,6 +4502,10 @@ app.get('/api/admin/prompts-migration-status', async (req, res) => {
   });
 });
 
+app.get('/api/admin/backfill-project-doc-folder-links/status', (_req, res) => {
+  return res.json({ status: null });
+});
+
 app.get('/api/prompt/explain', async (req, res) => {
   if (!supabaseAdmin || !promptsHasSection) {
     return res.json({ content: DEFAULT_EXPLAIN_PROMPT });
