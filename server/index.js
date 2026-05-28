@@ -34,6 +34,7 @@ import {
   validateCueResponse as relValidateCueResponse,
   buildCueInstructionBlock as relCueInstructionBlock,
   cueJsonInstruction as relCueJsonInstruction,
+  hasCueTable as relHasCueTable,
 } from './personaRelationship.js';
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
@@ -6891,11 +6892,23 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
         .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
       projectIdForRel = g?.project_id || null;
     }
-    // Cue-emissie alleen voor conversational persona's die expliciet aan staan.
-    // Defensief: ontbrekende kolom (oude DB zonder migratie) telt als 'true'.
-    const emissionEnabled = persona
+    // Cue-emissie alleen voor conversational persona's die expliciet aan
+    // staan ÉN waarvan de system_prompt een herkenbare cue-tabel bevat.
+    // Zonder cue-tabel ontbreekt de docent-rubric en zou het LLM op losse
+    // gronden kunnen oordelen — dat forceren we hier hard naar delta=0
+    // (architect-review eis: "geen cue-tabel ⇒ altijd 0"). Defensief:
+    // ontbrekende kolom (oude DB) telt als 'true'.
+    const cueTablePresent = relHasCueTable(persona?.system_prompt || '');
+    const emissionEnabled = !!persona
       && (persona.persona_type || 'conversational') === 'conversational'
-      && (persona.cue_emission_enabled !== false);
+      && (persona.cue_emission_enabled !== false)
+      && cueTablePresent;
+    if (persona
+        && (persona.persona_type || 'conversational') === 'conversational'
+        && persona.cue_emission_enabled !== false
+        && !cueTablePresent) {
+      console.warn(`[threads/close] cue-emissie uit voor persona ${persona.id}: geen cue-tabel in system_prompt → delta geforceerd op 0`);
+    }
 
     // --- Server-side samenvatting genereren (zelfde logica als /close-preview) ---
     const { data: msgs } = await supabaseAdmin

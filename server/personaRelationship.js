@@ -146,6 +146,17 @@ function formatEvent(e, lang) {
 export const CUE_DELTA_MIN = -2;
 export const CUE_DELTA_MAX = 2;
 
+// Deterministische gate: cue-emissie mag ALLEEN plaatsvinden als de docent
+// een herkenbare cue-tabel in de system_prompt heeft opgenomen. Zonder die
+// tabel forceren we delta=0, ongeacht wat het LLM produceert. We accepteren
+// de NL- en EN-markers van de admin-template ("Cue-tabel —" / "Cue table —")
+// alsook losse varianten ("cue tabel", "cue table"). Case-insensitive.
+const CUE_TABLE_MARKER_RE = /\bcue[\s-]?(tabel|table)\b/i;
+export function hasCueTable(systemPrompt) {
+  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) return false;
+  return CUE_TABLE_MARKER_RE.test(systemPrompt);
+}
+
 // Clamp specifiek voor cue-deltas (-2..+2). Default 0.
 export function clampCueDelta(value) {
   let n = Number(value);
