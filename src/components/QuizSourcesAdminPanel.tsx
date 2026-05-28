@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb } from 'lucide-react';
+import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb, Search } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
@@ -17,6 +17,23 @@ interface MappingSuggestion {
   exsection_path: string[];
   count: number;
   similarity: number;
+}
+
+interface DiagnoseCandidate {
+  exsection_path: string[];
+  count: number;
+  mcq_count: number;
+  open_count: number;
+  matched_tokens: string[];
+  score: number;
+}
+
+interface DiagnoseResult {
+  current_mappings: string[][];
+  tokens_used: string[];
+  tokens_truncated: boolean;
+  total_sections_scanned: number;
+  candidates: DiagnoseCandidate[];
 }
 
 interface ItembankSection {
@@ -93,6 +110,12 @@ export function QuizSourcesAdminPanel() {
   // toe te voegen aan de huidige mappings.
   const [suggestionsByConcept, setSuggestionsByConcept] = useState<Record<string, MappingSuggestion[]>>({});
   const [suggestingConceptId, setSuggestingConceptId] = useState<string | null>(null);
+
+  // Fase 1: deterministische diagnose — toont per begrip welke ShareStats-
+  // secties (case-insensitief, op begripsnaam + queryExpansion-synoniemen)
+  // zouden matchen. Geen LLM/embedding-call, puur substring-scoring.
+  const [diagnoseByConcept, setDiagnoseByConcept] = useState<Record<string, DiagnoseResult>>({});
+  const [diagnosingConceptId, setDiagnosingConceptId] = useState<string | null>(null);
 
   const headers = useMemo(
     () =>
@@ -323,6 +346,32 @@ export function QuizSourcesAdminPanel() {
     });
   }
 
+  async function handleDiagnose(concept: Concept) {
+    if (!activeCourseId) return;
+    setDiagnosingConceptId(concept.id);
+    try {
+      const res = await fetch('/api/admin/itembank-mapping-diagnose', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ conceptId: concept.id, courseId: activeCourseId, topN: 8 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || t('admin.quizSources.itembank.diagnoseError'));
+      setDiagnoseByConcept(prev => ({ ...prev, [concept.id]: data as DiagnoseResult }));
+    } catch (err) {
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.itembank.diagnoseError'));
+    }
+    setDiagnosingConceptId(null);
+  }
+
+  function dismissDiagnose(conceptId: string) {
+    setDiagnoseByConcept(prev => {
+      const next = { ...prev };
+      delete next[conceptId];
+      return next;
+    });
+  }
+
   function setRagFolder(conceptId: string, folderId: string) {
     setRagSources(prev => {
       const others = prev.filter(s => s.concept_id !== conceptId);
@@ -462,6 +511,20 @@ export function QuizSourcesAdminPanel() {
                         )}
                         {t('admin.quizSources.itembank.suggestMapping')}
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDiagnose(concept)}
+                        disabled={diagnosingConceptId === concept.id}
+                        className="px-2 py-1 bg-sky-50 border border-sky-200 hover:bg-sky-100 rounded text-xs text-sky-900 inline-flex items-center gap-1 disabled:opacity-50"
+                        data-testid={`button-diagnose-mapping-${concept.id}`}
+                      >
+                        {diagnosingConceptId === concept.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Search className="w-3 h-3" />
+                        )}
+                        {t('admin.quizSources.itembank.diagnoseButton')}
+                      </button>
                       <select
                         onChange={e => {
                           const idx = parseInt(e.target.value, 10);
@@ -509,6 +572,75 @@ export function QuizSourcesAdminPanel() {
                           </span>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {diagnoseByConcept[concept.id] && (
+                    <div className="mt-3 p-2 bg-sky-50 border border-sky-200 rounded" data-testid={`diagnose-${concept.id}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-sky-900 inline-flex items-center gap-1">
+                          <Search className="w-3 h-3" /> {t('admin.quizSources.itembank.diagnoseTitle')}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => dismissDiagnose(concept.id)}
+                          className="text-xs text-sky-700 hover:text-sky-900"
+                          data-testid={`button-dismiss-diagnose-${concept.id}`}
+                        >
+                          {t('admin.quizSources.itembank.suggestionsClose')}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-sky-800 mb-1" data-testid={`text-diagnose-scanned-${concept.id}`}>
+                        {t('admin.quizSources.itembank.diagnoseScanned', { count: String(diagnoseByConcept[concept.id].total_sections_scanned) })}
+                      </p>
+                      <p className="text-[11px] text-sky-700 mb-2 italic">
+                        {t('admin.quizSources.itembank.diagnoseTokens', {
+                          count: String(diagnoseByConcept[concept.id].tokens_used.length),
+                          list: diagnoseByConcept[concept.id].tokens_used.join(', ') + (diagnoseByConcept[concept.id].tokens_truncated ? ' …' : ''),
+                        })}
+                      </p>
+                      {diagnoseByConcept[concept.id].candidates.length === 0 ? (
+                        <p className="text-xs text-sky-800 italic">{t('admin.quizSources.itembank.diagnoseNone')}</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {diagnoseByConcept[concept.id].candidates.map(c => {
+                            const pathKey = c.exsection_path.join('/');
+                            const already = mappings.some(
+                              m => m.concept_id === concept.id && m.exsection_path.join('/') === pathKey
+                            );
+                            return (
+                              <li
+                                key={pathKey}
+                                className="flex items-center justify-between gap-2 text-xs"
+                                data-testid={`diagnose-hit-${concept.id}-${pathKey}`}
+                              >
+                                <span className="text-sky-900 flex-1 min-w-0">
+                                  <span className="font-medium">{c.exsection_path.join(' / ')}</span>
+                                  <span className="ml-2 text-sky-700">
+                                    {t('admin.quizSources.itembank.diagnoseHit', {
+                                      count: String(c.count),
+                                      mcq: String(c.mcq_count),
+                                      open: String(c.open_count),
+                                      tokens: String(c.score),
+                                      matched: c.matched_tokens.join(', '),
+                                    })}
+                                  </span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => addMapping(concept.id, c.exsection_path)}
+                                  disabled={already}
+                                  className="px-2 py-0.5 bg-sky-200 text-sky-900 rounded hover:bg-sky-300 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                                  data-testid={`button-add-diagnose-${concept.id}-${pathKey}`}
+                                >
+                                  <Plus className="w-3 h-3" />
+                                  {already ? t('admin.quizSources.itembank.alreadyLinked') : t('admin.quizSources.itembank.addSuggestion')}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
                     </div>
                   )}
 

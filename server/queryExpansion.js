@@ -62,13 +62,21 @@ export const QUERY_SYNONYMS_NL = {
   'poisson-verdeling': 'poisson zeldzame gebeurtenissen telling',
 
   // Biostatistiek — toetsen en intervallen
-  'betrouwbaarheidsinterval': 'ci confidence interval onzekerheid bereik',
-  'p-waarde': 'p-value significantie hypothesetoets toetsingsuitslag',
-  'nulhypothese': 'h0 hypothese statistische toets geen effect',
-  'alternatieve hypothese': 'h1 hypothese effect verschil',
-  't-toets': 't-test gemiddelden vergelijken',
-  'chi-kwadraattoets': 'chi-square chi² categorisch verband',
-  'anova': 'variantieanalyse meerdere groepen vergelijken',
+  'betrouwbaarheidsinterval': 'ci confidence interval onzekerheid bereik schatting',
+  'p-waarde': 'p-value pvalue significantie significant hypothesetoets toetsing toetsingsuitslag inferentiële statistiek inferential statistics nulhypothese alfa hypothesis testing',
+  'p-value': 'p-waarde significantie hypothesetoets toetsing inferentiële statistiek inferential statistics',
+  'significantie': 'p-waarde p-value significant hypothesetoets toetsing alfa inferentiële statistiek inferential statistics',
+  'hypothesetoetsing': 'hypothesetoets toetsen toetsing nulhypothese alternatieve hypothese p-waarde significantie inferentiële statistiek inferential statistics hypothesis testing',
+  'hypothesetoets': 'hypothesetoetsing toetsen toetsing nulhypothese p-waarde significantie inferentiële statistiek inferential statistics',
+  'toetsing': 'hypothesetoets hypothesetoetsing toetsen statistische toets p-waarde significantie nulhypothese inferentiële statistiek inferential statistics',
+  'toetsen': 'hypothesetoets toetsing statistische toets p-waarde significantie inferentiële statistiek inferential statistics',
+  'inferentiële statistiek': 'inferential statistics hypothesetoets toetsing p-waarde significantie nulhypothese steekproef populatie schatting',
+  'inferential statistics': 'inferentiële statistiek hypothesis testing p-value significance null hypothesis sample population estimation',
+  'nulhypothese': 'h0 nulhypothese hypothese statistische toets geen effect p-waarde significantie hypothesetoetsing inferential statistics',
+  'alternatieve hypothese': 'h1 hypothese effect verschil hypothesetoetsing inferential statistics',
+  't-toets': 't-test t toets gemiddelden vergelijken inferentiële statistiek inferential statistics hypothesetoetsing',
+  'chi-kwadraattoets': 'chi-square chi² chi-kwadraat categorisch verband inferentiële statistiek inferential statistics hypothesetoetsing',
+  'anova': 'variantieanalyse analysis of variance meerdere groepen vergelijken inferentiële statistiek inferential statistics hypothesetoetsing',
 
   // Biostatistiek — modellen en survival
   'regressieanalyse': 'regressie lineair model verband variabelen voorspelling',

@@ -5702,16 +5702,16 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
       return res.json({ questions: [], reason: 'no_mappings' });
     }
 
-    // Trek items met overlappende exsection_path. We halen kandidaten op met
-    // het breedste segment (eerste segment) en filteren in JS op exact prefix-
-    // match — dat is robuust ongeacht hoe de docent het pad heeft samengesteld.
-    const firstSegments = [...new Set(sectionPaths.map(p => p[0]))];
+    // Trek kandidaten zonder exacte-string-prefilter. De ShareStats-bank kent
+    // case-varianten ("Inferential Statistics" vs "inferential statistics") en
+    // overlaps() in PostgREST is hoofdletter-gevoelig; daarom matchen we
+    // hieronder in JS met genormaliseerde (lower-case) paden. 1564 items
+    // passen ruim binnen de limit, dus we filteren in-memory.
     let candidatesQuery = supabaseAdmin
       .from('quiz_questions')
       .select('id, question_text, answer_options, correct_answer, explanation, sharestats_id, exsection_path, topic, subtopic, item_type, metadata')
       .eq('source', 'sharestats')
-      .overlaps('exsection_path', firstSegments)
-      .limit(500);
+      .limit(5000);
     // item_type-kolom is pas vanaf migratie 20260507130000 aanwezig.
     // Voor mcq: accepteer item_type='mcq' óf NULL (oude rijen zijn historisch
     // mchoice). Voor open: vereis expliciet item_type='open'.
@@ -5723,9 +5723,11 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
     const { data: candidates, error: qErr } = await candidatesQuery;
     if (qErr) return res.status(500).json({ error: qErr.message });
 
+    const normalizePath = (p) => (Array.isArray(p) ? p : []).map(s => String(s ?? '').toLowerCase().trim());
+    const targetsLower = sectionPaths.map(normalizePath);
     const matches = (candidates || []).filter(q => {
-      const qPath = Array.isArray(q.exsection_path) ? q.exsection_path : [];
-      return sectionPaths.some(target => {
+      const qPath = normalizePath(q.exsection_path);
+      return targetsLower.some(target => {
         if (qPath.length < target.length) return false;
         for (let i = 0; i < target.length; i++) {
           if (qPath[i] !== target[i]) return false;
@@ -5901,37 +5903,35 @@ app.post('/api/quiz/concept-availability', async (req, res) => {
       .in('concept_id', conceptIds)
       .or(`course_id.eq.${courseId},course_id.is.null`);
 
-    // Voor performance: één query met alle items waarvan eerste segment
-    // overlapt, daarna in JS groeperen op concept.
-    const allFirstSegments = [...new Set(
-      (mapRows || [])
-        .map(r => Array.isArray(r.exsection_path) && r.exsection_path.length > 0 ? r.exsection_path[0] : null)
-        .filter(Boolean)
-    )];
+    // Voor performance: één query met alle sharestats-items, daarna in JS
+    // case-insensitief groeperen op concept. Geen exacte-string-prefilter
+    // (overlaps()) meer omdat de bank case-varianten kent ("Inferential
+    // Statistics" vs "inferential statistics"); we matchen op lower-case.
     let allItems = [];
     let itemsTruncated = false;
     const ITEM_HARD_LIMIT = 5000;
-    if (allFirstSegments.length > 0) {
+    if ((mapRows || []).length > 0) {
       const { data: items, count } = await supabaseAdmin
         .from('quiz_questions')
         .select('id, exsection_path, item_type', { count: 'exact' })
         .eq('source', 'sharestats')
-        .overlaps('exsection_path', allFirstSegments)
+        .not('exsection_path', 'is', null)
         .limit(ITEM_HARD_LIMIT);
       allItems = items || [];
       if (typeof count === 'number' && count > ITEM_HARD_LIMIT) itemsTruncated = true;
     }
 
+    const normPath = (p) => (Array.isArray(p) ? p : []).map(s => String(s ?? '').toLowerCase().trim());
     const itembankCountByConcept = new Map();
     for (const cid of conceptIds) {
       const conceptMaps = (mapRows || []).filter(r => r.concept_id === cid);
       if (conceptMaps.length === 0) { itembankCountByConcept.set(cid, { total: 0, mcq: 0, open: 0 }); continue; }
       const targets = conceptMaps
-        .map(m => Array.isArray(m.exsection_path) ? m.exsection_path : [])
+        .map(m => normPath(m.exsection_path))
         .filter(p => p.length > 0);
       let total = 0, mcq = 0, open = 0;
       for (const item of allItems) {
-        const qPath = Array.isArray(item.exsection_path) ? item.exsection_path : [];
+        const qPath = normPath(item.exsection_path);
         const match = targets.some(target => {
           if (qPath.length < target.length) return false;
           for (let i = 0; i < target.length; i++) if (qPath[i] !== target[i]) return false;
@@ -6096,6 +6096,103 @@ app.post('/api/admin/itembank-mapping-suggestions', async (req, res) => {
       suggestions: ranked.slice(0, Math.max(1, Math.min(topN, 10))),
       truncated: sectionsTruncated,
       candidates_evaluated: sections.length,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Diagnose-endpoint: per concept tonen welke ShareStats-secties (case-
+// insensitief, op substring van begripsnaam + queryExpansion-synoniemen +
+// key_points) zouden matchen. Bedoeld om docenten te laten zien waarom een
+// begrip leeg blijft in de itembank en om handmatige mapping-keuzes te
+// ondersteunen — deterministisch, geen embeddings/LLM-call.
+app.post('/api/admin/itembank-mapping-diagnose', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar' });
+  }
+  const { conceptId, courseId, topN = 5 } = req.body || {};
+  if (!conceptId || typeof conceptId !== 'string') {
+    return res.status(400).json({ error: 'conceptId is verplicht' });
+  }
+  try {
+    // 1) Laad begrip (naam + definitie + key_points).
+    const { data: concept, error: conceptErr } = await supabaseAdmin
+      .from('concepts')
+      .select('id, name, definition, key_points')
+      .eq('id', conceptId)
+      .maybeSingle();
+    if (conceptErr) return res.status(500).json({ error: conceptErr.message });
+    if (!concept) return res.status(404).json({ error: 'Begrip niet gevonden' });
+
+    // 2) Huidige mapping(s) voor dit begrip in deze cursus.
+    let currentMappings = [];
+    if (courseId) {
+      const { data: mapRows } = await supabaseAdmin
+        .from('concept_itembank_sections')
+        .select('exsection_path, course_id')
+        .eq('concept_id', conceptId)
+        .or(`course_id.eq.${courseId},course_id.is.null`);
+      currentMappings = (mapRows || [])
+        .map(r => Array.isArray(r.exsection_path) ? r.exsection_path : null)
+        .filter(p => p && p.length > 0);
+    }
+
+    // 3) Bouw zoek-tokens: begripsnaam + synoniemen (NL+EN) + key_points.
+    const keyPoints = Array.isArray(concept.key_points)
+      ? concept.key_points.filter(kp => typeof kp === 'string' && !kp.startsWith('course_id:') && !kp.startsWith('['))
+      : [];
+    const expandedNl = expandQuery(concept.name, { definition: concept.definition, keyPoints }, 'nl');
+    const expandedEn = expandQuery(concept.name, { definition: concept.definition, keyPoints }, 'en');
+    const STOP = new Set(['de','het','een','en','of','in','op','van','met','voor','door','aan','bij','te','dat','dan','als','is','zijn','the','a','an','of','to','in','on','for','and','or','with','by','at','is','are','this','that']);
+    const tokens = [...new Set(
+      `${expandedNl} ${expandedEn}`
+        .toLowerCase()
+        .split(/[^a-zà-ÿ0-9-]+/i)
+        .map(t => t.trim())
+        .filter(t => t.length >= 3 && !STOP.has(t))
+    )];
+
+    // 4) Trek alle unieke ShareStats-secties met counts.
+    const { data: rows, error: rowsErr } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('exsection_path, item_type')
+      .eq('source', 'sharestats')
+      .not('exsection_path', 'is', null)
+      .limit(5000);
+    if (rowsErr) return res.status(500).json({ error: rowsErr.message });
+    const sectionMap = new Map();
+    for (const row of rows || []) {
+      const path = Array.isArray(row.exsection_path) ? row.exsection_path : [];
+      if (path.length === 0) continue;
+      const key = path.join(' / ');
+      const entry = sectionMap.get(key) || { exsection_path: path, count: 0, mcq_count: 0, open_count: 0 };
+      entry.count += 1;
+      if (row.item_type === 'open') entry.open_count += 1;
+      else entry.mcq_count += 1;
+      sectionMap.set(key, entry);
+    }
+    const sections = [...sectionMap.values()];
+
+    // 5) Score per sectie: aantal unieke tokens dat (substring) voorkomt in
+    // de gejoined-lower-case-pad-string. Hits-lijst voor transparantie.
+    const ranked = sections.map(s => {
+      const haystack = s.exsection_path.join(' / ').toLowerCase();
+      const matchedTokens = tokens.filter(tok => haystack.includes(tok));
+      return { ...s, matched_tokens: matchedTokens, score: matchedTokens.length };
+    })
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score || b.count - a.count);
+
+    return res.json({
+      concept: { id: concept.id, name: concept.name },
+      current_mappings: currentMappings,
+      tokens_used: tokens.slice(0, 40),
+      tokens_truncated: tokens.length > 40,
+      total_sections_scanned: sections.length,
+      candidates: ranked.slice(0, Math.max(1, Math.min(topN, 20))),
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
