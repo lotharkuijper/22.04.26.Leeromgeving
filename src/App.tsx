@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Suspense, lazy } from 'react';
+import { Component, Suspense, lazy, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { CourseAccessProvider } from './contexts/CourseAccessContext';
 import { ActiveCourseProvider } from './contexts/ActiveCourseContext';
@@ -26,6 +26,46 @@ const TestCourses = lazy(() => import('./pages/TestCourses'));
 const FileManager = lazy(() => import('./pages/FileManager'));
 const DocumentsPage = lazy(() => import('./pages/DocumentsPage'));
 
+class LazyChunkErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    const isChunkError =
+      /Failed to fetch dynamically imported module/i.test(message) ||
+      /Importing a module script failed/i.test(message) ||
+      /error loading dynamically imported module/i.test(message) ||
+      /ChunkLoadError/i.test(message);
+    if (isChunkError && typeof window !== 'undefined') {
+      const key = '__leapvu_chunk_reload_at__';
+      const last = Number(sessionStorage.getItem(key) || '0');
+      const now = Date.now();
+      if (now - last > 10_000) {
+        sessionStorage.setItem(key, String(now));
+        window.location.reload();
+        return { hasError: true };
+      }
+    }
+    return { hasError: true };
+  }
+
+  componentDidCatch() {}
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 24 }} data-testid="text-chunk-reload">
+          <p>De pagina wordt opnieuw geladen…</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
 
@@ -41,6 +81,7 @@ function AppRoutes() {
   if (loading) return <LoadingSpinner />;
 
   return (
+    <LazyChunkErrorBoundary>
     <Suspense fallback={<LoadingSpinner />}>
     <Routes>
       <Route
@@ -183,6 +224,7 @@ function AppRoutes() {
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
     </Routes>
     </Suspense>
+    </LazyChunkErrorBoundary>
   );
 }
 
