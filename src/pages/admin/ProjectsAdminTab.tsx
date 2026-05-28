@@ -56,6 +56,7 @@ interface ProjectPersona {
   rag_folder_ids: string[];
   sort_order: number;
   persona_type?: string;
+  cue_emission_enabled?: boolean;
 }
 
 interface ProjectDoc {
@@ -554,6 +555,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
           avatar_emoji: editingPersona.avatar_emoji || '🤖',
           rag_enabled: editingPersona.rag_enabled ?? true,
           persona_type: editingPersona.persona_type || 'conversational',
+          cue_emission_enabled: (editingPersona.persona_type || 'conversational') === 'evaluator'
+            ? false
+            : (editingPersona.cue_emission_enabled ?? true),
         }),
       });
       const d = await r.json();
@@ -848,7 +852,7 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
             <h3 className="font-semibold text-gray-900">{t('admin.projects.personas.title', { count: String(personas.length) })}</h3>
             <p className="text-xs text-gray-500">{t('admin.projects.personas.desc')}</p>
           </div>
-          <button onClick={() => setEditingPersona({ name: '', system_prompt: '', avatar_emoji: '🤖', rag_enabled: true, persona_type: 'conversational' })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg" data-testid="button-add-custom-persona">
+          <button onClick={() => setEditingPersona({ name: '', system_prompt: '', avatar_emoji: '🤖', rag_enabled: true, persona_type: 'conversational', cue_emission_enabled: true })} className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg" data-testid="button-add-custom-persona">
             <Plus className="w-4 h-4" />{t('admin.projects.personas.addBtn')}
           </button>
         </div>
@@ -988,6 +992,26 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                 <input type="checkbox" checked={editingPersona.rag_enabled ?? true} onChange={e => setEditingPersona({ ...editingPersona, rag_enabled: e.target.checked })} data-testid="checkbox-pp-rag" />
                 {t('admin.projects.personas.ragEnabled')}
               </label>
+              {(editingPersona.persona_type || 'conversational') === 'conversational' && (
+                <div className="border-t border-gray-100 pt-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={editingPersona.cue_emission_enabled ?? true}
+                      onChange={e => setEditingPersona({ ...editingPersona, cue_emission_enabled: e.target.checked })}
+                      data-testid="checkbox-pp-cue-emission"
+                    />
+                    {t('admin.projects.personas.cueEmissionLabel')}
+                  </label>
+                  <p className="text-[11px] text-gray-500 mt-1">{t('admin.projects.personas.cueEmissionHint')}</p>
+                  <details className="mt-1 text-[11px]">
+                    <summary className="cursor-pointer text-blue-600 hover:underline" data-testid="toggle-cue-table-template">
+                      {t('admin.projects.personas.cueTableTemplateTitle')}
+                    </summary>
+                    <pre className="mt-1 p-2 bg-gray-50 border border-gray-200 rounded text-[10px] font-mono whitespace-pre-wrap">{t('admin.projects.personas.cueTableTemplate')}</pre>
+                  </details>
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setEditingPersona(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">{t('admin.projects.personas.cancelBtn')}</button>

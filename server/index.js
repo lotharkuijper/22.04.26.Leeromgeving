@@ -31,6 +31,9 @@ import {
   isBlocked as relIsBlocked,
   blockedMessage as relBlockedMessage,
   buildRelationshipPromptBlock as relBuildPromptBlock,
+  validateCueResponse as relValidateCueResponse,
+  buildCueInstructionBlock as relCueInstructionBlock,
+  cueJsonInstruction as relCueJsonInstruction,
 } from './personaRelationship.js';
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
@@ -6848,6 +6851,13 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
 // POST /api/projects/groups/:groupId/threads/:threadId/close
 // Genereert server-side de AI-samenvatting en markeert de thread als afgesloten.
 // Accepteert GEEN topics/agreements van de client — de server is de enige bron.
+//
+// Task #171 / Fase 3 — Cue-emissie: bij afsluiten vraagt de server in
+// hetzelfde JSON-antwoord ook één `relationship_delta` (-2..+2) +
+// `relationship_reason` op basis van de docent-cue-tabel in de
+// system_prompt van de persona. Stil voor studenten (niet in response),
+// zichtbaar voor staff in het Verstandhoudingen-paneel. Persona's met
+// `cue_emission_enabled=false` (alle evaluators standaard) leveren altijd 0.
 app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
@@ -6861,9 +6871,31 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
     }
     const { data: thread } = await supabaseAdmin
       .from('group_persona_threads')
-      .select('id, group_id, closed_at')
+      .select('id, group_id, persona_id, closed_at')
       .eq('id', threadId).eq('group_id', groupId).is('closed_at', null).maybeSingle();
     if (!thread) return res.status(404).json({ error: 'Thread niet gevonden of al afgesloten' });
+
+    // Persona + project ophalen voor cue-context en relatie-update.
+    let persona = null;
+    let projectIdForRel = null;
+    if (thread.persona_id) {
+      const { data: p } = await supabaseAdmin
+        .from('project_personas')
+        .select('id, project_id, system_prompt, cue_emission_enabled, persona_type')
+        .eq('id', thread.persona_id).maybeSingle();
+      persona = p || null;
+      projectIdForRel = persona?.project_id || null;
+    }
+    if (!projectIdForRel) {
+      const { data: g } = await supabaseAdmin
+        .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
+      projectIdForRel = g?.project_id || null;
+    }
+    // Cue-emissie alleen voor conversational persona's die expliciet aan staan.
+    // Defensief: ontbrekende kolom (oude DB zonder migratie) telt als 'true'.
+    const emissionEnabled = persona
+      && (persona.persona_type || 'conversational') === 'conversational'
+      && (persona.cue_emission_enabled !== false);
 
     // --- Server-side samenvatting genereren (zelfde logica als /close-preview) ---
     const { data: msgs } = await supabaseAdmin
@@ -6872,9 +6904,9 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
       .eq('thread_id', threadId)
       .order('created_at', { ascending: true });
     const allMsgs = msgs || [];
-    // Te weinig berichten: sla de LLM-samenvatting over; sla direct op met lege neerslag.
     let topics = [];
     let agreements = [];
+    let cue = { delta: 0, reason: '' };
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (apiKey) {
@@ -6886,27 +6918,44 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
         ? (msgCount <= 3 ? '2-3 short topics' : msgCount <= 8 ? '3-5 topics' : '5-8 topics')
         : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
       const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
+
+      const cueJson = emissionEnabled ? `\n${relCueJsonInstruction(lang)}` : '';
+      const cueSchemaSnippet = emissionEnabled
+        ? (lang === 'en'
+            ? ',\n  "relationship_delta": 0,\n  "relationship_reason": ""'
+            : ',\n  "relationship_delta": 0,\n  "relationship_reason": ""')
+        : '';
       const prompt = lang === 'en'
-        ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
-        : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
+        ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.${cueJson}\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
+        : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.${cueJson}\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
+
+      // Bouw de system-prompt: docent-cue-tabel (persona.system_prompt) + meta-blok.
+      const systemContent = emissionEnabled
+        ? `${persona.system_prompt || ''}${relCueInstructionBlock(lang)}`
+        : (persona?.system_prompt || '');
 
       try {
+        const messages = systemContent
+          ? [{ role: 'system', content: systemContent }, { role: 'user', content: prompt }]
+          : [{ role: 'user', content: prompt }];
         const chatResp = await fetch(OPENAI_CHAT_URL, {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: OPENAI_MODEL,
-            messages: [{ role: 'user', content: prompt }],
+            messages,
             temperature: 0.2,
-            [MAX_TOKENS_PARAM]: 600,
+            [MAX_TOKENS_PARAM]: 700,
             response_format: { type: 'json_object' },
           }),
         });
         if (chatResp.ok) {
           const raw = ((await chatResp.json()).choices?.[0]?.message?.content || '{}').trim();
-          const parsed = JSON.parse(raw);
+          let parsed;
+          try { parsed = JSON.parse(raw); } catch { parsed = {}; }
           topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
           agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
+          cue = relValidateCueResponse(parsed, { emissionEnabled });
         }
       } catch (e) {
         console.error('[threads/close] LLM/parse fout:', e.message);
@@ -6930,6 +6979,27 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
       })
       .eq('id', threadId);
     if (updErr) return res.status(500).json({ error: updErr.message });
+
+    // Cue-emissie toepassen op de relatie. Idempotent via thread_close-refId.
+    // Stil voor studenten — niet in response.
+    if (emissionEnabled && cue.delta !== 0 && projectIdForRel) {
+      try {
+        await applyRelationshipDelta({
+          projectId: projectIdForRel,
+          groupId,
+          personaId: thread.persona_id,
+          delta: cue.delta,
+          event: {
+            source: 'persona_chat_close',
+            refId: `thread_close:${threadId}`,
+            delta: cue.delta,
+            note: cue.reason,
+          },
+        });
+      } catch (relErr) {
+        console.warn('[threads/close] relationship-update mislukte:', relErr.message);
+      }
+    }
 
     return res.json({ ok: true, threadId, topics, agreements });
   } catch (err) {
@@ -7611,6 +7681,8 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
       .from('course_personas').select('*').eq('course_id', project.course_id);
     if (!lib || lib.length === 0) return res.json({ copied: 0 });
 
+    // Task #171: persona_type én cue_emission_enabled meekopiëren zodat
+    // evaluators ook bij bulk-import nooit cues uitzenden.
     const rows = lib.map((p, i) => ({
       project_id: projectId,
       source_persona_id: null,
@@ -7621,8 +7693,15 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
       rag_folder_ids: p.rag_folder_ids,
       visible_from_phase: p.visible_from_phase,
       sort_order: i,
+      persona_type: p.persona_type === 'evaluator' ? 'evaluator' : 'conversational',
+      cue_emission_enabled: p.persona_type === 'evaluator' ? false : true,
     }));
-    const { error: iErr } = await supabaseAdmin.from('project_personas').insert(rows);
+    let { error: iErr } = await supabaseAdmin.from('project_personas').insert(rows);
+    if (iErr && (iErr.code === '42703' || /cue_emission_enabled/i.test(iErr.message || ''))) {
+      // Oude DB zonder kolom: opnieuw zonder veld.
+      const rowsNoCue = rows.map(({ cue_emission_enabled: _ignored, ...rest }) => rest);
+      ({ error: iErr } = await supabaseAdmin.from('project_personas').insert(rowsNoCue));
+    }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.json({ copied: rows.length });
   } catch (err) {
@@ -7709,6 +7788,8 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
 
     const { coursePersonaId, name, system_prompt, avatar_emoji,
       rag_enabled, rag_folder_ids } = req.body || {};
+    // Task #171: cue-emissie aan/uit. Evaluators staan altijd uit.
+    const cueEmissionInput = req.body?.cue_emission_enabled;
 
     // Bepaal volgorde-index achteraan.
     const { data: existing } = await supabaseAdmin
@@ -7731,10 +7812,15 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         rag_folder_ids: cp.rag_folder_ids, visible_from_phase: cp.visible_from_phase,
         sort_order: nextOrder,
         persona_type: cp.persona_type || 'conversational',
+        // Task #171: evaluators emitteren nooit cues, conversational default aan.
+        cue_emission_enabled: (cp.persona_type === 'evaluator') ? false : true,
       };
     } else {
       if (!name || !String(name).trim()) return res.status(400).json({ error: 'Naam is vereist' });
       const personaType = req.body?.persona_type === 'evaluator' ? 'evaluator' : 'conversational';
+      const cueEmission = personaType === 'evaluator'
+        ? false
+        : (cueEmissionInput === false ? false : true);
       row = {
         project_id: projectId, source_persona_id: null,
         name: String(name).trim(),
@@ -7744,10 +7830,17 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         rag_folder_ids: Array.isArray(rag_folder_ids) ? rag_folder_ids : [],
         sort_order: nextOrder,
         persona_type: personaType,
+        cue_emission_enabled: cueEmission,
       };
     }
-    const { data: inserted, error: iErr } = await supabaseAdmin
+    let { data: inserted, error: iErr } = await supabaseAdmin
       .from('project_personas').insert(row).select('*').single();
+    // Defensief: oude DB zonder cue_emission_enabled-kolom — opnieuw zonder veld.
+    if (iErr && (iErr.code === '42703' || /cue_emission_enabled/i.test(iErr.message || ''))) {
+      const { cue_emission_enabled: _ignored, ...rowNoCue } = row;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('project_personas').insert(rowNoCue).select('*').single());
+    }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.json({ persona: inserted });
   } catch (err) {
@@ -7780,19 +7873,27 @@ app.post('/api/projects/:projectId/personas/from-library/:coursePersonaId', asyn
       .from('project_personas').select('sort_order').eq('project_id', projectId)
       .order('sort_order', { ascending: false }).limit(1);
     const nextOrder = (existing && existing[0] ? Number(existing[0].sort_order || 0) : -1) + 1;
-    const { data: inserted, error: iErr } = await supabaseAdmin
-      .from('project_personas').insert({
-        project_id: projectId,
-        source_persona_id: null,
-        name: cp.name,
-        avatar_emoji: cp.avatar_emoji,
-        system_prompt: cp.system_prompt,
-        rag_enabled: cp.rag_enabled,
-        rag_folder_ids: cp.rag_folder_ids,
-        visible_from_phase: cp.visible_from_phase,
-        sort_order: nextOrder,
-        persona_type: cp.persona_type || 'conversational',
-      }).select('*').single();
+    const baseRow = {
+      project_id: projectId,
+      source_persona_id: null,
+      name: cp.name,
+      avatar_emoji: cp.avatar_emoji,
+      system_prompt: cp.system_prompt,
+      rag_enabled: cp.rag_enabled,
+      rag_folder_ids: cp.rag_folder_ids,
+      visible_from_phase: cp.visible_from_phase,
+      sort_order: nextOrder,
+      persona_type: cp.persona_type || 'conversational',
+      // Task #171: evaluators emitteren nooit cues.
+      cue_emission_enabled: (cp.persona_type === 'evaluator') ? false : true,
+    };
+    let { data: inserted, error: iErr } = await supabaseAdmin
+      .from('project_personas').insert(baseRow).select('*').single();
+    if (iErr && (iErr.code === '42703' || /cue_emission_enabled/i.test(iErr.message || ''))) {
+      const { cue_emission_enabled: _ignored, ...rowNoCue } = baseRow;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('project_personas').insert(rowNoCue).select('*').single());
+    }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.status(201).json({ persona: inserted });
   } catch (err) {
@@ -7812,16 +7913,27 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
 
-    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order', 'persona_type'];
+    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order', 'persona_type', 'cue_emission_enabled'];
     const patch = {};
     for (const k of allowed) if (k in (req.body || {})) patch[k] = req.body[k];
     if (patch.persona_type && !['conversational', 'evaluator'].includes(patch.persona_type)) {
       return res.status(400).json({ error: "persona_type moet 'conversational' of 'evaluator' zijn" });
     }
+    // Evaluator-persona's emitteren nooit cues.
+    if (patch.persona_type === 'evaluator') patch.cue_emission_enabled = false;
+    if ('cue_emission_enabled' in patch) patch.cue_emission_enabled = !!patch.cue_emission_enabled;
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Geen wijzigingen' });
-    const { data, error: e } = await supabaseAdmin
+    let { data, error: e } = await supabaseAdmin
       .from('project_personas').update(patch)
       .eq('id', personaId).eq('project_id', projectId).select('*').single();
+    if (e && (e.code === '42703' || /cue_emission_enabled/i.test(e.message || ''))) {
+      // Defensief: kolom ontbreekt in oude DB — verwijder veld en probeer opnieuw.
+      const { cue_emission_enabled: _ignored, ...patchNoCue } = patch;
+      if (Object.keys(patchNoCue).length === 0) return res.json({ persona: null });
+      ({ data, error: e } = await supabaseAdmin
+        .from('project_personas').update(patchNoCue)
+        .eq('id', personaId).eq('project_id', projectId).select('*').single());
+    }
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ persona: data });
   } catch (err) {
@@ -8886,50 +8998,91 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
 
 // Pas een delta toe op de relatie en append history. Idempotent: als
 // event.refId al in history zit (zelfde source+refId), wordt niets bijgewerkt.
-// Retourneert de bijgewerkte rij of null als de tabel nog niet bestaat.
+// Race-safe (Task #171, Fase 2-fix uit architect-review): gebruikt pgPool
+// voor een atomic INSERT … ON CONFLICT DO UPDATE met arithmetic op score en
+// `jsonb` history-concat — zo gaan twee parallelle deltas (bv. close + review
+// op hetzelfde moment) niet verloren. Retourneert de bijgewerkte rij of null
+// als de tabel nog niet bestaat. Bij conflict-loss op de WHERE-clausule
+// (idempotente hit) wordt 1× herlezen.
 async function applyRelationshipDelta({ projectId, groupId, personaId, delta, event }) {
   if (!supabaseAdmin) return null;
-  const { data: existing, error: selErr } = await supabaseAdmin
-    .from('project_persona_relationships')
-    .select('id, score, history')
-    .eq('project_id', projectId).eq('group_id', groupId).eq('persona_id', personaId)
-    .maybeSingle();
-  if (selErr) {
-    if (selErr.code === '42P01' || /project_persona_relationships/i.test(selErr.message || '')) {
-      return null;
-    }
-    throw selErr;
-  }
-  const curScore   = existing?.score ?? 0;
-  const curHistory = Array.isArray(existing?.history) ? existing.history : [];
-  if (event?.refId && relHasHistoryRef(curHistory, event.source, event.refId)) {
-    return existing || null; // al verwerkt
-  }
-  const newScore   = applyRelDelta(curScore, delta);
-  const newHistory = relAppendHistory(curHistory, event);
-  if (existing) {
-    const { data: updated, error: upErr } = await supabaseAdmin
+  const evt = { ts: new Date().toISOString(), ...(event || {}) };
+  const deltaInt = Number.isFinite(Number(delta)) ? Math.round(Number(delta)) : 0;
+  const source = event?.source || '';
+  const refId = event?.refId || '';
+
+  // Snel-pad zonder pgPool (test/CI of geen Postgres-pool): val terug op de
+  // oude select+update/insert-flow met best-effort idempotentie.
+  if (!pgPool) {
+    const { data: existing, error: selErr } = await supabaseAdmin
       .from('project_persona_relationships')
-      .update({ score: newScore, history: newHistory, updated_at: new Date().toISOString() })
-      .eq('id', existing.id)
-      .select('id, score, history, updated_at')
-      .single();
-    if (upErr) throw upErr;
-    return updated;
+      .select('id, score, history')
+      .eq('project_id', projectId).eq('group_id', groupId).eq('persona_id', personaId)
+      .maybeSingle();
+    if (selErr) {
+      if (selErr.code === '42P01' || /project_persona_relationships/i.test(selErr.message || '')) return null;
+      throw selErr;
+    }
+    const curScore = existing?.score ?? 0;
+    const curHistory = Array.isArray(existing?.history) ? existing.history : [];
+    if (refId && relHasHistoryRef(curHistory, source, refId)) return existing || null;
+    const newScore = applyRelDelta(curScore, deltaInt);
+    const newHistory = relAppendHistory(curHistory, evt);
+    if (existing) {
+      const { data: updated, error: upErr } = await supabaseAdmin
+        .from('project_persona_relationships')
+        .update({ score: newScore, history: newHistory, updated_at: new Date().toISOString() })
+        .eq('id', existing.id).select('id, score, history, updated_at').single();
+      if (upErr) throw upErr;
+      return updated;
+    }
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from('project_persona_relationships')
+      .insert({ project_id: projectId, group_id: groupId, persona_id: personaId, score: newScore, history: newHistory })
+      .select('id, score, history, updated_at').single();
+    if (insErr) throw insErr;
+    return inserted;
   }
-  const { data: inserted, error: insErr } = await supabaseAdmin
-    .from('project_persona_relationships')
-    .insert({
-      project_id: projectId,
-      group_id: groupId,
-      persona_id: personaId,
-      score: newScore,
-      history: newHistory,
-    })
-    .select('id, score, history, updated_at')
-    .single();
-  if (insErr) throw insErr;
-  return inserted;
+
+  // Atomic upsert via pgPool. De WHERE-clausule op DO UPDATE voorkomt dubbele
+  // verwerking als hetzelfde (source, refId) al in history staat. Bij eerste
+  // insert is er per definitie nog geen history → geen dup-risico.
+  try {
+    const sql = `
+      INSERT INTO project_persona_relationships
+        (project_id, group_id, persona_id, score, history, updated_at)
+      VALUES (
+        $1, $2, $3,
+        GREATEST(LEAST($4::int, 10), -10),
+        jsonb_build_array($5::jsonb),
+        now()
+      )
+      ON CONFLICT (project_id, group_id, persona_id) DO UPDATE
+      SET score = GREATEST(LEAST(project_persona_relationships.score + $4::int, 10), -10),
+          history = project_persona_relationships.history || jsonb_build_array($5::jsonb),
+          updated_at = now()
+      WHERE COALESCE($7::text, '') = ''
+         OR NOT (project_persona_relationships.history @> jsonb_build_array(
+              jsonb_build_object('source', $6::text, 'refId', $7::text)
+            ))
+      RETURNING id, score, history, updated_at`;
+    const res = await pgPool.query(sql, [
+      projectId, groupId, personaId,
+      deltaInt, JSON.stringify(evt),
+      source, refId,
+    ]);
+    if (res.rowCount > 0) return res.rows[0];
+    // Idempotente hit via WHERE — re-read huidige staat (1 retry).
+    const reread = await pgPool.query(
+      `SELECT id, score, history, updated_at FROM project_persona_relationships
+       WHERE project_id=$1 AND group_id=$2 AND persona_id=$3`,
+      [projectId, groupId, personaId]
+    );
+    return reread.rows[0] || null;
+  } catch (e) {
+    if (e.code === '42P01' || /project_persona_relationships/i.test(e.message || '')) return null;
+    throw e;
+  }
 }
 
 // Lees de huidige relatie-rij of geef een neutrale defaults-rij terug.

@@ -1577,7 +1577,7 @@ export function ProjectRoomPage() {
                                     {rel.history.slice(0, 5).map((ev, i) => {
                                       const d = Number(ev.delta);
                                       const deltaStr = Number.isFinite(d) ? (d >= 0 ? `+${d}` : `${d}`) : '0';
-                                      const sourceKey = ev.source === 'document_review' || ev.source === 'staff_adjust'
+                                      const sourceKey = ev.source === 'document_review' || ev.source === 'staff_adjust' || ev.source === 'persona_chat_close'
                                         ? `room.relationship.eventSource.${ev.source}` : null;
                                       const sourceLabel = sourceKey ? t(sourceKey) : (ev.source || '');
                                       return (
