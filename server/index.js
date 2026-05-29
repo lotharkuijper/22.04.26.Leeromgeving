@@ -4646,6 +4646,12 @@ Geef je feedback in vier onderdelen:
 3. Eventuele misconcepties bij jou die gecorrigeerd moeten worden
 4. Concrete suggesties voor verbetering
 
+Notatie van formules (volg STRIKT):
+- Schrijf elke wiskundige formule of elk symbool in LaTeX: $...$ voor een formule midden in een zin, $$...$$ voor een formule op een eigen regel.
+- Plaats dollartekens ALTIJD in paren: voor elk openend $ of $$ exact één afsluitend $ of $$. Laat nooit een los dollarteken staan.
+- Meng inline en display niet binnen één formule: kies $...$ óf $$...$$, niet allebei voor dezelfde formule.
+- Gebruik LaTeX-commando's zoals \\cap, \\cdot, \\mid, \\Rightarrow, \\frac UITSLUITEND binnen $...$ of $$...$$, nooit in gewone tekst.
+
 Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student in de gezondheidswetenschappen.`;
 
 // Task #166: standaard prompt-template voor document-reviews. De docent kan
