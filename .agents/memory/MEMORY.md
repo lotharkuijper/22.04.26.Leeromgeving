@@ -1,1 +1,2 @@
 - [Per-course prompt/setting overrides](per-course-prompt-overrides.md) — course overrides live as reserved-name chatbot_prompts rows (`__rag_settings_<id>__`, `__explain_prompt_<id>__`), not a course_id column.
+- [RAG ingestion pipeline](rag-ingestion.md) — most formats client-side; .pptx is server-side (slides+notes, LLM chunking); LLM is OpenAI not Groq despite replit.md.

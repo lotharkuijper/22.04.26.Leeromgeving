@@ -13,6 +13,33 @@ export interface UploadProgress {
 
 export type ProgressCallback = (progress: UploadProgress) => void;
 
+function isPptx(fileName: string): boolean {
+  return fileName.split('.').pop()?.toLowerCase() === 'pptx';
+}
+
+// PowerPoint wordt server-side verwerkt: dia's + sprekersnotities worden
+// uitgelezen en semantisch gechunkt (LLM) op de server. De server haalt het
+// bestand zelf uit storage op basis van het document-id.
+async function processPptxOnServer(documentId: string): Promise<number> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error('Niet geauthenticeerd');
+
+  const res = await fetch('/api/admin/process-pptx', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ documentId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.error || `PowerPoint-verwerking mislukt (${res.status})`);
+  }
+  return data.totalChunks ?? 0;
+}
+
 export async function uploadDocument(
   file: File,
   title: string,
@@ -90,6 +117,32 @@ export async function uploadDocument(
       progress: 30,
       message: 'Tekst extracten uit document...',
     });
+
+    // PowerPoint volledig server-side verwerken (dia's + sprekersnotities,
+    // semantische chunking). De server schrijft chunks en zet de status zelf.
+    if (isPptx(file.name)) {
+      onProgress?.({
+        stage: 'generating',
+        progress: 50,
+        message: 'PowerPoint verwerken op de server (dia\'s + notities)...',
+      });
+      try {
+        const totalChunks = await processPptxOnServer(docData.id);
+        onProgress?.({
+          stage: 'completed',
+          progress: 100,
+          message: 'PowerPoint succesvol verwerkt!',
+          totalChunks,
+        });
+        return { documentId: docData.id };
+      } catch (err) {
+        await supabase
+          .from('documents')
+          .update({ processing_status: 'failed' })
+          .eq('id', docData.id);
+        throw err;
+      }
+    }
 
     const processedDoc = await processDocument(file);
 
@@ -189,6 +242,41 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
 
     if (docError || !doc) {
       throw new Error('Document not found');
+    }
+
+    // PowerPoint server-side opnieuw verwerken (server ruimt oude chunks op,
+    // leest dia's + notities en zet de status zelf).
+    if ((doc.file_type || '').toLowerCase() === 'pptx' || isPptx(doc.file_path || '')) {
+      await supabase
+        .from('documents')
+        .update({ processing_status: 'processing' })
+        .eq('id', documentId);
+      onProgress?.({
+        stage: 'generating',
+        progress: 50,
+        message: 'PowerPoint verwerken op de server (dia\'s + notities)...',
+      });
+      try {
+        const totalChunks = await processPptxOnServer(documentId);
+        onProgress?.({
+          stage: 'completed',
+          progress: 100,
+          message: 'PowerPoint succesvol verwerkt!',
+          totalChunks,
+        });
+        return;
+      } catch (err) {
+        await supabase
+          .from('documents')
+          .update({ processing_status: 'failed' })
+          .eq('id', documentId);
+        onProgress?.({
+          stage: 'error',
+          progress: 0,
+          message: err instanceof Error ? err.message : 'Unknown error occurred',
+        });
+        throw err;
+      }
     }
 
     const { data: fileData, error: downloadError } = await supabase.storage

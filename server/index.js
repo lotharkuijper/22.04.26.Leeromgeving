@@ -14,6 +14,15 @@ const parseOfficeAsync = (buffer) => new Promise((resolve, reject) => {
 });
 import { createClient } from '@supabase/supabase-js';
 import { expandQuery } from './queryExpansion.js';
+import {
+  extractPptxStructured,
+  buildDeckText,
+  slideToText,
+  validateSections,
+  fallbackChunks,
+  splitLongSections,
+  estimateTokens as estimatePptxTokens,
+} from './pptxExtract.js';
 import pkg from 'pg';
 const { Pool } = pkg;
 import {
@@ -1250,6 +1259,242 @@ app.delete('/api/admin/documents/:documentId', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     return res.json({ ok: true });
   } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Embed een lijst teksten via OpenAI (text-embedding-3-small), gebatcht.
+async function embedTextsServer(texts, openaiKey, batchSize = 64) {
+  const out = [];
+  for (let i = 0; i < texts.length; i += batchSize) {
+    const batch = texts.slice(i, i + batchSize);
+    const resp = await fetch(OPENAI_EMBEDDINGS_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: batch }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !Array.isArray(data?.data)) {
+      throw new Error(data?.error?.message || data?.error || `OpenAI embeddings error ${resp.status}`);
+    }
+    for (const row of data.data) out.push(row.embedding);
+  }
+  return out;
+}
+
+// LLM-chunking van één venster dia's. Retourneert genormaliseerde secties of
+// null (caller valt dan terug op het deterministische vangnet).
+async function chunkSlideWindow(win, openaiKey, lang = 'nl') {
+  const minSlide = win[0].slide;
+  const maxSlide = win[win.length - 1].slide;
+  const deckText = win.map(slideToText).join('\n\n');
+  const system = lang === 'en'
+    ? 'You segment lecture slides into coherent, self-contained study passages for a retrieval (RAG) index. Group consecutive slides that belong together. Rewrite each group as a flowing Dutch-or-English passage (match the slide language) that preserves the facts, including speaker notes. Never invent content. Respond ONLY with JSON.'
+    : 'Je verdeelt college-dia\'s in samenhangende, op zichzelf staande studiepassages voor een zoek-index (RAG). Groepeer opeenvolgende dia\'s die bij elkaar horen. Herschrijf elke groep als lopende tekst in de taal van de dia\'s, met behoud van alle feiten inclusief de sprekersnotities. Verzin niets. Antwoord UITSLUITEND met JSON.';
+  const instruction = `Geef JSON in de vorm {"sections":[{"title":"...","slideStart":N,"slideEnd":M,"content":"..."}]}. slideStart/slideEnd verwijzen naar de "Dia N"-nummers hieronder (tussen ${minSlide} en ${maxSlide}). Elke sectie bevat lopende, op zichzelf staande tekst.\n\nDIA'S:\n${deckText}`;
+
+  const body = {
+    model: OPENAI_MODEL,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: instruction },
+    ],
+    temperature: 0.2,
+    [MAX_TOKENS_PARAM]: 4000,
+    response_format: { type: 'json_object' },
+  };
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const resp = await fetch(OPENAI_CHAT_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        console.warn(`[process-pptx] LLM-chunk venster ${minSlide}-${maxSlide} status=${resp.status}`);
+        continue;
+      }
+      const raw = data?.choices?.[0]?.message?.content;
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { parsed = null; }
+      const sections = parsed ? validateSections(parsed, minSlide, maxSlide) : null;
+      if (sections) return sections;
+    } catch (err) {
+      console.warn(`[process-pptx] LLM-chunk venster ${minSlide}-${maxSlide} fout: ${err.message}`);
+    }
+  }
+  return null;
+}
+
+// Orkestreert semantische chunking over het hele deck met char-vensters.
+// Faalt een venster, dan valt enkel dat venster terug op fallbackChunks.
+async function semanticChunkDeck(slides, openaiKey, lang = 'nl') {
+  const windows = [];
+  let cur = [];
+  let curChars = 0;
+  for (const s of slides) {
+    const t = slideToText(s);
+    if (cur.length && curChars + t.length > 14000) {
+      windows.push(cur);
+      cur = [];
+      curChars = 0;
+    }
+    cur.push(s);
+    curChars += t.length + 2;
+  }
+  if (cur.length) windows.push(cur);
+
+  const all = [];
+  let llmWindows = 0;
+  let fallbackWindows = 0;
+  for (const win of windows) {
+    const sections = await chunkSlideWindow(win, openaiKey, lang);
+    if (sections) {
+      llmWindows++;
+      all.push(...sections);
+    } else {
+      fallbackWindows++;
+      all.push(...fallbackChunks(win));
+    }
+  }
+  all.sort((a, b) => a.slideStart - b.slideStart || a.slideEnd - b.slideEnd);
+  let mode = 'llm';
+  if (fallbackWindows > 0) mode = llmWindows > 0 ? 'mixed' : 'fallback';
+  return { sections: all, mode };
+}
+
+// POST /api/admin/process-pptx — server-side PowerPoint-extractie + semantische
+// chunking. Body: { documentId, lang? }. Toegang: admin/superuser of staff van
+// een cursus die aan de map van het document gekoppeld is.
+app.post('/api/admin/process-pptx', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!openaiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet geconfigureerd' });
+
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { user } = auth;
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+  const { documentId, lang = 'nl' } = req.body || {};
+  if (!documentId) return res.status(400).json({ error: 'documentId vereist' });
+
+  try {
+    const { data: doc } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
+      .eq('id', documentId)
+      .maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+
+    const ext = (doc.file_type || '').toLowerCase().replace(/^\./, '');
+    if (ext !== 'pptx') {
+      return res.status(400).json({ error: 'Dit endpoint verwerkt alleen .pptx-bestanden' });
+    }
+
+    // Autorisatie: admin/superuser of staff van een gekoppelde cursus.
+    const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+    if (!isAdmin) {
+      let allowed = false;
+      if (doc.folder_id) {
+        const { data: assignments } = await supabaseAdmin
+          .from('course_folder_assignments')
+          .select('course_id')
+          .eq('folder_id', doc.folder_id);
+        for (const a of assignments || []) {
+          if (await isCourseTeacher(user.id, a.course_id)) { allowed = true; break; }
+        }
+      }
+      if (!allowed) return res.status(403).json({ error: 'Geen rechten voor dit document' });
+    }
+
+    if (!doc.file_path || !doc.bucket) {
+      return res.status(400).json({ error: 'Document heeft geen opgeslagen bestand om te verwerken' });
+    }
+
+    // Markeer het document als 'failed' bij een verwerkingsfout (best-effort);
+    // dit endpoint is eigenaar van de statusovergangen voor .pptx.
+    const markFailed = async () => {
+      try {
+        await supabaseAdmin.from('documents')
+          .update({ processing_status: 'failed' }).eq('id', documentId);
+      } catch { /* best effort */ }
+    };
+
+    // Download het bestand uit storage.
+    const { data: blob, error: dlErr } = await supabaseAdmin.storage
+      .from(doc.bucket)
+      .download(doc.file_path);
+    if (dlErr || !blob) {
+      await markFailed();
+      return res.status(500).json({ error: `Kon bestand niet downloaden: ${dlErr?.message || 'onbekend'}` });
+    }
+    const buffer = Buffer.from(await blob.arrayBuffer());
+
+    // Extractie van dia's + sprekersnotities.
+    let slides;
+    try {
+      slides = extractPptxStructured(buffer);
+    } catch (err) {
+      await markFailed();
+      return res.status(422).json({ error: `Kon PowerPoint niet uitlezen: ${err.message}` });
+    }
+    slides = slides.filter((s) => s.title || s.body || s.notes);
+    if (!slides.length) {
+      await markFailed();
+      return res.status(422).json({ error: 'Geen tekst gevonden in deze PowerPoint' });
+    }
+
+    // Semantische chunking (LLM) met deterministisch vangnet per venster.
+    const { sections, mode } = await semanticChunkDeck(slides, openaiKey, lang);
+    const finalSections = splitLongSections(sections.length ? sections : fallbackChunks(slides));
+    if (!finalSections.length) {
+      await markFailed();
+      return res.status(422).json({ error: 'Geen chunks geproduceerd' });
+    }
+
+    // Embeddings genereren.
+    const embeddings = await embedTextsServer(finalSections.map((s) => s.content), openaiKey);
+
+    // Oude chunks van dit document opruimen (idempotent bij herverwerking).
+    await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
+
+    const rows = finalSections.map((s, i) => ({
+      document_id: documentId,
+      content: s.content,
+      embedding: embeddings[i],
+      chunk_index: i,
+      metadata: {
+        slideStart: s.slideStart,
+        slideEnd: s.slideEnd,
+        sectionTitle: s.title || null,
+        source: 'pptx',
+        chunkingMode: mode,
+      },
+    }));
+
+    const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
+    if (insErr) {
+      await supabaseAdmin.from('documents')
+        .update({ processing_status: 'failed' }).eq('id', documentId);
+      return res.status(500).json({ error: `Kon chunks niet opslaan: ${insErr.message}` });
+    }
+
+    await supabaseAdmin.from('documents')
+      .update({ processing_status: 'completed', total_chunks: rows.length })
+      .eq('id', documentId);
+
+    console.log(`[process-pptx] doc=${documentId} dia's=${slides.length} chunks=${rows.length} mode=${mode}`);
+    return res.json({ ok: true, totalChunks: rows.length, slideCount: slides.length, mode });
+  } catch (err) {
+    console.error('[process-pptx] Fout:', err);
+    try {
+      await supabaseAdmin.from('documents')
+        .update({ processing_status: 'failed' }).eq('id', documentId);
+    } catch { /* best effort */ }
     return res.status(500).json({ error: err.message });
   }
 });
