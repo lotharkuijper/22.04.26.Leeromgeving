@@ -22,6 +22,7 @@ import {
   parseForceFlag,
 } from './memberRoleAuth.js';
 import { validateReviewResponse, canRequestDocumentReview } from './documentReview.js';
+import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
 import {
   applyDelta as applyRelDelta,
   scoreToLabel as relScoreToLabel,
@@ -4940,6 +4941,25 @@ async function initChatbotPromptSection() {
 // de migratie nog niet is toegepast; endpoints geven dan een 503 met
 // duidelijke uitleg.
 let quizSourcesSchemaReady = false;
+// Bron-agnostische itembank: alle 'itembank'-achtige bronnen die items in
+// quiz_questions wegschrijven met een exsection_path. ShareStats is er één van;
+// 'csv_import' is een tweede provider (docent-geüploade CSV). Lees-endpoints
+// (secties, vraagselectie, dekking, suggesties, diagnose) gebruiken deze set
+// zodat elke cursus een eigen itembank kan meebrengen. ShareStats-specifieke
+// flows (auto-link, GitHub-sync) blijven hard op 'sharestats'.
+const ITEMBANK_SOURCES = ['sharestats', 'csv_import'];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Bouwt het PostgREST `or`-filter voor itembank-bronnen. ShareStats is een
+// gedeelde, cursus-overstijgende bank; CSV-imports horen bij één cursus
+// (metadata.course_id). Zonder geldige courseId vallen we terug op enkel
+// ShareStats zodat CSV-banken van andere cursussen NOOIT lekken. courseId
+// wordt gevalideerd als UUID om injectie in de filterstring te voorkomen.
+function itembankSourceOrFilter(courseId) {
+  if (courseId && UUID_RE.test(String(courseId))) {
+    return `source.eq.sharestats,and(source.eq.csv_import,metadata->>course_id.eq.${courseId})`;
+  }
+  return 'source.eq.sharestats';
+}
 async function detectQuizSourcesSchema() {
   if (!supabaseAdmin) return;
   try {
@@ -5485,11 +5505,18 @@ app.get('/api/admin/itembank-sections', async (req, res) => {
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar — pas de migratie toe.' });
   }
+  const courseId = typeof req.query.courseId === 'string' ? req.query.courseId : null;
+  if (!courseId) {
+    return res.status(400).json({ error: 'courseId is verplicht' });
+  }
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
+  }
   try {
     const { data, error } = await supabaseAdmin
       .from('quiz_questions')
       .select('exsection_path, topic, subtopic, item_type')
-      .eq('source', 'sharestats')
+      .or(itembankSourceOrFilter(courseId))
       .not('exsection_path', 'is', null);
     if (error) return res.status(500).json({ error: error.message });
     const seen = new Map();
@@ -5713,25 +5740,29 @@ app.post('/api/quiz/itembank-questions', async (req, res) => {
     // overlaps() in PostgREST is hoofdletter-gevoelig; daarom matchen we
     // hieronder in JS met genormaliseerde (lower-case) paden. 1564 items
     // passen ruim binnen de limit, dus we filteren in-memory.
-    let candidatesQuery = supabaseAdmin
+    // Bronscoping (ShareStats + cursus-eigen CSV) gaat via één `.or()`. Het
+    // item_type-filter wordt in-memory toegepast (zie hieronder) zodat we geen
+    // tweede `.or()` op dezelfde query stapelen — dat houdt de bronscoping
+    // ondubbelzinnig en voorkomt cross-course lekken.
+    const candidatesQuery = supabaseAdmin
       .from('quiz_questions')
       .select('id, question_text, answer_options, correct_answer, explanation, sharestats_id, exsection_path, topic, subtopic, item_type, metadata')
-      .eq('source', 'sharestats')
+      .or(itembankSourceOrFilter(courseId))
       .limit(5000);
+    const { data: candidates, error: qErr } = await candidatesQuery;
+    if (qErr) return res.status(500).json({ error: qErr.message });
+
     // item_type-kolom is pas vanaf migratie 20260507130000 aanwezig.
     // Voor mcq: accepteer item_type='mcq' óf NULL (oude rijen zijn historisch
     // mchoice). Voor open: vereis expliciet item_type='open'.
-    if (wantedItemType === 'mcq') {
-      candidatesQuery = candidatesQuery.or('item_type.eq.mcq,item_type.is.null');
-    } else {
-      candidatesQuery = candidatesQuery.eq('item_type', 'open');
-    }
-    const { data: candidates, error: qErr } = await candidatesQuery;
-    if (qErr) return res.status(500).json({ error: qErr.message });
+    const itemTypeMatches = (it) => wantedItemType === 'mcq'
+      ? (it === 'mcq' || it === null || it === undefined)
+      : it === 'open';
 
     const normalizePath = (p) => (Array.isArray(p) ? p : []).map(s => String(s ?? '').toLowerCase().trim());
     const targetsLower = sectionPaths.map(normalizePath);
     const matches = (candidates || []).filter(q => {
+      if (!itemTypeMatches(q.item_type)) return false;
       const qPath = normalizePath(q.exsection_path);
       return targetsLower.some(target => {
         if (qPath.length < target.length) return false;
@@ -5920,7 +5951,7 @@ app.post('/api/quiz/concept-availability', async (req, res) => {
       const { data: items, count } = await supabaseAdmin
         .from('quiz_questions')
         .select('id, exsection_path, item_type', { count: 'exact' })
-        .eq('source', 'sharestats')
+        .or(itembankSourceOrFilter(courseId))
         .not('exsection_path', 'is', null)
         .limit(ITEM_HARD_LIMIT);
       allItems = items || [];
@@ -6040,9 +6071,15 @@ app.post('/api/admin/itembank-mapping-suggestions', async (req, res) => {
   if (!quizSourcesSchemaReady) {
     return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar' });
   }
-  const { conceptName, conceptDefinition, topN = 3 } = req.body || {};
+  const { conceptName, conceptDefinition, courseId, topN = 3 } = req.body || {};
   if (!conceptName || typeof conceptName !== 'string') {
     return res.status(400).json({ error: 'conceptName is verplicht' });
+  }
+  if (!courseId || typeof courseId !== 'string') {
+    return res.status(400).json({ error: 'courseId is verplicht' });
+  }
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   // Bound de werkverzameling om timeouts en grote OpenAI-bills te voorkomen
   // bij onverwacht grote itembanks. 800 unieke secties is ruim voldoende voor
@@ -6056,7 +6093,7 @@ app.post('/api/admin/itembank-mapping-suggestions', async (req, res) => {
     const { data: rows, error: secErr } = await supabaseAdmin
       .from('quiz_questions')
       .select('exsection_path')
-      .eq('source', 'sharestats')
+      .or(itembankSourceOrFilter(courseId))
       .not('exsection_path', 'is', null)
       .limit(ITEM_PAGE_LIMIT);
     if (secErr) return res.status(500).json({ error: secErr.message });
@@ -6123,6 +6160,12 @@ app.post('/api/admin/itembank-mapping-diagnose', async (req, res) => {
   if (!conceptId || typeof conceptId !== 'string') {
     return res.status(400).json({ error: 'conceptId is verplicht' });
   }
+  if (!courseId || typeof courseId !== 'string') {
+    return res.status(400).json({ error: 'courseId is verplicht' });
+  }
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
+  }
   try {
     // 1) Laad begrip (naam + definitie + key_points).
     const { data: concept, error: conceptErr } = await supabaseAdmin
@@ -6161,11 +6204,11 @@ app.post('/api/admin/itembank-mapping-diagnose', async (req, res) => {
         .filter(t => t.length >= 3 && !STOP.has(t))
     )];
 
-    // 4) Trek alle unieke ShareStats-secties met counts.
+    // 4) Trek alle unieke itembank-secties (cursus-scoped) met counts.
     const { data: rows, error: rowsErr } = await supabaseAdmin
       .from('quiz_questions')
       .select('exsection_path, item_type')
-      .eq('source', 'sharestats')
+      .or(itembankSourceOrFilter(courseId))
       .not('exsection_path', 'is', null)
       .limit(5000);
     if (rowsErr) return res.status(500).json({ error: rowsErr.message });
@@ -6199,6 +6242,191 @@ app.post('/api/admin/itembank-mapping-diagnose', async (req, res) => {
       tokens_truncated: tokens.length > 40,
       total_sections_scanned: sections.length,
       candidates: ranked.slice(0, Math.max(1, Math.min(topN, 20))),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoint: automatische bulk-matching begrip ↔ itembank-sectie ---------
+// Berekent in één embedding-pass de semantische gelijkenis tussen ELK begrip
+// van de cursus en ELKE itembank-sectie, en geeft per begrip de top-N secties
+// terug met een vlag of ze boven de drempel liggen. De docent reviewt het
+// voorstel in de UI en slaat de geaccepteerde koppelingen op via het bestaande
+// itembank-mappings-endpoint. Dit endpoint schrijft zelf NIETS weg (dry-run).
+app.post('/api/admin/itembank-bulk-match', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar' });
+  }
+  const { courseId, threshold = 0.35, topN = 3 } = req.body || {};
+  if (!courseId || typeof courseId !== 'string') {
+    return res.status(400).json({ error: 'courseId is verplicht' });
+  }
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
+  }
+  const MAX_SECTIONS = 800;
+  const MAX_CONCEPTS = 400;
+  const ITEM_PAGE_LIMIT = 5000;
+  const thr = Math.max(0, Math.min(1, Number(threshold) || 0.35));
+  const top = Math.max(1, Math.min(Number(topN) || 3, 8));
+  try {
+    // 1) Begrippen van de cursus (zelfde filter als de admin-UI).
+    const { data: conceptRows, error: cErr } = await supabaseAdmin
+      .from('concepts')
+      .select('id, name, definition, key_points, course_id')
+      .order('name');
+    if (cErr) return res.status(500).json({ error: cErr.message });
+    const marker = `course_id:${courseId}`;
+    const concepts = (conceptRows || []).filter(c => {
+      if (c.course_id === courseId) return true;
+      if (Array.isArray(c.key_points) && c.key_points.includes(marker)) return true;
+      if (!c.course_id && !(Array.isArray(c.key_points) && c.key_points.some(kp => typeof kp === 'string' && kp.startsWith('course_id:')))) return true;
+      return false;
+    }).slice(0, MAX_CONCEPTS);
+    if (concepts.length === 0) return res.json({ results: [], threshold: thr, sections_evaluated: 0, truncated: false });
+
+    // 2) Huidige mappings voor de cursus (om al-gekoppelde te markeren).
+    const { data: mapRows } = await supabaseAdmin
+      .from('concept_itembank_sections')
+      .select('concept_id, exsection_path, course_id')
+      .or(`course_id.eq.${courseId},course_id.is.null`);
+    const currentByConcept = new Map();
+    for (const m of mapRows || []) {
+      if (!Array.isArray(m.exsection_path) || m.exsection_path.length === 0) continue;
+      const arr = currentByConcept.get(m.concept_id) || [];
+      arr.push(m.exsection_path);
+      currentByConcept.set(m.concept_id, arr);
+    }
+
+    // 3) Unieke itembank-secties (cursus-scoped) met counts.
+    const { data: rows, error: secErr } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('exsection_path, item_type')
+      .or(itembankSourceOrFilter(courseId))
+      .not('exsection_path', 'is', null)
+      .limit(ITEM_PAGE_LIMIT);
+    if (secErr) return res.status(500).json({ error: secErr.message });
+    const seen = new Map();
+    for (const row of rows || []) {
+      const path = Array.isArray(row.exsection_path) ? row.exsection_path : [];
+      if (path.length === 0) continue;
+      const key = path.join(' / ');
+      const entry = seen.get(key) || { exsection_path: path, count: 0, mcq_count: 0, open_count: 0 };
+      entry.count += 1;
+      if (row.item_type === 'open') entry.open_count += 1; else entry.mcq_count += 1;
+      seen.set(key, entry);
+    }
+    let sections = [...seen.values()];
+    let truncated = false;
+    if (sections.length > MAX_SECTIONS) {
+      sections.sort((a, b) => b.count - a.count);
+      sections = sections.slice(0, MAX_SECTIONS);
+      truncated = true;
+    }
+    if (sections.length === 0) return res.json({ results: [], threshold: thr, sections_evaluated: 0, truncated: false });
+
+    // 4) Embeddings: één per begrip + één per sectie, in één gebatchte reeks.
+    const conceptTexts = concepts.map(c => c.definition
+      ? `${c.name}. ${String(c.definition).slice(0, 600)}`
+      : c.name);
+    const sectionTexts = sections.map(s => s.exsection_path.join(' / '));
+    const allTexts = [...conceptTexts, ...sectionTexts];
+    const embeddings = [];
+    const CHUNK = 100;
+    for (let i = 0; i < allTexts.length; i += CHUNK) {
+      const part = await fetchOpenAIEmbeddings(allTexts.slice(i, i + CHUNK));
+      embeddings.push(...part);
+    }
+    const conceptEmbs = embeddings.slice(0, concepts.length);
+    const sectionEmbs = embeddings.slice(concepts.length);
+
+    // 5) Per begrip: rank secties, neem top-N, markeer boven drempel.
+    const results = concepts.map((c, ci) => {
+      const ranked = sections.map((s, si) => ({
+        exsection_path: s.exsection_path,
+        count: s.count,
+        mcq_count: s.mcq_count,
+        open_count: s.open_count,
+        similarity: cosineSimilarity(conceptEmbs[ci], sectionEmbs[si]),
+      })).sort((a, b) => b.similarity - a.similarity);
+      const current = currentByConcept.get(c.id) || [];
+      const currentKeys = new Set(current.map(p => p.join('/')));
+      const candidates = ranked.slice(0, top).map(r => ({
+        ...r,
+        above_threshold: r.similarity >= thr,
+        already_linked: currentKeys.has(r.exsection_path.join('/')),
+      }));
+      return {
+        conceptId: c.id,
+        conceptName: c.name,
+        currentMappings: current,
+        candidates,
+      };
+    });
+    return res.json({ results, threshold: thr, sections_evaluated: sections.length, truncated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Endpoint: CSV-import van itembank-vragen (bron-agnostisch) -------------
+// Laat docenten een eigen vragenbank als CSV aanleveren. De items komen met
+// source='csv_import' in quiz_questions, met een exsection_path dat met het
+// cursuslabel is genamespaced zodat secties niet botsen met die van andere
+// cursussen. Daarna zijn ze koppelbaar (incl. bulk-match) en komen ze via de
+// mix in studentquizzes.
+app.post('/api/admin/itembank/import-csv', async (req, res) => {
+  const auth = await requireAdminOrDocent(req, res);
+  if (!auth) return;
+  if (!quizSourcesSchemaReady) {
+    return res.status(503).json({ error: 'quiz_sources schema niet beschikbaar' });
+  }
+  const { courseId, csvText, courseLabel } = req.body || {};
+  if (!courseId || typeof courseId !== 'string') {
+    return res.status(400).json({ error: 'courseId is verplicht' });
+  }
+  if (typeof csvText !== 'string' || csvText.trim().length === 0) {
+    return res.status(400).json({ error: 'csvText is verplicht' });
+  }
+  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+    return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
+  }
+  // Begrens omvang om geheugen/timeouts te beschermen (~2 MB CSV).
+  if (csvText.length > 2_000_000) {
+    return res.status(413).json({ error: 'CSV te groot (max ~2 MB)' });
+  }
+  try {
+    const { records, errors, totalRows } = parseItembankCsv(csvText);
+    if (records.length === 0) {
+      return res.status(400).json({
+        error: 'Geen geldige rijen gevonden in de CSV.',
+        errors: errors.slice(0, 50),
+        totalRows,
+      });
+    }
+    const label = (typeof courseLabel === 'string' && courseLabel.trim()) ? courseLabel.trim().slice(0, 60) : null;
+    const rows = records.map(r => csvRowToQuizQuestion(r, {
+      sourceLabel: 'csv_import',
+      courseLabel: label,
+      courseId,
+      createdBy: auth.user.id,
+    }));
+    let imported = 0;
+    const BATCH = 500;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const slice = rows.slice(i, i + BATCH);
+      const { error } = await supabaseAdmin.from('quiz_questions').insert(slice);
+      if (error) return res.status(500).json({ error: error.message, imported });
+      imported += slice.length;
+    }
+    return res.json({
+      imported,
+      skipped: errors.length,
+      errors: errors.slice(0, 50),
+      totalRows,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });

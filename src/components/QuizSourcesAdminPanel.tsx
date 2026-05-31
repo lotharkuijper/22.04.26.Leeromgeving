@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb, Search } from 'lucide-react';
+import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb, Search, Wand2, Upload, BarChart3, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
@@ -17,6 +17,30 @@ interface MappingSuggestion {
   exsection_path: string[];
   count: number;
   similarity: number;
+}
+
+interface BulkCandidate {
+  exsection_path: string[];
+  count: number;
+  mcq_count: number;
+  open_count: number;
+  similarity: number;
+  above_threshold: boolean;
+  already_linked: boolean;
+}
+
+interface BulkResult {
+  conceptId: string;
+  conceptName: string;
+  currentMappings: string[][];
+  candidates: BulkCandidate[];
+}
+
+interface CsvImportResult {
+  imported: number;
+  skipped: number;
+  errors: { row: number; reason: string }[];
+  totalRows: number;
 }
 
 interface DiagnoseCandidate {
@@ -117,6 +141,21 @@ export function QuizSourcesAdminPanel() {
   const [diagnoseByConcept, setDiagnoseByConcept] = useState<Record<string, DiagnoseResult>>({});
   const [diagnosingConceptId, setDiagnosingConceptId] = useState<string | null>(null);
 
+  // Automatische bulk-matching: één klik koppelt alle begrippen aan de
+  // semantisch dichtstbijzijnde itembank-secties. De docent reviewt het
+  // voorstel (drempel + checkboxes) en past geaccepteerde koppelingen toe.
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null);
+  const [bulkThreshold, setBulkThreshold] = useState(0.4);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+
+  // CSV-import van een eigen itembank (bron-agnostisch).
+  const [csvText, setCsvText] = useState('');
+  const [csvLabel, setCsvLabel] = useState('');
+  const [csvImporting, setCsvImporting] = useState(false);
+  const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
+  const [showCsvHelp, setShowCsvHelp] = useState(false);
+
   const headers = useMemo(
     () =>
       session?.access_token
@@ -161,7 +200,7 @@ export function QuizSourcesAdminPanel() {
 
       // Itembank-secties
       try {
-        const secRes = await fetch('/api/admin/itembank-sections', { headers });
+        const secRes = await fetch(`/api/admin/itembank-sections?courseId=${encodeURIComponent(courseId)}`, { headers });
         const secData = await secRes.json();
         if (secRes.status === 503) {
           setSchemaReady(false);
@@ -326,6 +365,7 @@ export function QuizSourcesAdminPanel() {
         body: JSON.stringify({
           conceptName: concept.name,
           conceptDefinition: concept.definition || null,
+          courseId: activeCourseId,
           topN: 3,
         }),
       });
@@ -370,6 +410,123 @@ export function QuizSourcesAdminPanel() {
       delete next[conceptId];
       return next;
     });
+  }
+
+  // Live dekkings-overzicht: per begrip het aantal gekoppelde itembank-vragen,
+  // berekend uit de huidige (nog niet opgeslagen) mappings + de secties. Spiegelt
+  // de server-prefix-match: een mapping-pad dekt alle secties die ermee beginnen.
+  const coverage = useMemo(() => {
+    const norm = (p: string[]) => p.map(s => String(s ?? '').toLowerCase().trim());
+    return concepts.map(c => {
+      const cms = mappings.filter(m => m.concept_id === c.id);
+      let total = 0, mcq = 0, open = 0;
+      if (cms.length > 0) {
+        const normMaps = cms.map(m => norm(m.exsection_path));
+        for (const s of sections) {
+          const sp = norm(s.exsection_path);
+          const hit = normMaps.some(mp => mp.length <= sp.length && mp.every((seg, i) => seg === sp[i]));
+          if (hit) {
+            total += s.count;
+            mcq += s.mcq_count ?? 0;
+            open += s.open_count ?? 0;
+          }
+        }
+      }
+      return { id: c.id, name: c.name, total, mcq, open, linked: cms.length > 0 };
+    });
+  }, [concepts, mappings, sections]);
+
+  const coverageGaps = coverage.filter(c => c.total === 0).length;
+
+  async function handleBulkMatch() {
+    if (!activeCourseId) return;
+    setBulkLoading(true);
+    try {
+      const res = await fetch('/api/admin/itembank-bulk-match', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ courseId: activeCourseId, threshold: bulkThreshold, topN: 3 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || t('admin.quizSources.bulk.error'));
+      const results = (data.results || []) as BulkResult[];
+      setBulkResults(results);
+      // Standaard-selectie: kandidaten boven drempel die nog niet gekoppeld zijn.
+      const sel = new Set<string>();
+      for (const r of results) {
+        for (const cand of r.candidates) {
+          if (cand.above_threshold && !cand.already_linked) {
+            sel.add(`${r.conceptId}|${cand.exsection_path.join('/')}`);
+          }
+        }
+      }
+      setBulkSelected(sel);
+    } catch (err) {
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.bulk.error'));
+    }
+    setBulkLoading(false);
+  }
+
+  function toggleBulkSelect(conceptId: string, pathKey: string) {
+    setBulkSelected(prev => {
+      const next = new Set(prev);
+      const key = `${conceptId}|${pathKey}`;
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
+  function applyBulkSelected() {
+    if (!bulkResults) return;
+    let added = 0;
+    for (const r of bulkResults) {
+      for (const cand of r.candidates) {
+        const key = `${r.conceptId}|${cand.exsection_path.join('/')}`;
+        if (bulkSelected.has(key)) {
+          addMapping(r.conceptId, cand.exsection_path);
+          added++;
+        }
+      }
+    }
+    setBulkResults(null);
+    setBulkSelected(new Set());
+    showMsg('success', t('admin.quizSources.bulk.applied', { count: String(added) }));
+  }
+
+  async function handleImportCsv() {
+    if (!activeCourseId) return;
+    setCsvImporting(true);
+    setCsvResult(null);
+    try {
+      const res = await fetch('/api/admin/itembank/import-csv', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          courseId: activeCourseId,
+          csvText,
+          courseLabel: csvLabel.trim() || activeCourse?.name || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (Array.isArray(data.errors)) setCsvResult({ imported: 0, skipped: data.errors.length, errors: data.errors, totalRows: data.totalRows ?? 0 });
+        throw new Error(data.error || t('admin.quizSources.csv.error'));
+      }
+      setCsvResult(data as CsvImportResult);
+      setCsvText('');
+      showMsg('success', t('admin.quizSources.csv.imported', { count: String(data.imported) }));
+      // Secties herladen zodat de nieuwe CSV-secties direct koppelbaar zijn.
+      try {
+        const secRes = await fetch(`/api/admin/itembank-sections?courseId=${encodeURIComponent(activeCourseId)}`, { headers });
+        if (secRes.ok) {
+          const secData = await secRes.json();
+          setSections(secData.sections || []);
+        }
+      } catch { /* niet kritiek */ }
+    } catch (err) {
+      showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.csv.error'));
+    }
+    setCsvImporting(false);
   }
 
   function setRagFolder(conceptId: string, folderId: string) {
@@ -442,12 +599,156 @@ export function QuizSourcesAdminPanel() {
         </div>
       </section>
 
+      {/* Dekkings-overzicht */}
+      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-coverage">
+        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+          <BarChart3 className="w-4 h-4" /> {t('admin.quizSources.coverage.title')}
+        </h3>
+        <p className="text-xs text-gray-600">{t('admin.quizSources.coverage.desc')}</p>
+        {coverageGaps > 0 ? (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 inline-flex items-center gap-1" data-testid="text-coverage-gaps">
+            <AlertCircle className="w-3.5 h-3.5" /> {t('admin.quizSources.coverage.gaps', { count: String(coverageGaps) })}
+          </p>
+        ) : (
+          <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded p-2 inline-flex items-center gap-1" data-testid="text-coverage-ok">
+            <CheckCircle2 className="w-3.5 h-3.5" /> {t('admin.quizSources.coverage.allCovered')}
+          </p>
+        )}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <div className="max-h-64 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-600 sticky top-0">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium">{t('admin.quizSources.coverage.conceptCol')}</th>
+                  <th className="text-right px-3 py-2 font-medium w-20">{t('admin.quizSources.itembank.totalCol')}</th>
+                  <th className="text-right px-3 py-2 font-medium w-16">MCQ</th>
+                  <th className="text-right px-3 py-2 font-medium w-16">Open</th>
+                </tr>
+              </thead>
+              <tbody>
+                {coverage.map(c => (
+                  <tr key={c.id} className={`border-t border-gray-100 ${c.total === 0 ? 'bg-amber-50' : ''}`} data-testid={`row-coverage-${c.id}`}>
+                    <td className="px-3 py-1.5 text-gray-800">{c.name}</td>
+                    <td className={`px-3 py-1.5 text-right font-medium ${c.total === 0 ? 'text-amber-700' : 'text-gray-800'}`} data-testid={`text-coverage-total-${c.id}`}>{c.total}</td>
+                    <td className={`px-3 py-1.5 text-right ${c.mcq === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.mcq}</td>
+                    <td className={`px-3 py-1.5 text-right ${c.open === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.open}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       {/* ItemBank-mappings */}
       <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-itembank-mappings">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <Database className="w-4 h-4" /> {t('admin.quizSources.itembank.title')}
         </h3>
         <p className="text-xs text-gray-600">{t('admin.quizSources.itembank.desc')}</p>
+
+        {/* Automatische bulk-matching */}
+        {sections.length > 0 && (
+          <div className="border border-violet-200 bg-violet-50 rounded-lg p-3 space-y-3" data-testid="block-bulk-match">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex-1 min-w-[220px]">
+                <p className="text-sm font-semibold text-violet-900 inline-flex items-center gap-1">
+                  <Wand2 className="w-4 h-4" /> {t('admin.quizSources.bulk.title')}
+                </p>
+                <p className="text-[11px] text-violet-800 mt-0.5">{t('admin.quizSources.bulk.desc')}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="text-[11px] text-violet-900 inline-flex items-center gap-2">
+                  {t('admin.quizSources.bulk.threshold', { pct: (bulkThreshold * 100).toFixed(0) })}
+                  <input
+                    type="range"
+                    min={0.2}
+                    max={0.7}
+                    step={0.05}
+                    value={bulkThreshold}
+                    onChange={e => setBulkThreshold(Number(e.target.value))}
+                    className="w-28"
+                    data-testid="input-bulk-threshold"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleBulkMatch}
+                  disabled={bulkLoading}
+                  className="px-3 py-1.5 bg-violet-600 text-white text-xs font-medium rounded hover:bg-violet-700 disabled:opacity-50 inline-flex items-center gap-1"
+                  data-testid="button-bulk-match"
+                >
+                  {bulkLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                  {bulkLoading ? t('admin.quizSources.bulk.running') : t('admin.quizSources.bulk.run')}
+                </button>
+              </div>
+            </div>
+
+            {bulkResults && (
+              <div className="space-y-2" data-testid="bulk-match-results">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-violet-800">
+                    {t('admin.quizSources.bulk.selectedInfo', { count: String(bulkSelected.size) })}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setBulkResults(null); setBulkSelected(new Set()); }}
+                      className="text-[11px] text-violet-700 hover:text-violet-900"
+                      data-testid="button-bulk-dismiss"
+                    >
+                      {t('admin.quizSources.bulk.dismiss')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={applyBulkSelected}
+                      disabled={bulkSelected.size === 0}
+                      className="px-2.5 py-1 bg-emerald-600 text-white text-[11px] font-medium rounded hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-1"
+                      data-testid="button-bulk-apply"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" /> {t('admin.quizSources.bulk.apply')}
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-80 overflow-y-auto space-y-2">
+                  {bulkResults.filter(r => r.candidates.length > 0).map(r => (
+                    <div key={r.conceptId} className="bg-white border border-violet-100 rounded p-2" data-testid={`bulk-concept-${r.conceptId}`}>
+                      <p className="text-xs font-semibold text-gray-900 mb-1">{r.conceptName}</p>
+                      <ul className="space-y-1">
+                        {r.candidates.map(cand => {
+                          const pathKey = cand.exsection_path.join('/');
+                          const selKey = `${r.conceptId}|${pathKey}`;
+                          return (
+                            <li key={pathKey} className="flex items-center gap-2 text-[11px]" data-testid={`bulk-cand-${r.conceptId}-${pathKey}`}>
+                              <input
+                                type="checkbox"
+                                checked={bulkSelected.has(selKey)}
+                                disabled={cand.already_linked}
+                                onChange={() => toggleBulkSelect(r.conceptId, pathKey)}
+                                data-testid={`checkbox-bulk-${r.conceptId}-${pathKey}`}
+                              />
+                              <span className="flex-1 min-w-0 truncate text-gray-800">{cand.exsection_path.join(' / ')}</span>
+                              <span className={`px-1.5 py-0.5 rounded ${cand.above_threshold ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'}`} data-testid={`text-bulk-sim-${r.conceptId}-${pathKey}`}>
+                                {(cand.similarity * 100).toFixed(0)}%
+                              </span>
+                              <span className="text-gray-500 w-24 text-right">
+                                {t('admin.quizSources.bulk.itemInfo', { count: String(cand.count), mcq: String(cand.mcq_count), open: String(cand.open_count) })}
+                              </span>
+                              {cand.already_linked && (
+                                <span className="text-violet-600">{t('admin.quizSources.itembank.alreadyLinked')}</span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {sections.length === 0 ? (
           <p className="text-sm text-gray-500 italic">
             {t('admin.quizSources.itembank.noSections')}
@@ -711,6 +1012,92 @@ export function QuizSourcesAdminPanel() {
           <Save className="w-4 h-4" />
           {savingMappings ? t('admin.quizSources.itembank.saving') : t('admin.quizSources.itembank.save')}
         </button>
+      </section>
+
+      {/* CSV-import eigen itembank */}
+      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-csv-import">
+        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+          <Upload className="w-4 h-4" /> {t('admin.quizSources.csv.title')}
+        </h3>
+        <p className="text-xs text-gray-600">{t('admin.quizSources.csv.desc')}</p>
+        <button
+          type="button"
+          onClick={() => setShowCsvHelp(v => !v)}
+          className="text-xs text-sky-700 hover:text-sky-900 underline"
+          data-testid="button-csv-help-toggle"
+        >
+          {showCsvHelp ? t('admin.quizSources.csv.hideHelp') : t('admin.quizSources.csv.showHelp')}
+        </button>
+        {showCsvHelp && (
+          <div className="text-[11px] bg-sky-50 border border-sky-200 rounded p-3 space-y-1 text-sky-900" data-testid="block-csv-help">
+            <p>{t('admin.quizSources.csv.helpIntro')}</p>
+            <pre className="bg-white border border-sky-100 rounded p-2 overflow-x-auto whitespace-pre">{t('admin.quizSources.csv.helpFormat')}</pre>
+            <p>{t('admin.quizSources.csv.helpNote')}</p>
+          </div>
+        )}
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">{t('admin.quizSources.csv.labelField')}</label>
+          <input
+            type="text"
+            value={csvLabel}
+            onChange={e => setCsvLabel(e.target.value)}
+            placeholder={activeCourse?.name || t('admin.quizSources.csv.labelPlaceholder')}
+            className="w-full max-w-sm px-3 py-1.5 border border-gray-300 rounded text-xs"
+            data-testid="input-csv-label"
+          />
+          <p className="text-[11px] text-gray-500 mt-1">{t('admin.quizSources.csv.labelHint')}</p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1">{t('admin.quizSources.csv.textField')}</label>
+          <textarea
+            value={csvText}
+            onChange={e => setCsvText(e.target.value)}
+            rows={8}
+            placeholder={t('admin.quizSources.csv.textPlaceholder')}
+            className="w-full px-3 py-2 border border-gray-300 rounded font-mono text-xs"
+            data-testid="textarea-csv-text"
+          />
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={async e => {
+              const file = e.target.files?.[0];
+              if (file) setCsvText(await file.text());
+              e.target.value = '';
+            }}
+            className="text-xs"
+            data-testid="input-csv-file"
+          />
+          <button
+            type="button"
+            onClick={handleImportCsv}
+            disabled={csvImporting || csvText.trim().length === 0}
+            className="px-4 py-2 bg-sky-600 text-white text-sm font-medium rounded-lg hover:bg-sky-700 disabled:opacity-50 inline-flex items-center gap-2"
+            data-testid="button-csv-import"
+          >
+            {csvImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            {csvImporting ? t('admin.quizSources.csv.importing') : t('admin.quizSources.csv.import')}
+          </button>
+        </div>
+        {csvResult && (
+          <div className="text-xs border border-gray-200 rounded p-3 space-y-1" data-testid="block-csv-result">
+            <p className="text-emerald-800 inline-flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> {t('admin.quizSources.csv.resultImported', { count: String(csvResult.imported), total: String(csvResult.totalRows) })}
+            </p>
+            {csvResult.skipped > 0 && (
+              <div className="text-amber-800">
+                <p className="inline-flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5" /> {t('admin.quizSources.csv.resultSkipped', { count: String(csvResult.skipped) })}</p>
+                <ul className="mt-1 ml-4 list-disc text-[11px] text-amber-700">
+                  {csvResult.errors.slice(0, 10).map((er, i) => (
+                    <li key={i} data-testid={`text-csv-error-${i}`}>{t('admin.quizSources.csv.rowError', { row: String(er.row), reason: er.reason })}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* RAG-folder mapping */}

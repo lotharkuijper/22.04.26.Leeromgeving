@@ -1,0 +1,1 @@
+- [ItemBank course scoping](itembank-course-scoping.md) — csv_import is per-course (metadata.course_id), sharestats is global; scope all itembank reads or banks leak; avoid double .or() on one query.

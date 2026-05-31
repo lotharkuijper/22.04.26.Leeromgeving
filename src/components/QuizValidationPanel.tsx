@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, AlertTriangle, Loader2, Play } from 'lucide-react';
+import { CheckCircle, XCircle, AlertTriangle, Loader2, Play, Info } from 'lucide-react';
 import {
   validateAllQuizQuestions,
   getValidationStatistics,
@@ -60,6 +60,13 @@ export function QuizValidationPanel() {
             <h3 className="font-semibold text-gray-900 mb-1">{t('admin.quizValidation.title')}</h3>
             <p className="text-sm text-gray-700">{t('admin.quizValidation.desc')}</p>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-sky-50 border border-sky-200 rounded-lg p-4" data-testid="notice-validation-scope">
+        <div className="flex items-start gap-3">
+          <Info className="w-5 h-5 text-sky-700 mt-0.5" />
+          <p className="text-sm text-sky-900">{t('admin.quizValidation.notice')}</p>
         </div>
       </div>
 
