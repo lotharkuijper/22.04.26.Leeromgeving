@@ -3,12 +3,11 @@ import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, ClipboardCheck, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, ChevronRight, Sparkles, AlertTriangle } from 'lucide-react';
+import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, ChevronRight, Sparkles, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
 import { retryFailedDocument, UploadProgress } from '../services/document-upload.service';
-import { QuizValidationPanel } from '../components/QuizValidationPanel';
 import { RAGSetupPanel } from '../components/RAGSetupPanel';
 import { ShareStatsImportPanel } from '../components/ShareStatsImportPanel';
 import { QuizSourcesAdminPanel } from '../components/QuizSourcesAdminPanel';
@@ -45,7 +44,7 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'quiz_validation' | 'sharestats_import' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin';
+type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'sharestats_import' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin';
 
 interface RagModuleSettings {
   similarity_threshold: number;
@@ -176,7 +175,7 @@ export function AdminPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = (() => {
     const t = searchParams.get('tab') as TabType | null;
-    const allowed: TabType[] = ['users','documents','rag_beheer','concepts','quiz_validation','sharestats_import','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
+    const allowed: TabType[] = ['users','documents','rag_beheer','concepts','sharestats_import','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
     if (t && allowed.includes(t)) return t;
     return isAdmin ? 'users' : 'documents';
   })();
@@ -190,7 +189,7 @@ export function AdminPage() {
   useEffect(() => {
     const t = searchParams.get('tab') as TabType | null;
     if (t && t !== activeTab) {
-      const allowed: TabType[] = ['users','documents','rag_beheer','concepts','quiz_validation','sharestats_import','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
+      const allowed: TabType[] = ['users','documents','rag_beheer','concepts','sharestats_import','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
       if (allowed.includes(t)) setActiveTabState(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -990,7 +989,6 @@ const tabs = [
   { id: 'documents' as TabType, label: t('admin.tabs.documents'), icon: FolderTree, show: true },
   { id: 'rag_beheer' as TabType, label: t('admin.tabs.ragBeheer'), icon: RefreshCw, show: true },
   { id: 'concepts' as TabType, label: t('admin.tabs.concepts'), icon: BookOpen, show: true },
-  { id: 'quiz_validation' as TabType, label: t('admin.tabs.quizValidation'), icon: ClipboardCheck, show: true },
   { id: 'sharestats_import' as TabType, label: t('admin.tabs.shareStats'), icon: Download, show: true },
   { id: 'quiz_sources' as TabType, label: t('admin.tabs.quizSources'), icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'prompts' as TabType, label: t('admin.tabs.prompts'), icon: MessageSquareText, show: isAdmin || isDocent },
@@ -1002,7 +1000,7 @@ const tabs = [
 
 const tabGroups = [
   { label: t('admin.tabGroups.courseContent'), ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
-  { label: t('admin.tabGroups.learningEnv'), ids: ['prompts', 'quiz_validation', 'quiz_sources', 'projects_admin', 'personas'] },
+  { label: t('admin.tabGroups.learningEnv'), ids: ['prompts', 'quiz_sources', 'projects_admin', 'personas'] },
   { label: t('admin.tabGroups.system'), ids: ['users', 'sharestats_import', 'settings'] },
 ].map(g => ({ label: g.label, items: tabs.filter(tab => g.ids.includes(tab.id)) }))
  .filter(g => g.items.length > 0);
@@ -1809,7 +1807,6 @@ const tabGroups = [
             </div>
           )}
 
-          {activeTab === 'quiz_validation' && <QuizValidationPanel />}
 
           {activeTab === 'sharestats_import' && <ShareStatsImportPanel />}
 

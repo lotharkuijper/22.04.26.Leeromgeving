@@ -488,21 +488,3 @@ export function buildContextWithCap(
     charTrimmed,
   };
 }
-
-export async function validateQuizQuestion(
-  questionText: string,
-  threshold: number = 0.65
-): Promise<{ validated: boolean; score: number }> {
-  const chunks = await searchRelevantChunks(questionText, threshold, 3);
-
-  if (chunks.length === 0) {
-    return { validated: false, score: 0 };
-  }
-
-  const avgScore = chunks.reduce((sum, chunk) => sum + chunk.similarity, 0) / chunks.length;
-
-  return {
-    validated: avgScore >= threshold,
-    score: avgScore,
-  };
-}

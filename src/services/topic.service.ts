@@ -201,30 +201,3 @@ export async function getConceptsWithoutTopics(): Promise<any[]> {
   return (allConcepts || []).filter(c => !linkedIds.has(c.id));
 }
 
-export async function getTopicConsistencyReport(): Promise<{
-  conceptsWithoutTopics: number;
-  questionsWithoutTopics: number;
-  documentsWithoutTopics: number;
-  orphanedQuestions: number;
-}> {
-  const conceptsWithoutTopics = await getConceptsWithoutTopics();
-  const questionsWithoutTopics = await getQuestionsWithoutTopics();
-
-  const { data: allDocs } = await supabase.from('documents').select('id');
-  const { data: linkedDocs } = await supabase.from('document_topics').select('document_id');
-
-  const linkedDocIds = new Set((linkedDocs || []).map((d: any) => d.document_id));
-  const documentsWithoutTopics = (allDocs || []).filter(d => !linkedDocIds.has(d.id)).length;
-
-  const { data: orphanedQuestionsData } = await supabase
-    .from('quiz_questions')
-    .select('id')
-    .in('validation_status', ['not_validated', 'rejected']);
-
-  return {
-    conceptsWithoutTopics: conceptsWithoutTopics.length,
-    questionsWithoutTopics: questionsWithoutTopics.length,
-    documentsWithoutTopics,
-    orphanedQuestions: orphanedQuestionsData?.length || 0,
-  };
-}

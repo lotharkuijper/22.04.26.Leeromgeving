@@ -1,7 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { getAllRmdFiles, fetchFileContent, setItembankRepo } from './github-parser.service';
 import { parseShareStatsItem } from './rmd-parser.service';
-import { validateQuizQuestion } from './rag.service';
 
 export interface ShareStatsQuestion {
   id: string;
@@ -220,21 +219,6 @@ export async function importQuestionsFromShareStats(
           totalQuestions: totalItems,
         });
 
-        // Validatie tegen cursusmateriaal is best-effort: als de RAG niet
-        // beschikbaar is (geen embeddings, RPC-fout, etc.) mag de import
-        // gewoon doorgaan met `not_validated`. Eerder torpedeerde een
-        // falende validatie de hele item-insert (cascade-error op alle 489
-        // mcq-items tijdens een full sync).
-        let validationStatus: 'validated' | 'not_validated' = 'not_validated';
-        let validationScore: number | null = null;
-        try {
-          const validation = await validateQuizQuestion(parsedItem.question.question);
-          validationStatus = validation.validated ? 'validated' : 'not_validated';
-          validationScore = validation.score;
-        } catch (valErr) {
-          console.warn(`Validatie overgeslagen voor ${folderName}:`, valErr instanceof Error ? valErr.message : valErr);
-        }
-
         // Exsection-pad: hiërarchie waarmee mapping op cursus-begrippen werkt.
         const exsectionPath = parseExsectionPath(parsedItem.question.metaInformation?.exsection);
 
@@ -251,8 +235,6 @@ export async function importQuestionsFromShareStats(
           institution: parsedItem.institution,
           metadata: parsedItem.question.metaInformation,
           difficulty: 'intermediate',
-          validation_status: validationStatus,
-          validation_score: validationScore,
           exsection_path: exsectionPath.length > 0 ? exsectionPath : null,
           source_repo: repositoryUrl,
           item_type: itemType,
@@ -412,20 +394,4 @@ export async function saveShareStatsConfig(config: {
   } else {
     await supabase.from('chatbot_prompts').insert(payload);
   }
-}
-
-export async function validateQuestionAgainstCourseware(
-  _questionId: string
-): Promise<{
-  isValid: boolean;
-  similarityScore: number;
-  matchedDocuments: string[];
-  notes: string;
-}> {
-  return {
-    isValid: false,
-    similarityScore: 0,
-    matchedDocuments: [],
-    notes: 'Validatie functie is beschikbaar via quiz-validation.service.ts',
-  };
 }
