@@ -20,6 +20,17 @@ interface DocumentWithChunkCount {
 
 type FilterMode = 'all' | 'failed';
 
+// Een document "vereist aandacht" als het niet bruikbaar is voor RAG: mislukt,
+// nog in verwerking, in de wachtrij (pending) of voltooid zonder chunks.
+function docNeedsAttention(d: { processing_status: string; chunkCount: number }): boolean {
+  return (
+    d.processing_status === 'failed' ||
+    d.processing_status === 'processing' ||
+    d.processing_status === 'pending' ||
+    (d.processing_status === 'completed' && d.chunkCount === 0)
+  );
+}
+
 export function RAGDocumentStatusPanel() {
   const { activeCourseId, activeCourseRagFolderIds, activeCourse } = useActiveCourse();
   const { session } = useAuth();
@@ -118,12 +129,7 @@ export function RAGDocumentStatusPanel() {
   };
 
   const handleRetryAll = async () => {
-    const failedDocs = documents.filter(
-      (d) =>
-        d.processing_status === 'failed' ||
-        d.processing_status === 'processing' ||
-        (d.processing_status === 'completed' && d.chunkCount === 0)
-    );
+    const failedDocs = documents.filter(docNeedsAttention);
     if (failedDocs.length === 0) return;
 
     if (
@@ -173,21 +179,9 @@ export function RAGDocumentStatusPanel() {
   };
 
   const filteredDocuments =
-    filterMode === 'failed'
-      ? documents.filter(
-          (d) =>
-            d.processing_status === 'failed' ||
-            d.processing_status === 'processing' ||
-            (d.processing_status === 'completed' && d.chunkCount === 0)
-        )
-      : documents;
+    filterMode === 'failed' ? documents.filter(docNeedsAttention) : documents;
 
-  const failedCount = documents.filter(
-    (d) =>
-      d.processing_status === 'failed' ||
-      d.processing_status === 'processing' ||
-      (d.processing_status === 'completed' && d.chunkCount === 0)
-  ).length;
+  const failedCount = documents.filter(docNeedsAttention).length;
 
   if (!activeCourseId) {
     return (
@@ -313,10 +307,7 @@ export function RAGDocumentStatusPanel() {
       ) : (
         <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg overflow-hidden">
           {filteredDocuments.map((doc) => {
-            const needsAttention =
-              doc.processing_status === 'failed' ||
-              doc.processing_status === 'processing' ||
-              (doc.processing_status === 'completed' && doc.chunkCount === 0);
+            const needsAttention = docNeedsAttention(doc);
 
             return (
               <div
@@ -429,6 +420,15 @@ function StatusBadge({
       <span className="flex items-center gap-1 text-xs text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
         <Loader2 className="w-3 h-3 animate-spin" />
         Bezig...
+      </span>
+    );
+  }
+
+  if (status === 'pending') {
+    return (
+      <span className="flex items-center gap-1 text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+        <AlertTriangle className="w-3 h-3" />
+        In wachtrij
       </span>
     );
   }

@@ -92,23 +92,32 @@ export function RAGSetupPanel() {
   const [existingConceptCount, setExistingConceptCount] = useState(0);
   const [replaceMode, setReplaceMode] = useState(false);
 
-  useEffect(() => {
+  const [loadingProcessedDocs, setLoadingProcessedDocs] = useState(false);
+
+  const loadProcessedDocs = useCallback(async () => {
     if (activeCourseRagFolderIds.length === 0) {
       setProcessedDocs([]);
       setSelectedDocIds(new Set());
       return;
     }
-    supabase
-      .from('documents')
-      .select('id, filename')
-      .in('folder_id', activeCourseRagFolderIds)
-      .eq('processing_status', 'completed')
-      .then(({ data }) => {
-        const docs: ProcessedDocument[] = (data || []).map(d => ({ id: d.id, filename: d.filename }));
-        setProcessedDocs(docs);
-        setSelectedDocIds(new Set(docs.map(d => d.id)));
-      });
+    setLoadingProcessedDocs(true);
+    try {
+      const { data } = await supabase
+        .from('documents')
+        .select('id, filename')
+        .in('folder_id', activeCourseRagFolderIds)
+        .eq('processing_status', 'completed');
+      const docs: ProcessedDocument[] = (data || []).map(d => ({ id: d.id, filename: d.filename }));
+      setProcessedDocs(docs);
+      setSelectedDocIds(new Set(docs.map(d => d.id)));
+    } finally {
+      setLoadingProcessedDocs(false);
+    }
   }, [activeCourseRagFolderIds]);
+
+  useEffect(() => {
+    loadProcessedDocs();
+  }, [loadProcessedDocs]);
 
   useEffect(() => {
     if (!activeCourseId || !session?.access_token) {
@@ -304,7 +313,18 @@ export function RAGSetupPanel() {
         <div className="flex items-start gap-3">
           <Sparkles className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 text-sm">{t('admin.ragSetup.extract.title')}</h3>
+            <div className="flex items-start justify-between gap-2">
+              <h3 className="font-semibold text-gray-900 text-sm">{t('admin.ragSetup.extract.title')}</h3>
+              <button
+                type="button"
+                onClick={loadProcessedDocs}
+                disabled={loadingProcessedDocs}
+                data-testid="button-refresh-extract-docs"
+                className="flex-shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingProcessedDocs ? 'animate-spin' : ''}`} /> {t('admin.ragSetup.extract.refresh')}
+              </button>
+            </div>
             <p className="text-xs text-gray-600 mt-0.5 mb-1">{t('admin.ragSetup.extract.desc')}</p>
             <div className="flex flex-wrap gap-3 text-xs text-gray-500 mb-3">
               <span>{t('admin.ragSetup.extract.docCount', { count: String(processedDocs.length), s: processedDocs.length !== 1 ? (lang === 'en' ? 's' : 'en') : '' })}</span>
@@ -763,22 +783,30 @@ function ImportSection({
 
   if (storageFiles.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-500">
-        <FolderOpen className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-        <p className="font-medium text-gray-700">{t('admin.ragSetup.import.noFiles')}</p>
-        <p className="text-sm mt-1 text-gray-500">{t('admin.ragSetup.import.noFilesHint', { name: courseName })}</p>
-        <button
-          onClick={loadFiles}
-          className="mt-3 text-sm text-blue-600 hover:underline inline-flex items-center gap-1"
-        >
-          <RefreshCw className="w-3 h-3" /> {t('admin.ragSetup.import.reload')}
-        </button>
+      <div className="space-y-3">
+        <p className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2" data-testid="text-import-note">
+          {t('admin.ragSetup.import.note')}
+        </p>
+        <div className="text-center py-8 text-gray-500">
+          <FolderOpen className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+          <p className="font-medium text-gray-700">{t('admin.ragSetup.import.noFiles')}</p>
+          <p className="text-sm mt-1 text-gray-500">{t('admin.ragSetup.import.noFilesHint', { name: courseName })}</p>
+          <button
+            onClick={loadFiles}
+            className="mt-3 text-sm text-blue-600 hover:underline inline-flex items-center gap-1"
+          >
+            <RefreshCw className="w-3 h-3" /> {t('admin.ragSetup.import.reload')}
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      <p className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2" data-testid="text-import-note">
+        {t('admin.ragSetup.import.note')}
+      </p>
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm text-gray-700">
