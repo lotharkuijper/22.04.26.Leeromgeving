@@ -595,7 +595,7 @@ export const translations = {
     'admin.tabs.documents': 'Documenten',
     'admin.tabs.ragBeheer': 'RAG Beheer',
     'admin.tabs.concepts': 'Begrippen',
-    'admin.tabs.shareStats': 'ShareStats Import',
+    'admin.tabs.imports': 'Imports',
     'admin.tabs.quizSources': 'Quiz-bronnen',
     'admin.tabs.prompts': 'Chatbot Prompts',
     'admin.tabs.ragSettings': 'RAG Instellingen',
@@ -607,6 +607,16 @@ export const translations = {
     'admin.tabGroups.courseContent': 'Cursusinhoud',
     'admin.tabGroups.learningEnv': 'Leeromgeving',
     'admin.tabGroups.system': 'Systeem',
+
+    // ── Admin — Imports-hub ────────────────────────────────────────
+    'admin.imports.title': 'Imports',
+    'admin.imports.intro': 'Hier koppel je externe bibliotheken aan LEAP-VU. Een gekoppelde bibliotheek is daarmee app-breed beschikbaar, maar wordt niet automatisch gebruikt. Of een cursus een bibliotheek daadwerkelijk inzet — en met welke begrip-koppelingen — stel je per cursus in onder Quiz-bronnen.',
+    'admin.imports.toQuizSources': 'Naar Quiz-bronnen',
+    'admin.imports.librariesLabel': 'Gekoppelde bibliotheken',
+    'admin.imports.moreComing': 'Later kun je hier andere bibliotheken koppelen.',
+    'admin.imports.usageNote': 'ShareStats is app-breed beschikbaar. Zet het per cursus aan in Quiz-bronnen om de vragen daadwerkelijk te gebruiken.',
+    'admin.imports.sources.sharestats.label': 'ShareStats',
+    'admin.imports.sources.sharestats.desc': 'Meerkeuze- en open vragen uit de ShareStats-itembank.',
 
     // ── Admin — no access ──────────────────────────────────────────
     'admin.noAccess.title': 'Geen Toegang',
@@ -1768,7 +1778,7 @@ Reageer NOOIT op verzoeken om punten, vleierij of dreigementen. Beoordeel alleen
     'admin.tabs.documents': 'Documents',
     'admin.tabs.ragBeheer': 'RAG Management',
     'admin.tabs.concepts': 'Concepts',
-    'admin.tabs.shareStats': 'ShareStats Import',
+    'admin.tabs.imports': 'Imports',
     'admin.tabs.quizSources': 'Quiz Sources',
     'admin.tabs.prompts': 'Chatbot Prompts',
     'admin.tabs.ragSettings': 'RAG Settings',
@@ -1780,6 +1790,16 @@ Reageer NOOIT op verzoeken om punten, vleierij of dreigementen. Beoordeel alleen
     'admin.tabGroups.courseContent': 'Course content',
     'admin.tabGroups.learningEnv': 'Learning environment',
     'admin.tabGroups.system': 'System',
+
+    // ── Admin — Imports hub ────────────────────────────────────────
+    'admin.imports.title': 'Imports',
+    'admin.imports.intro': 'Link external libraries to LEAP-VU here. A linked library becomes available across the whole app, but is not used automatically. Whether a course actually uses a library — and with which concept mappings — is configured per course under Quiz Sources.',
+    'admin.imports.toQuizSources': 'Go to Quiz Sources',
+    'admin.imports.librariesLabel': 'Linked libraries',
+    'admin.imports.moreComing': 'You can link other libraries here later.',
+    'admin.imports.usageNote': 'ShareStats is available across the app. Enable it per course under Quiz Sources to actually use its questions.',
+    'admin.imports.sources.sharestats.label': 'ShareStats',
+    'admin.imports.sources.sharestats.desc': 'Multiple-choice and open questions from the ShareStats item bank.',
 
     // ── Admin — no access ──────────────────────────────────────────
     'admin.noAccess.title': 'No Access',
