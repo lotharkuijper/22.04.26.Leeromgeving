@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, ragDocumentDownloadUrl, openRagDocument } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, chunkToDisplaySource, ragDocumentDownloadUrl, openRagDocument } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
@@ -52,12 +52,14 @@ function FeedbackBlock({
   retrievedStats,
   viewerRole,
   t,
+  lang,
 }: {
   feedback: string;
-  retrievedSources: Array<{ title: string; similarity: number; documentId?: string; href?: string }>;
+  retrievedSources: Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number }>;
   retrievedStats: { threshold: number; maxSimilarity: number; candidatesConsidered: number; searchPerformed: boolean } | null;
   viewerRole?: string;
   t: (k: string) => string;
+  lang: 'nl' | 'en';
 }) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const idPrefix = 'explain-feedback';
@@ -120,6 +122,7 @@ function FeedbackBlock({
         onOpenChange={setSourcesOpen}
         idPrefix={idPrefix}
         onOpenSource={handleOpenSource}
+        slideWord={lang === 'en' ? 'slide' : 'dia'}
       />
       {retrievedStats && (
         <div className="mt-4">
@@ -150,7 +153,7 @@ export function ExplainPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showAllConcepts, setShowAllConcepts] = useState(false);
   const [profileTimeout, setProfileTimeout] = useState(false);
-  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string }>>([]);
+  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number }>>([]);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [retrievedStats, setRetrievedStats] = useState<{
     threshold: number;
@@ -413,9 +416,7 @@ export function ExplainPage() {
       });
 
       const allSources = chunks.map(chunk => ({
-        title: chunk.documentTitle,
-        similarity: chunk.similarity,
-        documentId: chunk.documentId,
+        ...chunkToDisplaySource(chunk),
         href: ragDocumentDownloadUrl(chunk.documentId),
       }));
       // Studenten zien per bron-document maximaal de top 3 (de meest relevante
@@ -939,6 +940,7 @@ export function ExplainPage() {
                   retrievedStats={retrievedStats}
                   viewerRole={profile?.role}
                   t={t}
+                  lang={lang}
                 />
               )}
             </>

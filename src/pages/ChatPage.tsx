@@ -4,7 +4,7 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import { sendChatMessage, llmErrorToDutch, type Message } from '../services/llm.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, ragDocumentDownloadUrl, openRagDocument, type DocumentChunk } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, chunkToDisplaySource, ragDocumentDownloadUrl, openRagDocument, type DocumentChunk } from '../services/rag.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
@@ -62,9 +62,7 @@ function AssistantMessageBody({
     ?? (retrievedContext?.chunks
           ? dedupeSourcesByDocument(
               (retrievedContext.chunks as any[]).map((c) => ({
-                title: c.documentTitle,
-                similarity: c.similarity,
-                documentId: c.documentId,
+                ...chunkToDisplaySource(c),
                 href: ragDocumentDownloadUrl(c.documentId),
               })),
               5
@@ -125,6 +123,7 @@ function AssistantMessageBody({
           idPrefix={messageId}
           onOpenSource={handleOpenSource}
           uniqueLabel={lang === 'en' ? 'unique' : 'uniek'}
+          slideWord={lang === 'en' ? 'slide' : 'dia'}
         />
       )}
     </>
@@ -397,9 +396,7 @@ export function ChatPage() {
       // de inklapbare bronnenlijst onder het bericht.
       const displaySources: SourceItem[] = dedupeSourcesByDocument(
         chunks.map((c) => ({
-          title: c.documentTitle,
-          similarity: c.similarity,
-          documentId: c.documentId,
+          ...chunkToDisplaySource(c),
           href: ragDocumentDownloadUrl(c.documentId),
         })),
         5

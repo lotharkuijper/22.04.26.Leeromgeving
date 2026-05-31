@@ -18,7 +18,7 @@ import {
   type QuizSource,
 } from '../services/llm.service';
 import { generateMixedQuiz, fetchSourceMix, distributeMix, SOURCE_LABELS, SOURCE_COLORS, type SourceMix, type MixCounts } from '../services/quiz-mix.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, type DocumentChunk } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, chunkToDisplaySource, type DocumentChunk } from '../services/rag.service';
 import { getQuizTopics, type QuizTopic } from '../services/quiz-topic.service';
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
@@ -376,7 +376,7 @@ export function QuizPage() {
           if (built.context.length > 0) {
             ragContext = built.context;
           }
-          setRagSources(chunks.map(c => ({ title: c.documentTitle, similarity: c.similarity })));
+          setRagSources(chunks.map(c => chunkToDisplaySource(c)));
           setContextStats({ used: built.usedChunks, total: built.totalChunks, charTrimmed: built.charTrimmed });
         }
       }
@@ -1086,7 +1086,7 @@ export function QuizPage() {
           </div>
           {ragSources.length > 0 && (
             <div className="text-left bg-purple-50 border border-purple-200 rounded-xl p-4">
-              <SourceList sources={ragSources} label={t('quiz.basedOnMaterial')} />
+              <SourceList sources={ragSources} label={t('quiz.basedOnMaterial')} slideWord={lang === 'en' ? 'slide' : 'dia'} />
             </div>
           )}
           {contextStats && contextStats.total > 0 && (contextStats.used < contextStats.total || contextStats.charTrimmed) && (
@@ -1455,7 +1455,7 @@ export function QuizPage() {
           </div>
           {ragSources.length > 0 && (
             <div className="mt-2">
-              <SourceList sources={ragSources} label={t('quiz.quizBasedOnMaterial')} />
+              <SourceList sources={ragSources} label={t('quiz.quizBasedOnMaterial')} slideWord={lang === 'en' ? 'slide' : 'dia'} />
             </div>
           )}
           {ragStats && (

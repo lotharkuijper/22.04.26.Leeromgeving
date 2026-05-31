@@ -6,6 +6,17 @@ export interface SourceItem {
   similarity: number;
   documentId?: string;
   href?: string;
+  /** Eerste dia van de PowerPoint-chunk (1-based); afwezig voor niet-pptx bronnen. */
+  slideStart?: number;
+  /** Laatste dia van de PowerPoint-chunk; gelijk aan slideStart bij één dia. */
+  slideEnd?: number;
+}
+
+// "dia 4" of "dia 4–6" voor PowerPoint-bronnen; lege string als geen dia bekend is.
+export function slideLabel(item: Pick<SourceItem, 'slideStart' | 'slideEnd'>, word = 'dia'): string {
+  if (item.slideStart == null) return '';
+  const end = item.slideEnd ?? item.slideStart;
+  return end !== item.slideStart ? `${word} ${item.slideStart}–${end}` : `${word} ${item.slideStart}`;
 }
 
 interface SourceListProps {
@@ -26,12 +37,17 @@ interface SourceListProps {
   onOpenSource?: (item: SourceItem) => void;
   /** Achtervoegsel achter het aantal, bv. "uniek"/"unique". Default 'uniek'. */
   uniqueLabel?: string;
+  /** Woord voor dia-aanduiding bij PowerPoint-bronnen, bv. "dia"/"slide". Default 'dia'. */
+  slideWord?: string;
 }
 
 function dedupeByDocument(items: SourceItem[]): SourceItem[] {
   const best = new Map<string, SourceItem>();
   for (const s of items) {
-    const key = s.documentId ? `id:${s.documentId}` : `t:${s.title}`;
+    // Dia-reeks meenemen in de sleutel zodat verschillende dia's uit dezelfde
+    // PowerPoint als aparte bronnen blijven staan.
+    const slidePart = s.slideStart != null ? `:s${s.slideStart}-${s.slideEnd ?? s.slideStart}` : '';
+    const key = (s.documentId ? `id:${s.documentId}` : `t:${s.title}`) + slidePart;
     const cur = best.get(key);
     if (!cur || s.similarity > cur.similarity) best.set(key, s);
   }
@@ -49,6 +65,7 @@ export function SourceList({
   idPrefix,
   onOpenSource,
   uniqueLabel = 'uniek',
+  slideWord = 'dia',
 }: SourceListProps) {
   const [internalOpen, setInternalOpen] = useState(!defaultCollapsed);
   const open = openProp ?? internalOpen;
@@ -86,10 +103,16 @@ export function SourceList({
                 ({(source.similarity * 100).toFixed(0)}% relevant)
               </span>
             ) : null;
+            const slide = slideLabel(source, slideWord);
             const inner = (
               <>
                 <span className="font-medium text-blue-600 mr-1">[{num}]</span>
                 <span className="italic">{source.title}</span>
+                {slide && (
+                  <span className="text-gray-500 not-italic ml-1" data-testid={`text-slide-${num}`}>
+                    · {slide}
+                  </span>
+                )}
                 {source.href && <ExternalLink className="w-3 h-3 inline ml-1 text-gray-400" />}
                 {meta}
               </>

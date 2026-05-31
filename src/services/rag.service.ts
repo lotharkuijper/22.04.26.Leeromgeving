@@ -377,10 +377,44 @@ export function formatContextFromChunks(chunks: DocumentChunk[]): string {
   return buildContextWithCap(chunks).context;
 }
 
-// Reduceer een (mogelijk lange) lijst chunk-niveau bronnen tot maximaal `topN`
-// unieke documenten. Per documentnaam wordt de hoogste similarity behouden,
-// resterende worden verwijderd. Sortering: hoogste similarity eerst.
-export function dedupeSourcesByDocument<T extends { title: string; similarity: number; documentId?: string }>(
+// Dia-reeks uit chunk-metadata van een PowerPoint-bron (source:'pptx').
+// Geeft null terug voor niet-pptx of onvolledige metadata.
+export interface SlideRange {
+  start: number;
+  end: number;
+}
+
+export function slideRangeFromMetadata(metadata: unknown): SlideRange | null {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const m = metadata as Record<string, unknown>;
+  if (m.source !== 'pptx') return null;
+  const start = Number(m.slideStart);
+  if (!Number.isFinite(start)) return null;
+  const endRaw = Number(m.slideEnd);
+  const end = Number.isFinite(endRaw) ? endRaw : start;
+  return { start, end: Math.max(start, end) };
+}
+
+// Bouwt een bron-item uit een chunk en neemt de dia-reeks mee wanneer het een
+// PowerPoint-chunk is, zodat de student verwezen kan worden naar "dia 4–6".
+export function chunkToDisplaySource(chunk: {
+  documentTitle: string;
+  similarity: number;
+  documentId?: string;
+  metadata?: unknown;
+}): { title: string; similarity: number; documentId?: string; slideStart?: number; slideEnd?: number } {
+  const range = slideRangeFromMetadata(chunk.metadata);
+  const base = {
+    title: chunk.documentTitle,
+    similarity: chunk.similarity,
+    documentId: chunk.documentId,
+  };
+  return range ? { ...base, slideStart: range.start, slideEnd: range.end } : base;
+}
+
+export function dedupeSourcesByDocument<
+  T extends { title: string; similarity: number; documentId?: string; slideStart?: number; slideEnd?: number }
+>(
   sources: T[],
   topN: number = 3
 ): T[] {
@@ -389,7 +423,10 @@ export function dedupeSourcesByDocument<T extends { title: string; similarity: n
   for (const src of sources) {
     // Bij voorkeur dedupliceren op documentId zodat verschillende documenten met
     // dezelfde titel niet ten onrechte worden samengevoegd; fallback op titel.
-    const key = src.documentId ? `id:${src.documentId}` : `t:${src.title}`;
+    // De dia-reeks zit in de sleutel zodat verschillende dia's uit dezelfde
+    // PowerPoint als aparte bronnen zichtbaar blijven.
+    const slidePart = src.slideStart != null ? `:s${src.slideStart}-${src.slideEnd ?? src.slideStart}` : '';
+    const key = (src.documentId ? `id:${src.documentId}` : `t:${src.title}`) + slidePart;
     const existing = bestPerDoc.get(key);
     if (!existing || src.similarity > existing.similarity) {
       bestPerDoc.set(key, src);
