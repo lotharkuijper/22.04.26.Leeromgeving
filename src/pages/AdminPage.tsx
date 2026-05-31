@@ -279,6 +279,15 @@ export function AdminPage() {
   const [allCourses, setAllCourses] = useState<Array<{ id: string; name: string; is_active?: boolean | null }>>([]);
   const [coursesWithOverrides, setCoursesWithOverrides] = useState<Set<string>>(new Set());
   const [ragDeletingOverride, setRagDeletingOverride] = useState(false);
+  // Per-cursus uitleg-prompt (Task #28)
+  const [explainCourseId, setExplainCourseId] = useState<string>('');
+  const [explainOverrideContent, setExplainOverrideContent] = useState('');
+  const [explainHasOverride, setExplainHasOverride] = useState(false);
+  const [explainGlobalContent, setExplainGlobalContent] = useState('');
+  const [explainOverrideCourses, setExplainOverrideCourses] = useState<Set<string>>(new Set());
+  const [explainLoading, setExplainLoading] = useState(false);
+  const [explainSaving, setExplainSaving] = useState(false);
+  const [explainMsg, setExplainMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [diagnosticQuery, setDiagnosticQuery] = useState('');
   const [diagnosticExpand, setDiagnosticExpand] = useState(false);
   const [diagnosticDefinition, setDiagnosticDefinition] = useState('');
@@ -349,6 +358,8 @@ export function AdminPage() {
     if (activeTab === 'rag_beheer') { loadConceptsMeta(); }
     if (activeTab === 'prompts') {
       loadPrompts();
+      loadAllCourses();
+      loadExplainOverrideCourses();
       (async () => {
         try {
           const { data: { session } } = await supabase.auth.getSession();
@@ -473,6 +484,7 @@ export function AdminPage() {
       .not('name', 'like', '__rag_settings%')
       .not('name', 'like', '__doc_mutation_%')
       .not('name', 'like', '__concepts_regen_%')
+      .not('name', 'like', '__explain_prompt_%')
       .neq('name', '__quiz_itembank_config__')
       .order('created_at', { ascending: false });
 
@@ -491,6 +503,110 @@ export function AdminPage() {
     } catch (err) {
       console.warn('[admin] Cursussen laden mislukt');
     }
+  };
+
+  // ── Per-cursus uitleg-prompt (Task #28) ──────────────────────────────────
+  const loadExplainOverrideCourses = async () => {
+    if (!session?.access_token) return;
+    try {
+      const res = await fetch('/api/admin/explain-prompt/overrides', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setExplainOverrideCourses(new Set(data.courseIds || []));
+      }
+    } catch {
+      console.warn('[admin] Uitleg-prompt overrides laden mislukt');
+    }
+  };
+
+  const loadExplainOverride = async (courseId: string) => {
+    if (!courseId || !session?.access_token) return;
+    setExplainLoading(true);
+    setExplainMsg(null);
+    try {
+      const res = await fetch(`/api/admin/explain-prompt?courseId=${encodeURIComponent(courseId)}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setExplainHasOverride(!!data.hasOverride);
+        setExplainGlobalContent(data.globalContent || '');
+        setExplainOverrideContent(data.hasOverride ? (data.content || '') : (data.globalContent || ''));
+      } else {
+        setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.loadError') });
+      }
+    } catch {
+      setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.loadError') });
+    }
+    setExplainLoading(false);
+  };
+
+  const handleSelectExplainCourse = (courseId: string) => {
+    setExplainCourseId(courseId);
+    setExplainMsg(null);
+    if (courseId) {
+      loadExplainOverride(courseId);
+    } else {
+      setExplainHasOverride(false);
+      setExplainOverrideContent('');
+    }
+  };
+
+  const handleSaveExplainOverride = async () => {
+    if (!explainCourseId || !session?.access_token) return;
+    if (!explainOverrideContent.trim()) {
+      setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.emptyError') });
+      return;
+    }
+    setExplainSaving(true);
+    setExplainMsg(null);
+    try {
+      const res = await fetch('/api/admin/explain-prompt', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: explainCourseId, content: explainOverrideContent }),
+      });
+      if (res.ok) {
+        setExplainHasOverride(true);
+        setExplainOverrideCourses(prev => new Set([...prev, explainCourseId]));
+        setExplainMsg({ type: 'success', text: t('admin.prompts.explainPerCourse.saveSuccess') });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.saveError') + (data.error || '') });
+      }
+    } catch (err) {
+      setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.saveError') + (err as Error).message });
+    }
+    setExplainSaving(false);
+  };
+
+  const handleResetExplainOverride = async () => {
+    if (!explainCourseId || !session?.access_token) return;
+    setExplainSaving(true);
+    setExplainMsg(null);
+    try {
+      const res = await fetch(`/api/admin/explain-prompt/${encodeURIComponent(explainCourseId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        setExplainHasOverride(false);
+        setExplainOverrideContent(explainGlobalContent);
+        setExplainOverrideCourses(prev => { const next = new Set(prev); next.delete(explainCourseId); return next; });
+        setExplainMsg({ type: 'success', text: t('admin.prompts.explainPerCourse.resetSuccess') });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.resetError') + (data.error || '') });
+      }
+    } catch (err) {
+      setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.resetError') + (err as Error).message });
+    }
+    setExplainSaving(false);
   };
 
   const loadCoursesWithOverrides = async () => {
@@ -1966,6 +2082,86 @@ const tabGroups = [
                           <p className="text-sm text-gray-400 italic">{t('admin.prompts.noExplainPrompt')}</p>
                         );
                       })()}
+                    </div>
+
+                    {/* ── Per-cursus uitleg-prompt (Task #28) ── */}
+                    <div className="mt-4 p-4 border border-purple-200 bg-white rounded-xl space-y-3">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">{t('admin.prompts.explainPerCourse.title')}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{t('admin.prompts.explainPerCourse.desc')}</p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={explainCourseId}
+                          onChange={e => handleSelectExplainCourse(e.target.value)}
+                          className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-purple-500 outline-none bg-white"
+                          data-testid="select-explain-course"
+                        >
+                          <option value="">{t('admin.prompts.explainPerCourse.selectPlaceholder')}</option>
+                          {allCourses.map(c => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}{explainOverrideCourses.has(c.id) ? ' ●' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {explainCourseId && (
+                        <>
+                          <div className="flex items-center gap-2">
+                            {explainHasOverride ? (
+                              <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 text-purple-700" data-testid="status-explain-override">
+                                {t('admin.prompts.explainPerCourse.statusOverride')}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600" data-testid="status-explain-global">
+                                {t('admin.prompts.explainPerCourse.statusGlobal')}
+                              </span>
+                            )}
+                          </div>
+
+                          {explainLoading ? (
+                            <p className="text-sm text-gray-400 italic">{t('admin.loading')}</p>
+                          ) : (
+                            <textarea
+                              value={explainOverrideContent}
+                              onChange={e => setExplainOverrideContent(e.target.value)}
+                              rows={8}
+                              placeholder={t('admin.prompts.explainPerCourse.placeholder')}
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-purple-500 outline-none font-mono"
+                              data-testid="textarea-explain-override"
+                            />
+                          )}
+
+                          {explainMsg && (
+                            <p className={`text-sm ${explainMsg.type === 'success' ? 'text-green-700' : 'text-red-700'}`} data-testid="text-explain-msg">
+                              {explainMsg.text}
+                            </p>
+                          )}
+
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleSaveExplainOverride}
+                              disabled={explainSaving || explainLoading || !explainOverrideContent.trim()}
+                              className="px-4 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
+                              data-testid="button-save-explain-override"
+                            >
+                              {explainSaving ? t('admin.prompts.explainPerCourse.saving') : t('admin.prompts.explainPerCourse.save')}
+                            </button>
+                            {explainHasOverride && (
+                              <button
+                                onClick={handleResetExplainOverride}
+                                disabled={explainSaving || explainLoading}
+                                className="px-4 py-1.5 text-sm bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                                data-testid="button-reset-explain-override"
+                              >
+                                {t('admin.prompts.explainPerCourse.reset')}
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 

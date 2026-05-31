@@ -179,11 +179,12 @@ export function ExplainPage() {
   }, [activeCourse]);
 
   useEffect(() => {
-    fetch('/api/prompt/explain')
+    const url = activeCourse ? `/api/prompt/explain?courseId=${activeCourse}` : '/api/prompt/explain';
+    fetch(url)
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data?.content) setExplainSystemPrompt(data.content); })
       .catch(() => {});
-  }, []);
+  }, [activeCourse]);
 
   useEffect(() => {
     const timer = setTimeout(() => {

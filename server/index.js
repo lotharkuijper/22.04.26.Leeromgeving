@@ -4507,27 +4507,166 @@ app.get('/api/admin/backfill-project-doc-folder-links/status', (_req, res) => {
   return res.json({ status: null });
 });
 
+// Per-cursus uitleg-prompt wordt — net als de RAG-instellingen — opgeslagen als
+// een speciaal-genoemde chatbot_prompts-rij `__explain_prompt_<courseId>__`
+// (section='internal', is_active=false) zodat de globale resolver en de
+// admin-sectieweergave er niet door vervuild raken. Geen schemawijziging nodig.
+const EXPLAIN_PROMPT_KEY_PREFIX = '__explain_prompt_';
+function explainPromptKey(courseId) {
+  return `${EXPLAIN_PROMPT_KEY_PREFIX}${courseId}__`;
+}
+
+async function loadGlobalExplainPrompt() {
+  const { data, error } = await supabaseAdmin
+    .from('chatbot_prompts')
+    .select('id, content')
+    .eq('section', 'explain')
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn('[explain-prompt] Fout bij ophalen globale prompt:', error.message);
+    return { id: null, content: DEFAULT_EXPLAIN_PROMPT };
+  }
+  return { id: data?.id ?? null, content: data?.content ?? DEFAULT_EXPLAIN_PROMPT };
+}
+
 app.get('/api/prompt/explain', async (req, res) => {
   if (!supabaseAdmin || !promptsHasSection) {
-    return res.json({ content: DEFAULT_EXPLAIN_PROMPT });
+    return res.json({ content: DEFAULT_EXPLAIN_PROMPT, source: 'default' });
+  }
+  const { courseId } = req.query;
+  try {
+    // 1) Cursus-specifieke override (indien aanwezig en niet leeg).
+    if (courseId) {
+      const { data: override } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('id, content')
+        .eq('name', explainPromptKey(courseId))
+        .maybeSingle();
+      if (override?.content && override.content.trim()) {
+        return res.json({ id: override.id, content: override.content, source: 'course' });
+      }
+    }
+    // 2) Globale actieve uitleg-prompt, anders ingebouwde standaard.
+    const global = await loadGlobalExplainPrompt();
+    const usedDefault = global.content === DEFAULT_EXPLAIN_PROMPT && global.id === null;
+    return res.json({ id: global.id, content: global.content, source: usedDefault ? 'default' : 'global' });
+  } catch (err) {
+    console.error('[/api/prompt/explain] Exception:', err.message);
+    return res.json({ content: DEFAULT_EXPLAIN_PROMPT, source: 'default' });
+  }
+});
+
+// ── Beheer: per-cursus uitleg-prompt (Task #28) ─────────────────────────────
+// GET geeft de cursus-override (indien aanwezig) plus de globale prompt als
+// referentie. PUT slaat een override op, DELETE verwijdert hem (terug naar
+// globaal). Auth: staff voor de betreffende cursus (admin/superuser overal).
+
+app.get('/api/admin/explain-prompt', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId } = req.query;
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const { data: override } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('content')
+      .eq('name', explainPromptKey(courseId))
+      .maybeSingle();
+    const global = await loadGlobalExplainPrompt();
+    const hasOverride = !!(override?.content && override.content.trim());
+    return res.json({
+      hasOverride,
+      content: hasOverride ? override.content : '',
+      globalContent: global.content,
+    });
+  } catch (err) {
+    console.error('[/api/admin/explain-prompt GET] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/explain-prompt', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId, content } = req.body || {};
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+  if (typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'content (niet-leeg) vereist' });
+  }
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const key = explainPromptKey(courseId);
+    const { data: existing } = await supabaseAdmin
+      .from('chatbot_prompts').select('id').eq('name', key).maybeSingle();
+    if (existing) {
+      const { error: updErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ content, updated_at: new Date().toISOString() })
+        .eq('name', key);
+      if (updErr) throw new Error(`DB update mislukt: ${updErr.message}`);
+    } else {
+      const insertRow = { name: key, content, is_active: false };
+      if (promptsHasSection) insertRow.section = 'internal';
+      const { error: insErr } = await supabaseAdmin
+        .from('chatbot_prompts').insert(insertRow);
+      if (insErr) throw new Error(`DB insert mislukt: ${insErr.message}`);
+    }
+    console.log(`[explain-prompt PUT] Saved override for courseId=${courseId} by user=${auth.user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[/api/admin/explain-prompt PUT] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/explain-prompt/:courseId', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId } = req.params;
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const { error: delErr } = await supabaseAdmin
+      .from('chatbot_prompts').delete().eq('name', explainPromptKey(courseId));
+    if (delErr) throw new Error(`DB delete mislukt: ${delErr.message}`);
+    console.log(`[explain-prompt DELETE] Removed override for courseId=${courseId} by user=${auth.user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[/api/admin/explain-prompt DELETE] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/explain-prompt/overrides', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  if (!(await isStaffAnywhere(auth.user, auth.profile))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
   }
   try {
     const { data, error } = await supabaseAdmin
       .from('chatbot_prompts')
-      .select('id, content')
-      .eq('section', 'explain')
-      .eq('is_active', true)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) {
-      console.warn('[/api/prompt/explain] Fout bij ophalen:', error.message);
-      return res.json({ content: DEFAULT_EXPLAIN_PROMPT });
-    }
-    return res.json({ id: data?.id ?? null, content: data?.content ?? DEFAULT_EXPLAIN_PROMPT });
+      .select('name')
+      .like('name', `${EXPLAIN_PROMPT_KEY_PREFIX}%`);
+    if (error) throw new Error(error.message);
+    const courseIds = (data || []).map(row => {
+      const m = row.name.match(/^__explain_prompt_(.+)__$/);
+      return m ? m[1] : null;
+    }).filter(Boolean);
+    return res.json({ courseIds });
   } catch (err) {
-    console.error('[/api/prompt/explain] Exception:', err.message);
-    return res.json({ content: DEFAULT_EXPLAIN_PROMPT });
+    console.error('[/api/admin/explain-prompt/overrides GET] Error:', err.message);
+    return res.status(500).json({ error: err.message });
   }
 });
 
