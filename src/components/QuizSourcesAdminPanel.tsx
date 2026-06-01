@@ -150,7 +150,7 @@ export function QuizSourcesAdminPanel() {
   // voorstel (drempel + checkboxes) en past geaccepteerde koppelingen toe.
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState<BulkResult[] | null>(null);
-  const [bulkThreshold, setBulkThreshold] = useState(0.4);
+  const [bulkThreshold, setBulkThreshold] = useState(0.35);
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
 
   // CSV-import van een eigen itembank (bron-agnostisch).
@@ -834,8 +834,8 @@ export function QuizSourcesAdminPanel() {
                                 data-testid={`checkbox-bulk-${r.conceptId}-${pathKey}`}
                               />
                               <span className="flex-1 min-w-0 truncate text-gray-800">{cand.exsection_path.join(' / ')}</span>
-                              <span className={`px-1.5 py-0.5 rounded ${cand.above_threshold ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'}`} data-testid={`text-bulk-sim-${r.conceptId}-${pathKey}`}>
-                                {(cand.similarity * 100).toFixed(0)}%
+                              <span className={`px-1.5 py-0.5 rounded whitespace-nowrap ${cand.above_threshold ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'}`} data-testid={`text-bulk-sim-${r.conceptId}-${pathKey}`}>
+                                {(cand.similarity * 100).toFixed(0)}% · {cand.above_threshold ? t('admin.quizSources.bulk.strongLabel') : t('admin.quizSources.bulk.weakLabel')}
                               </span>
                               <span className="text-gray-500 w-24 text-right">
                                 {t('admin.quizSources.bulk.itemInfo', { count: String(cand.count), mcq: String(cand.mcq_count), open: String(cand.open_count) })}
