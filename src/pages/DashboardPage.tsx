@@ -9,6 +9,8 @@ import {
   ArrowRight,
   PenLine,
   Shield,
+  Download,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -24,6 +26,19 @@ interface LastActivities {
   quiz: { label: string } | null;
   project: { label: string } | null;
   journal: { title: string; content: string; id: string } | null;
+}
+
+interface CourseInfoDoc {
+  id: string;
+  title: string;
+  filename: string;
+  file_type: string;
+  file_size: number;
+}
+
+interface CourseInfo {
+  body: string;
+  documents: CourseInfoDoc[];
 }
 
 interface TileSpec {
@@ -120,6 +135,64 @@ export function DashboardPage() {
     project: null,
     journal: null,
   });
+  const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeCourseId) {
+      setCourseInfo(null);
+      return;
+    }
+    (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess?.session?.access_token;
+        const res = await fetch(`/api/courses/${activeCourseId}/info`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!cancelled) {
+          setCourseInfo({ body: json.body || '', documents: json.documents || [] });
+        }
+      } catch {
+        /* stil falen — header is optioneel */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCourseId]);
+
+  async function downloadCourseInfoFile(documentId: string) {
+    if (!activeCourseId) return;
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess?.session?.access_token;
+      const res = await fetch(
+        `/api/courses/${activeCourseId}/info/documents/${documentId}/download`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      );
+      if (!res.ok) return;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const { url } = await res.json();
+        if (url) window.open(url, '_blank', 'noopener');
+        return;
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      /* ignore */
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -318,6 +391,47 @@ export function DashboardPage() {
           </p>
         )}
       </section>
+
+      {/* Cursus-info header (Task #202) — alleen tonen als er inhoud is */}
+      {courseInfo && (courseInfo.body.trim() || courseInfo.documents.length > 0) && (
+        <section
+          className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-md p-6 md:p-8 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.15)]"
+          data-testid="section-course-info"
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <BookText className="h-5 w-5 text-sky-700" />
+            <h2 className="text-lg font-semibold text-slate-900">{t('dashboard.courseInfo.title')}</h2>
+          </div>
+          {courseInfo.body.trim() && (
+            <div data-testid="text-course-info-body">
+              <MarkdownMessage content={courseInfo.body} />
+            </div>
+          )}
+          {courseInfo.documents.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-sm font-semibold text-slate-700 mb-2">
+                {t('dashboard.courseInfo.downloads')}
+              </h3>
+              <ul className="space-y-1.5">
+                {courseInfo.documents.map((d) => (
+                  <li key={d.id}>
+                    <button
+                      type="button"
+                      onClick={() => downloadCourseInfoFile(d.id)}
+                      className="inline-flex items-center gap-2 rounded px-2 py-1 text-sm text-sky-700 hover:bg-sky-50"
+                      data-testid={`button-download-course-info-${d.id}`}
+                    >
+                      <FileText className="h-4 w-4 text-slate-400" />
+                      <span className="truncate">{d.title || d.filename}</span>
+                      <Download className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Action tiles */}
       <section

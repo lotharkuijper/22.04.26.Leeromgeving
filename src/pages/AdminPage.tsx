@@ -3,7 +3,7 @@ import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, ChevronRight, Sparkles, AlertTriangle } from 'lucide-react';
+import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, ChevronRight, Sparkles, AlertTriangle, BookText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
@@ -11,6 +11,7 @@ import { retryFailedDocument, UploadProgress } from '../services/document-upload
 import { RAGSetupPanel } from '../components/RAGSetupPanel';
 import { ImportsHubPanel } from '../components/ImportsHubPanel';
 import { QuizSourcesAdminPanel } from '../components/QuizSourcesAdminPanel';
+import CursusInfoTab from '../components/CursusInfoTab';
 import { PersonaLibraryTab } from './admin/PersonaLibraryTab';
 import { ProjectsAdminTab } from './admin/ProjectsAdminTab';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -44,7 +45,7 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'imports' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin';
+type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'imports' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin' | 'course_info';
 
 interface RagModuleSettings {
   similarity_threshold: number;
@@ -177,7 +178,7 @@ export function AdminPage() {
     let t = searchParams.get('tab') as TabType | null;
     // Backward-compat: oude deep-links naar de losse ShareStats-tab komen nu op de Imports-hub.
     if ((t as string | null) === 'sharestats_import') t = 'imports';
-    const allowed: TabType[] = ['users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
+    const allowed: TabType[] = ['users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
     if (t && allowed.includes(t)) return t;
     return isAdmin ? 'users' : 'documents';
   })();
@@ -203,7 +204,7 @@ export function AdminPage() {
     }
     const t = raw as TabType | null;
     if (t && t !== activeTab) {
-      const allowed: TabType[] = ['users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin'];
+      const allowed: TabType[] = ['users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
       if (allowed.includes(t)) setActiveTabState(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1124,12 +1125,13 @@ const tabs = [
   { id: 'prompts' as TabType, label: t('admin.tabs.prompts'), icon: MessageSquareText, show: isAdmin || isDocent },
   { id: 'rag_settings' as TabType, label: t('admin.tabs.ragSettings'), icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'projects_admin' as TabType, label: t('admin.tabs.projects'), icon: FolderTree, show: isAdmin || isDocent },
+  { id: 'course_info' as TabType, label: t('admin.tabs.courseInfo'), icon: BookText, show: isAdmin || isDocent },
   { id: 'personas' as TabType, label: t('admin.tabs.personas'), icon: MessageSquareText, show: isAdmin || isDocent },
   { id: 'settings' as TabType, label: t('admin.tabs.settings'), icon: Settings, show: isAdmin },
 ].filter(tab => tab.show);
 
 const tabGroups = [
-  { label: t('admin.tabGroups.courseContent'), ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts'] },
+  { label: t('admin.tabGroups.courseContent'), ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts', 'course_info'] },
   { label: t('admin.tabGroups.learningEnv'), ids: ['prompts', 'quiz_sources', 'projects_admin', 'personas'] },
   { label: t('admin.tabGroups.system'), ids: ['users', 'imports', 'settings'] },
 ].map(g => ({ label: g.label, items: tabs.filter(tab => g.ids.includes(tab.id)) }))
@@ -1943,6 +1945,7 @@ const tabGroups = [
           )}
 
           {activeTab === 'quiz_sources' && <QuizSourcesAdminPanel />}
+          {activeTab === 'course_info' && <CursusInfoTab />}
 
           {activeTab === 'prompts' && (
             <div className="space-y-6">
