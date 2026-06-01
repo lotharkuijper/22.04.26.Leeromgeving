@@ -332,12 +332,37 @@ export function QuizSourcesAdminPanel() {
 
   async function handleSaveMappings() {
     if (!activeCourseId) return;
+    // Voeg eerst de groen gevinkte bulk-voorstellen samen met de bestaande
+    // mappings; daarna persisteren we alles in één keer. Zo doet één knop
+    // ("Koppelingen opslaan") zowel het vastleggen als het opslaan.
+    let merged = mappings;
+    if (bulkResults) {
+      const additions: ItembankMapping[] = [];
+      const has = (cid: string, pathKey: string) =>
+        merged.some(m => m.concept_id === cid && m.exsection_path.join('/') === pathKey)
+        || additions.some(m => m.concept_id === cid && m.exsection_path.join('/') === pathKey);
+      for (const r of bulkResults) {
+        for (const cand of r.candidates) {
+          const pathKey = cand.exsection_path.join('/');
+          if (!bulkSelected.has(`${r.conceptId}|${pathKey}`)) continue;
+          if (!has(r.conceptId, pathKey)) {
+            additions.push({ concept_id: r.conceptId, exsection_path: cand.exsection_path });
+          }
+        }
+      }
+      if (additions.length > 0) {
+        merged = [...merged, ...additions];
+        setMappings(merged);
+      }
+      setBulkResults(null);
+      setBulkSelected(new Set());
+    }
     setSavingMappings(true);
     try {
       const res = await fetch(`/api/admin/itembank-mappings/${activeCourseId}`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ mappings }),
+        body: JSON.stringify({ mappings: merged }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || t('admin.quizSources.saveFailed'));
@@ -532,34 +557,6 @@ export function QuizSourcesAdminPanel() {
     });
   }
 
-  function applyBulkSelected() {
-    if (!bulkResults) return;
-    let added = 0;
-    let alreadyPresent = 0;
-    for (const r of bulkResults) {
-      for (const cand of r.candidates) {
-        const key = `${r.conceptId}|${cand.exsection_path.join('/')}`;
-        if (!bulkSelected.has(key)) continue;
-        const pathKey = cand.exsection_path.join('/');
-        const exists = mappings.some(
-          m => m.concept_id === r.conceptId && m.exsection_path.join('/') === pathKey
-        );
-        if (exists) {
-          alreadyPresent++;
-        } else {
-          addMapping(r.conceptId, cand.exsection_path);
-          added++;
-        }
-      }
-    }
-    setBulkResults(null);
-    setBulkSelected(new Set());
-    if (added > 0) {
-      showMsg('success', t('admin.quizSources.bulk.applied', { count: String(added) }));
-    } else if (alreadyPresent > 0) {
-      showMsg('success', t('admin.quizSources.bulk.allAlreadyLinked', { count: String(alreadyPresent) }));
-    }
-  }
 
   async function handleImportCsv() {
     if (!activeCourseId) return;
@@ -785,29 +782,41 @@ export function QuizSourcesAdminPanel() {
                 </p>
                 <p className="text-[11px] text-violet-800 mt-0.5">{t('admin.quizSources.bulk.desc')}</p>
               </div>
-              <div className="flex items-center gap-3">
-                <label className="text-[11px] text-violet-900 inline-flex items-center gap-2">
-                  {t('admin.quizSources.bulk.threshold', { pct: (bulkThreshold * 100).toFixed(0) })}
-                  <input
-                    type="range"
-                    min={0.2}
-                    max={0.7}
-                    step={0.05}
-                    value={bulkThreshold}
-                    onChange={e => setBulkThreshold(Number(e.target.value))}
-                    className="w-28"
-                    data-testid="input-bulk-threshold"
-                  />
-                </label>
+              <div className="flex flex-col items-end gap-2">
+                <div className="flex items-center gap-3">
+                  <label className="text-[11px] text-violet-900 inline-flex items-center gap-2">
+                    {t('admin.quizSources.bulk.threshold', { pct: (bulkThreshold * 100).toFixed(0) })}
+                    <input
+                      type="range"
+                      min={0.2}
+                      max={0.7}
+                      step={0.05}
+                      value={bulkThreshold}
+                      onChange={e => setBulkThreshold(Number(e.target.value))}
+                      className="w-28"
+                      data-testid="input-bulk-threshold"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleBulkMatch}
+                    disabled={bulkLoading}
+                    className="px-3 py-1.5 bg-violet-600 text-white text-xs font-medium rounded hover:bg-violet-700 disabled:opacity-50 inline-flex items-center gap-1"
+                    data-testid="button-bulk-match"
+                  >
+                    {bulkLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                    {bulkLoading ? t('admin.quizSources.bulk.running') : t('admin.quizSources.bulk.run')}
+                  </button>
+                </div>
                 <button
                   type="button"
-                  onClick={handleBulkMatch}
-                  disabled={bulkLoading}
-                  className="px-3 py-1.5 bg-violet-600 text-white text-xs font-medium rounded hover:bg-violet-700 disabled:opacity-50 inline-flex items-center gap-1"
-                  data-testid="button-bulk-match"
+                  onClick={handleSaveMappings}
+                  disabled={savingMappings}
+                  className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center justify-center gap-1"
+                  data-testid="button-save-mappings"
                 >
-                  {bulkLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-                  {bulkLoading ? t('admin.quizSources.bulk.running') : t('admin.quizSources.bulk.run')}
+                  {savingMappings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  {savingMappings ? t('admin.quizSources.itembank.saving') : t('admin.quizSources.itembank.save')}
                 </button>
               </div>
             </div>
@@ -818,25 +827,14 @@ export function QuizSourcesAdminPanel() {
                   <span className="text-[11px] text-violet-800">
                     {t('admin.quizSources.bulk.selectedInfo', { count: String(bulkSelected.size) })}
                   </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => { setBulkResults(null); setBulkSelected(new Set()); }}
-                      className="text-[11px] text-violet-700 hover:text-violet-900"
-                      data-testid="button-bulk-dismiss"
-                    >
-                      {t('admin.quizSources.bulk.dismiss')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={applyBulkSelected}
-                      disabled={bulkSelected.size === 0}
-                      className="px-2.5 py-1 bg-emerald-600 text-white text-[11px] font-medium rounded hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-1"
-                      data-testid="button-bulk-apply"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" /> {t('admin.quizSources.bulk.apply')}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setBulkResults(null); setBulkSelected(new Set()); }}
+                    className="text-[11px] text-violet-700 hover:text-violet-900"
+                    data-testid="button-bulk-dismiss"
+                  >
+                    {t('admin.quizSources.bulk.dismiss')}
+                  </button>
                 </div>
                 <div className="max-h-80 overflow-y-auto space-y-2">
                   {bulkResults.filter(r => r.candidates.length > 0).map(r => (
@@ -1138,15 +1136,6 @@ export function QuizSourcesAdminPanel() {
             }} />
           </>
         )}
-        <button
-          onClick={handleSaveMappings}
-          disabled={savingMappings}
-          className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
-          data-testid="button-save-mappings"
-        >
-          <Save className="w-4 h-4" />
-          {savingMappings ? t('admin.quizSources.itembank.saving') : t('admin.quizSources.itembank.save')}
-        </button>
       </section>
 
       {/* CSV-import eigen itembank */}
