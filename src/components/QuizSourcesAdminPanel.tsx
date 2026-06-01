@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb, Search, Wand2, Upload, BarChart3, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Save, Loader2, Sparkles, Database, FileText, FolderOpen, Trash2, Plus, Lightbulb, Search, Wand2, Upload, BarChart3, CheckCircle2, AlertCircle, ChevronDown } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
@@ -159,6 +159,15 @@ export function QuizSourcesAdminPanel() {
   const [csvImporting, setCsvImporting] = useState(false);
   const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
   const [showCsvHelp, setShowCsvHelp] = useState(false);
+
+  // Inklapbare grote overzichtsblokken — standaard ingeklapt zodat de pagina
+  // binnen één scherm past.
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
+    coverage: true,
+    itembankSections: true,
+    prompts: true,
+  });
+  const toggleCollapsed = (key: string) => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
 
   const headers = useMemo(
     () =>
@@ -599,7 +608,7 @@ export function QuizSourcesAdminPanel() {
   })();
 
   return (
-    <div className="space-y-8" data-testid="panel-quiz-sources">
+    <div className="space-y-5" data-testid="panel-quiz-sources">
       <div className="bg-white border border-gray-200 rounded-xl p-5">
         <h2 className="text-lg font-bold text-gray-900 mb-1">{t('admin.quizSources.title', { name: activeCourse?.name || '' })}</h2>
         <p className="text-sm text-gray-600">{t('admin.quizSources.desc')}</p>
@@ -624,7 +633,7 @@ export function QuizSourcesAdminPanel() {
       )}
 
       {/* Mix-sliders */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-source-mix">
+      <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3" data-testid="section-source-mix">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <Sparkles className="w-4 h-4" /> {t('admin.quizSources.mix.title')}
           {mixConfigured ? (
@@ -643,7 +652,7 @@ export function QuizSourcesAdminPanel() {
             {t('admin.quizSources.mix.defaultHint')}
           </p>
         )}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="space-y-2">
           <MixField label={t('admin.quizSources.mix.rag')} value={mix.pct_rag} onChange={v => setMixField('pct_rag', v)} testId="input-mix-rag" />
           <MixField label="ItemBank" value={mix.pct_itembank} onChange={v => setMixField('pct_itembank', v)} testId="input-mix-itembank" />
           <MixField label={t('admin.quizSources.mix.llm')} value={mix.pct_llm} onChange={v => setMixField('pct_llm', v)} testId="input-mix-llm" />
@@ -674,10 +683,26 @@ export function QuizSourcesAdminPanel() {
       </section>
 
       {/* Dekkings-overzicht */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-coverage">
-        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <BarChart3 className="w-4 h-4" /> {t('admin.quizSources.coverage.title')}
+      <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3" data-testid="section-coverage">
+        <h3 className="font-semibold text-gray-900">
+          <button
+            type="button"
+            onClick={() => toggleCollapsed('coverage')}
+            className="flex items-center gap-2 w-full text-left"
+            aria-expanded={!collapsed.coverage}
+            title={collapsed.coverage ? t('admin.quizSources.toggleExpand') : t('admin.quizSources.toggleCollapse')}
+            data-testid="button-toggle-coverage"
+          >
+            <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${collapsed.coverage ? '-rotate-90' : ''}`} />
+            <BarChart3 className="w-4 h-4" /> {t('admin.quizSources.coverage.title')}
+            {coverage.length > 0 && coverageGaps > 0 && (
+              <span className="ml-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700" data-testid="badge-coverage-gaps">
+                {t('admin.quizSources.coverage.gapsBadge', { count: String(coverageGaps) })}
+              </span>
+            )}
+          </button>
         </h3>
+        {!collapsed.coverage && (<>
         <p className="text-xs text-gray-600">{t('admin.quizSources.coverage.desc')}</p>
         {coverage.length === 0 ? null : coverageGaps > 0 ? (
           <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 inline-flex items-center gap-1" data-testid="text-coverage-gaps">
@@ -718,10 +743,11 @@ export function QuizSourcesAdminPanel() {
             </table>
           </div>
         </div>
+        </>)}
       </section>
 
       {/* ItemBank-mappings */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-itembank-mappings">
+      <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3" data-testid="section-itembank-mappings">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <Database className="w-4 h-4" /> {t('admin.quizSources.itembank.title')}
         </h3>
@@ -836,9 +862,18 @@ export function QuizSourcesAdminPanel() {
         ) : (
           <>
             <div className="border border-gray-200 rounded-lg overflow-hidden" data-testid="table-itembank-sections-overview">
-              <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-700">
+              <button
+                type="button"
+                onClick={() => toggleCollapsed('itembankSections')}
+                className="w-full flex items-center gap-2 px-3 py-2 bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-700 text-left hover:bg-gray-100"
+                aria-expanded={!collapsed.itembankSections}
+                title={collapsed.itembankSections ? t('admin.quizSources.toggleExpand') : t('admin.quizSources.toggleCollapse')}
+                data-testid="button-toggle-itembank-sections"
+              >
+                <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${collapsed.itembankSections ? '-rotate-90' : ''}`} />
                 {t('admin.quizSources.itembank.available', { count: String(sections.length) })}
-              </div>
+              </button>
+              {!collapsed.itembankSections && (
               <div className="max-h-64 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50 text-gray-600 sticky top-0">
@@ -866,9 +901,9 @@ export function QuizSourcesAdminPanel() {
                   </tbody>
                 </table>
               </div>
+              )}
             </div>
-          <div className="space-y-3">
-            {concepts.map(concept => {
+          <ConceptAccordion concepts={concepts} testIdPrefix="itembank" renderConcept={concept => {
               const conceptMappings = mappings.filter(m => m.concept_id === concept.id);
               return (
                 <div key={concept.id} className="border border-gray-200 rounded-lg p-3" data-testid={`mapping-row-${concept.id}`}>
@@ -1079,8 +1114,7 @@ export function QuizSourcesAdminPanel() {
                   )}
                 </div>
               );
-            })}
-          </div>
+            }} />
           </>
         )}
         <button
@@ -1095,7 +1129,7 @@ export function QuizSourcesAdminPanel() {
       </section>
 
       {/* CSV-import eigen itembank */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-csv-import">
+      <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3" data-testid="section-csv-import">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <Upload className="w-4 h-4" /> {t('admin.quizSources.csv.title')}
         </h3>
@@ -1181,13 +1215,12 @@ export function QuizSourcesAdminPanel() {
       </section>
 
       {/* RAG-folder mapping */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-rag-folder-mapping">
+      <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3" data-testid="section-rag-folder-mapping">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <FolderOpen className="w-4 h-4" /> {t('admin.quizSources.rag.title')}
         </h3>
         <p className="text-xs text-gray-600">{t('admin.quizSources.rag.desc')}</p>
-        <div className="space-y-2 max-h-96 overflow-y-auto">
-          {concepts.map(concept => {
+        <ConceptAccordion concepts={concepts} testIdPrefix="rag" renderConcept={concept => {
             const current = ragSources.find(s => s.concept_id === concept.id);
             return (
               <div key={concept.id} className="flex items-center gap-3 p-2 border border-gray-100 rounded">
@@ -1205,8 +1238,7 @@ export function QuizSourcesAdminPanel() {
                 </select>
               </div>
             );
-          })}
-        </div>
+          }} />
         <button
           onClick={handleSaveRagSources}
           disabled={savingRag}
@@ -1219,10 +1251,21 @@ export function QuizSourcesAdminPanel() {
       </section>
 
       {/* Quiz prompts */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-quiz-prompts">
-        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <FileText className="w-4 h-4" /> {t('admin.quizSources.prompts.title')}
+      <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3" data-testid="section-quiz-prompts">
+        <h3 className="font-semibold text-gray-900">
+          <button
+            type="button"
+            onClick={() => toggleCollapsed('prompts')}
+            className="flex items-center gap-2 w-full text-left"
+            aria-expanded={!collapsed.prompts}
+            title={collapsed.prompts ? t('admin.quizSources.toggleExpand') : t('admin.quizSources.toggleCollapse')}
+            data-testid="button-toggle-prompts"
+          >
+            <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${collapsed.prompts ? '-rotate-90' : ''}`} />
+            <FileText className="w-4 h-4" /> {t('admin.quizSources.prompts.title')}
+          </button>
         </h3>
+        {!collapsed.prompts && (<>
         <p className="text-xs text-gray-600">{t('admin.quizSources.prompts.desc')}</p>
         {prompts.length === 0 && !loading && (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 inline-flex items-center gap-1">
@@ -1252,6 +1295,7 @@ export function QuizSourcesAdminPanel() {
             />
           </div>
         ))}
+        </>)}
       </section>
     </div>
   );
@@ -1259,28 +1303,120 @@ export function QuizSourcesAdminPanel() {
 
 function MixField({ label, value, onChange, testId }: { label: string; value: number; onChange: (v: number) => void; testId: string }) {
   return (
-    <div>
-      <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
-      <div className="flex items-center gap-2">
+    <div className="flex items-center gap-3">
+      <label className="text-xs font-medium text-gray-700 w-44 shrink-0">{label}</label>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={value}
+        onChange={e => onChange(parseInt(e.target.value, 10))}
+        className="w-44 max-w-full"
+        data-testid={testId}
+      />
+      <input
+        type="number"
+        min={0}
+        max={100}
+        value={value}
+        onChange={e => onChange(parseInt(e.target.value, 10) || 0)}
+        className="w-14 px-2 py-1 text-xs border border-gray-300 rounded"
+        data-testid={`${testId}-number`}
+      />
+      <span className="text-xs text-gray-500">%</span>
+    </div>
+  );
+}
+
+function groupConceptsByLetter(concepts: Concept[]): { letter: string; items: Concept[] }[] {
+  const map = new Map<string, Concept[]>();
+  const sorted = [...concepts].sort((a, b) => a.name.localeCompare(b.name, 'nl', { sensitivity: 'base' }));
+  for (const c of sorted) {
+    const first = (c.name.trim()[0] || '#').toUpperCase();
+    const letter = /[A-Z]/.test(first) ? first : '#';
+    if (!map.has(letter)) map.set(letter, []);
+    map.get(letter)!.push(c);
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([letter, items]) => ({ letter, items }));
+}
+
+function ConceptAccordion({
+  concepts,
+  renderConcept,
+  testIdPrefix,
+}: {
+  concepts: Concept[];
+  renderConcept: (concept: Concept) => ReactNode;
+  testIdPrefix: string;
+}) {
+  const { t } = useLanguage();
+  const [search, setSearch] = useState('');
+  const [openLetters, setOpenLetters] = useState<Set<string>>(new Set());
+
+  const q = search.trim().toLowerCase();
+  const searching = q.length > 0;
+  const filtered = useMemo(
+    () => (searching ? concepts.filter(c => c.name.toLowerCase().includes(q)) : concepts),
+    [concepts, q, searching]
+  );
+  const groups = useMemo(() => groupConceptsByLetter(filtered), [filtered]);
+
+  const toggleLetter = (letter: string) =>
+    setOpenLetters(prev => {
+      const next = new Set(prev);
+      if (next.has(letter)) next.delete(letter);
+      else next.add(letter);
+      return next;
+    });
+  const isOpen = (letter: string) => searching || openLetters.has(letter);
+
+  return (
+    <div className="space-y-2" data-testid={`accordion-${testIdPrefix}`}>
+      <div className="relative max-w-xs">
+        <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
         <input
-          type="range"
-          min={0}
-          max={100}
-          value={value}
-          onChange={e => onChange(parseInt(e.target.value, 10))}
-          className="flex-1"
-          data-testid={testId}
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder={t('admin.quizSources.search.placeholder')}
+          className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded text-xs"
+          data-testid={`input-search-${testIdPrefix}`}
         />
-        <input
-          type="number"
-          min={0}
-          max={100}
-          value={value}
-          onChange={e => onChange(parseInt(e.target.value, 10) || 0)}
-          className="w-16 px-2 py-1 text-xs border border-gray-300 rounded"
-        />
-        <span className="text-xs text-gray-500">%</span>
       </div>
+      {groups.length === 0 ? (
+        <p className="text-xs text-gray-500 italic" data-testid={`text-no-results-${testIdPrefix}`}>
+          {t('admin.quizSources.search.noResults', { q: search.trim() })}
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {groups.map(g => {
+            const open = isOpen(g.letter);
+            return (
+              <div key={g.letter} className="border border-gray-200 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleLetter(g.letter)}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-left"
+                  aria-expanded={open}
+                  title={open ? t('admin.quizSources.toggleCollapse') : t('admin.quizSources.toggleExpand')}
+                  data-testid={`button-group-${testIdPrefix}-${g.letter}`}
+                >
+                  <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${open ? '' : '-rotate-90'}`} />
+                  <span className="font-semibold text-gray-800 text-sm">{g.letter}</span>
+                  <span className="text-[11px] text-gray-500">{g.items.length}</span>
+                </button>
+                {open && (
+                  <div className="p-2 space-y-2" data-testid={`group-body-${testIdPrefix}-${g.letter}`}>
+                    {g.items.map(renderConcept)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

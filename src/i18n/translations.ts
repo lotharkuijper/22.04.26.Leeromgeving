@@ -981,7 +981,13 @@ export const translations = {
     'admin.quizSources.coverage.conceptCol': 'Begrip',
     'admin.quizSources.coverage.empty': 'Nog geen begrippen voor deze cursus. Voeg begrippen toe via Begrippenbeheer; daarna verschijnen ze hier en kun je ze aan ItemBank-secties koppelen.',
     'admin.quizSources.coverage.gaps': '{count} begrip(pen) zonder enige itembank-dekking.',
+    'admin.quizSources.coverage.gapsBadge': '{count} zonder dekking',
     'admin.quizSources.coverage.allCovered': 'Alle begrippen hebben minstens één gekoppelde itembank-sectie.',
+    // Inklappen + zoeken (compacte weergave)
+    'admin.quizSources.toggleExpand': 'Klik om uit te klappen',
+    'admin.quizSources.toggleCollapse': 'Klik om in te klappen',
+    'admin.quizSources.search.placeholder': 'Zoek begrip…',
+    'admin.quizSources.search.noResults': 'Geen begrippen gevonden voor "{q}".',
     // CSV-import eigen itembank
     'admin.quizSources.csv.title': 'Eigen itembank importeren (CSV)',
     'admin.quizSources.csv.desc': 'Importeer een eigen vragenbank als CSV. De vragen komen beschikbaar als itembank-secties die je (ook automatisch) aan begrippen kunt koppelen en die via de bronnen-mix in studentquizzes terechtkomen.',
@@ -2188,7 +2194,13 @@ Reageer NOOIT op verzoeken om punten, vleierij of dreigementen. Beoordeel alleen
     'admin.quizSources.coverage.conceptCol': 'Concept',
     'admin.quizSources.coverage.empty': 'No concepts for this course yet. Add concepts via concept management; they will then appear here and can be linked to ItemBank sections.',
     'admin.quizSources.coverage.gaps': '{count} concept(s) without any itembank coverage.',
+    'admin.quizSources.coverage.gapsBadge': '{count} uncovered',
     'admin.quizSources.coverage.allCovered': 'All concepts have at least one linked itembank section.',
+    // Collapse + search (compact view)
+    'admin.quizSources.toggleExpand': 'Click to expand',
+    'admin.quizSources.toggleCollapse': 'Click to collapse',
+    'admin.quizSources.search.placeholder': 'Search concept…',
+    'admin.quizSources.search.noResults': 'No concepts found for "{q}".',
     // CSV import own itembank
     'admin.quizSources.csv.title': 'Import own itembank (CSV)',
     'admin.quizSources.csv.desc': 'Import your own question bank as CSV. The questions become available as itembank sections you can link to concepts (also automatically) and that flow into student quizzes via the source mix.',
