@@ -6428,7 +6428,11 @@ app.get('/api/quiz-sources-mix/:courseId', async (req, res) => {
   // Per-cursus staff-check: admin/superuser overal, anders alleen docenten
   // van déze cursus (course_members.member_role='teacher'). Voorkomt dat een
   // teacher-anywhere docent instellingen van een andere cursus wijzigt.
-  if (auth.role !== 'admin' && !(await isCourseTeacher(auth.user.id, courseId))) {
+  // NB: requireAuthUser levert {user, profile} zonder `role`-veld, dus gebruik
+  // isStaffForCourse (kijkt naar profile.role/email) i.p.v. een auth.role-check —
+  // anders zou een admin/superuser die geen course_members-teacher is hier 403
+  // krijgen en zou de mix in de UI terugvallen op de standaard 50:0:50.
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
     return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
   if (!quizSourcesSchemaReady) {
