@@ -123,6 +123,10 @@ export function QuizSourcesAdminPanel() {
   const [sections, setSections] = useState<ItembankSection[]>([]);
 
   const [mix, setMix] = useState<SourceMix>({ pct_rag: 50, pct_itembank: 0, pct_llm: 50 });
+  // Onderscheid een opgeslagen mix van de hardcoded standaard. `false` = er is
+  // (nog) geen rij voor deze cursus, dus de getoonde 50:0:50 is slechts een
+  // standaard en niet wat de docent ooit heeft bewaard.
+  const [mixConfigured, setMixConfigured] = useState(false);
   const [mappings, setMappings] = useState<ItembankMapping[]>([]);
   const [ragSources, setRagSources] = useState<RagSource[]>([]);
   const [prompts, setPrompts] = useState<QuizPrompt[]>([]);
@@ -176,15 +180,42 @@ export function QuizSourcesAdminPanel() {
 
   async function loadAll(courseId: string) {
     setLoading(true);
+    // Reset cursus-specifieke staat zodat waarden van een vorige cursus (of een
+    // mislukte load) niet blijven hangen tijdens het wisselen.
+    setMix({ pct_rag: 50, pct_itembank: 0, pct_llm: 50 });
+    setMixConfigured(false);
     try {
-      // Concepten van de cursus
-      const { data: conceptRows } = await supabase
-        .from('concepts')
-        .select('id, name, category, course_id, key_points, definition')
-        .order('name');
+      // Concepten van de cursus. Schema-bewust: sommige Supabase-instances
+      // hebben de `concepts.course_id`-migratie wél (dan staat de koppeling in
+      // de kolom), andere niet (dan loopt de koppeling via de `key_points`-
+      // marker `course_id:<uuid>`). We proberen daarom eerst mét `course_id` en
+      // vallen bij een ontbrekende kolom (PostgREST 400) terug op de variant
+      // zónder, zodat er nooit nul begrippen laden. Het filter hieronder dekt
+      // beide modi.
+      let conceptRows: any[] | null = null;
+      let hasCourseIdCol = true;
+      {
+        const withCol = await supabase
+          .from('concepts')
+          .select('id, name, category, course_id, key_points, definition')
+          .order('name');
+        if (withCol.error) {
+          hasCourseIdCol = false;
+          const fallback = await supabase
+            .from('concepts')
+            .select('id, name, category, key_points, definition')
+            .order('name');
+          if (fallback.error) {
+            showMsg('error', t('admin.quizSources.conceptsLoadFailed', { error: fallback.error.message }));
+          }
+          conceptRows = fallback.data || [];
+        } else {
+          conceptRows = withCol.data || [];
+        }
+      }
       const courseMarker = `course_id:${courseId}`;
       const filtered = (conceptRows || []).filter((c: any) => {
-        if (c.course_id === courseId) return true;
+        if (hasCourseIdCol && c.course_id === courseId) return true;
         if ((c.key_points || []).includes(courseMarker)) return true;
         if (!c.course_id && !(c.key_points || []).some((kp: string) => kp.startsWith('course_id:'))) return true;
         return false;
@@ -219,9 +250,14 @@ export function QuizSourcesAdminPanel() {
           const mixData = await mixRes.json();
           setSchemaReady(mixData.schema_ready !== false);
           if (mixData.mix) setMix(mixData.mix);
+          // `updated_at` is alleen aanwezig als er echt een opgeslagen rij is.
+          setMixConfigured(!!mixData.updated_at);
+        } else {
+          const errData = await mixRes.json().catch(() => null);
+          showMsg('error', t('admin.quizSources.mixLoadFailed', { error: errData?.error || String(mixRes.status) }));
         }
-      } catch {
-        /* niet kritiek */
+      } catch (err) {
+        showMsg('error', t('admin.quizSources.mixLoadFailed', { error: err instanceof Error ? err.message : 'network' }));
       }
 
       // Mappings
@@ -277,6 +313,7 @@ export function QuizSourcesAdminPanel() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || t('admin.quizSources.saveFailed'));
       if (data.mix) setMix(data.mix);
+      setMixConfigured(true);
       showMsg('success', t('admin.quizSources.mixSaved'));
     } catch (err) {
       showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.unknownError'));
@@ -546,6 +583,20 @@ export function QuizSourcesAdminPanel() {
   }
 
   const mixSum = mix.pct_rag + mix.pct_itembank + mix.pct_llm;
+  // Spiegelt server-`normalizeMix`: zo ziet de docent vóór het opslaan welke
+  // percentages er straks echt worden bewaard (de getypte waarden veranderen
+  // dus niet "vanzelf" na de klik).
+  const normalizedMix = (() => {
+    const r0 = Math.max(0, Math.min(100, mix.pct_rag || 0));
+    const i0 = Math.max(0, Math.min(100, mix.pct_itembank || 0));
+    const l0 = Math.max(0, Math.min(100, mix.pct_llm || 0));
+    const sum = r0 + i0 + l0;
+    if (sum === 0) return { pct_rag: 50, pct_itembank: 0, pct_llm: 50 };
+    if (sum === 100) return { pct_rag: r0, pct_itembank: i0, pct_llm: l0 };
+    const r = Math.round((r0 * 100) / sum);
+    const i = Math.round((i0 * 100) / sum);
+    return { pct_rag: r, pct_itembank: i, pct_llm: 100 - r - i };
+  })();
 
   return (
     <div className="space-y-8" data-testid="panel-quiz-sources">
@@ -576,13 +627,36 @@ export function QuizSourcesAdminPanel() {
       <section className="bg-white border border-gray-200 rounded-xl p-6 space-y-4" data-testid="section-source-mix">
         <h3 className="font-semibold text-gray-900 flex items-center gap-2">
           <Sparkles className="w-4 h-4" /> {t('admin.quizSources.mix.title')}
+          {mixConfigured ? (
+            <span className="ml-2 text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700" data-testid="badge-mix-configured">
+              {t('admin.quizSources.mix.savedBadge')}
+            </span>
+          ) : (
+            <span className="ml-2 text-[11px] font-medium px-2 py-0.5 rounded-full bg-gray-100 border border-gray-200 text-gray-500" data-testid="badge-mix-default">
+              {t('admin.quizSources.mix.defaultBadge')}
+            </span>
+          )}
         </h3>
         <p className="text-xs text-gray-600">{t('admin.quizSources.mix.desc')}</p>
+        {!mixConfigured && (
+          <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded p-2" data-testid="text-mix-default-hint">
+            {t('admin.quizSources.mix.defaultHint')}
+          </p>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <MixField label={t('admin.quizSources.mix.rag')} value={mix.pct_rag} onChange={v => setMixField('pct_rag', v)} testId="input-mix-rag" />
           <MixField label="ItemBank" value={mix.pct_itembank} onChange={v => setMixField('pct_itembank', v)} testId="input-mix-itembank" />
           <MixField label={t('admin.quizSources.mix.llm')} value={mix.pct_llm} onChange={v => setMixField('pct_llm', v)} testId="input-mix-llm" />
         </div>
+        {mixSum !== 100 && (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2" data-testid="text-mix-normalized-preview">
+            {t('admin.quizSources.mix.normalizedPreview', {
+              rag: String(normalizedMix.pct_rag),
+              itembank: String(normalizedMix.pct_itembank),
+              llm: String(normalizedMix.pct_llm),
+            })}
+          </p>
+        )}
         <div className="flex items-center justify-between">
           <span className={`text-sm ${mixSum === 100 ? 'text-gray-500' : 'text-amber-700'}`} data-testid="text-mix-sum">
             {t('admin.quizSources.mix.sum', { sum: String(mixSum) })} {mixSum !== 100 && t('admin.quizSources.mix.normalized')}
@@ -605,7 +679,7 @@ export function QuizSourcesAdminPanel() {
           <BarChart3 className="w-4 h-4" /> {t('admin.quizSources.coverage.title')}
         </h3>
         <p className="text-xs text-gray-600">{t('admin.quizSources.coverage.desc')}</p>
-        {coverageGaps > 0 ? (
+        {coverage.length === 0 ? null : coverageGaps > 0 ? (
           <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 inline-flex items-center gap-1" data-testid="text-coverage-gaps">
             <AlertCircle className="w-3.5 h-3.5" /> {t('admin.quizSources.coverage.gaps', { count: String(coverageGaps) })}
           </p>
@@ -626,14 +700,20 @@ export function QuizSourcesAdminPanel() {
                 </tr>
               </thead>
               <tbody>
-                {coverage.map(c => (
-                  <tr key={c.id} className={`border-t border-gray-100 ${c.total === 0 ? 'bg-amber-50' : ''}`} data-testid={`row-coverage-${c.id}`}>
-                    <td className="px-3 py-1.5 text-gray-800">{c.name}</td>
-                    <td className={`px-3 py-1.5 text-right font-medium ${c.total === 0 ? 'text-amber-700' : 'text-gray-800'}`} data-testid={`text-coverage-total-${c.id}`}>{c.total}</td>
-                    <td className={`px-3 py-1.5 text-right ${c.mcq === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.mcq}</td>
-                    <td className={`px-3 py-1.5 text-right ${c.open === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.open}</td>
+                {coverage.length === 0 ? (
+                  <tr data-testid="row-coverage-empty">
+                    <td colSpan={4} className="px-3 py-4 text-center text-gray-500">{t('admin.quizSources.coverage.empty')}</td>
                   </tr>
-                ))}
+                ) : (
+                  coverage.map(c => (
+                    <tr key={c.id} className={`border-t border-gray-100 ${c.total === 0 ? 'bg-amber-50' : ''}`} data-testid={`row-coverage-${c.id}`}>
+                      <td className="px-3 py-1.5 text-gray-800">{c.name}</td>
+                      <td className={`px-3 py-1.5 text-right font-medium ${c.total === 0 ? 'text-amber-700' : 'text-gray-800'}`} data-testid={`text-coverage-total-${c.id}`}>{c.total}</td>
+                      <td className={`px-3 py-1.5 text-right ${c.mcq === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.mcq}</td>
+                      <td className={`px-3 py-1.5 text-right ${c.open === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.open}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
