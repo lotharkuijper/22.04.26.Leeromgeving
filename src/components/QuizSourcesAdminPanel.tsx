@@ -496,22 +496,32 @@ export function QuizSourcesAdminPanel() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || t('admin.quizSources.bulk.error'));
       const results = (data.results || []) as BulkResult[];
+      // De standaard-selectie wordt door een effect afgeleid van de actieve
+      // drempel (zie hieronder), zodat het schuiven van de drempel de groene
+      // vinkjes live bijwerkt zonder opnieuw te hoeven matchen.
       setBulkResults(results);
-      // Standaard-selectie: kandidaten boven drempel die nog niet gekoppeld zijn.
-      const sel = new Set<string>();
-      for (const r of results) {
-        for (const cand of r.candidates) {
-          if (cand.above_threshold && !cand.already_linked) {
-            sel.add(`${r.conceptId}|${cand.exsection_path.join('/')}`);
-          }
-        }
-      }
-      setBulkSelected(sel);
     } catch (err) {
       showMsg('error', err instanceof Error ? err.message : t('admin.quizSources.bulk.error'));
     }
     setBulkLoading(false);
   }
+
+  // Houd de standaard-selectie gelijk met de actieve drempel: elke kandidaat
+  // met voldoende overeenkomst (similarity ≥ drempel) staat groen aangevinkt,
+  // óók al-gekoppelde. Het verschuiven van de drempel werkt de vinkjes direct
+  // bij; al-gekoppelde koppelingen blijven idempotent bij het vastleggen.
+  useEffect(() => {
+    if (!bulkResults) return;
+    const sel = new Set<string>();
+    for (const r of bulkResults) {
+      for (const cand of r.candidates) {
+        if (cand.similarity >= bulkThreshold) {
+          sel.add(`${r.conceptId}|${cand.exsection_path.join('/')}`);
+        }
+      }
+    }
+    setBulkSelected(sel);
+  }, [bulkResults, bulkThreshold]);
 
   function toggleBulkSelect(conceptId: string, pathKey: string) {
     setBulkSelected(prev => {
@@ -525,10 +535,18 @@ export function QuizSourcesAdminPanel() {
   function applyBulkSelected() {
     if (!bulkResults) return;
     let added = 0;
+    let alreadyPresent = 0;
     for (const r of bulkResults) {
       for (const cand of r.candidates) {
         const key = `${r.conceptId}|${cand.exsection_path.join('/')}`;
-        if (bulkSelected.has(key)) {
+        if (!bulkSelected.has(key)) continue;
+        const pathKey = cand.exsection_path.join('/');
+        const exists = mappings.some(
+          m => m.concept_id === r.conceptId && m.exsection_path.join('/') === pathKey
+        );
+        if (exists) {
+          alreadyPresent++;
+        } else {
           addMapping(r.conceptId, cand.exsection_path);
           added++;
         }
@@ -536,7 +554,11 @@ export function QuizSourcesAdminPanel() {
     }
     setBulkResults(null);
     setBulkSelected(new Set());
-    showMsg('success', t('admin.quizSources.bulk.applied', { count: String(added) }));
+    if (added > 0) {
+      showMsg('success', t('admin.quizSources.bulk.applied', { count: String(added) }));
+    } else if (alreadyPresent > 0) {
+      showMsg('success', t('admin.quizSources.bulk.allAlreadyLinked', { count: String(alreadyPresent) }));
+    }
   }
 
   async function handleImportCsv() {
@@ -824,18 +846,19 @@ export function QuizSourcesAdminPanel() {
                         {r.candidates.map(cand => {
                           const pathKey = cand.exsection_path.join('/');
                           const selKey = `${r.conceptId}|${pathKey}`;
+                          const isStrong = cand.similarity >= bulkThreshold;
                           return (
                             <li key={pathKey} className="flex items-center gap-2 text-[11px]" data-testid={`bulk-cand-${r.conceptId}-${pathKey}`}>
                               <input
                                 type="checkbox"
                                 checked={bulkSelected.has(selKey)}
-                                disabled={cand.already_linked}
                                 onChange={() => toggleBulkSelect(r.conceptId, pathKey)}
+                                className="accent-emerald-600"
                                 data-testid={`checkbox-bulk-${r.conceptId}-${pathKey}`}
                               />
                               <span className="flex-1 min-w-0 truncate text-gray-800">{cand.exsection_path.join(' / ')}</span>
-                              <span className={`px-1.5 py-0.5 rounded whitespace-nowrap ${cand.above_threshold ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'}`} data-testid={`text-bulk-sim-${r.conceptId}-${pathKey}`}>
-                                {(cand.similarity * 100).toFixed(0)}% · {cand.above_threshold ? t('admin.quizSources.bulk.strongLabel') : t('admin.quizSources.bulk.weakLabel')}
+                              <span className={`px-1.5 py-0.5 rounded whitespace-nowrap ${isStrong ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'}`} data-testid={`text-bulk-sim-${r.conceptId}-${pathKey}`}>
+                                {(cand.similarity * 100).toFixed(0)}% · {isStrong ? t('admin.quizSources.bulk.strongLabel') : t('admin.quizSources.bulk.weakLabel')}
                               </span>
                               <span className="text-gray-500 w-24 text-right">
                                 {t('admin.quizSources.bulk.itemInfo', { count: String(cand.count), mcq: String(cand.mcq_count), open: String(cand.open_count) })}
