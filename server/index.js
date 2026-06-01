@@ -6694,17 +6694,25 @@ app.post('/api/admin/itembank-bulk-match', async (req, res) => {
   const thr = Math.max(0, Math.min(1, Number(threshold) || 0.35));
   const top = Math.max(1, Math.min(Number(topN) || 3, 8));
   try {
-    // 1) Begrippen van de cursus (zelfde filter als de admin-UI).
+    // 1) Begrippen van de cursus (zelfde filter als de admin-UI). Schema-bewust:
+    // de kolom concepts.course_id bestaat niet in elke database — vraag haar
+    // alleen op wanneer aanwezig (conceptsHasCourseId) en val anders terug op de
+    // course_id:<uuid>-markering in key_points + ongetagde globale begrippen.
+    const conceptSelect = conceptsHasCourseId
+      ? 'id, name, definition, key_points, course_id'
+      : 'id, name, definition, key_points';
     const { data: conceptRows, error: cErr } = await supabaseAdmin
       .from('concepts')
-      .select('id, name, definition, key_points, course_id')
+      .select(conceptSelect)
       .order('name');
     if (cErr) return res.status(500).json({ error: cErr.message });
     const marker = `course_id:${courseId}`;
     const concepts = (conceptRows || []).filter(c => {
-      if (c.course_id === courseId) return true;
+      if (conceptsHasCourseId && c.course_id === courseId) return true;
       if (Array.isArray(c.key_points) && c.key_points.includes(marker)) return true;
-      if (!c.course_id && !(Array.isArray(c.key_points) && c.key_points.some(kp => typeof kp === 'string' && kp.startsWith('course_id:')))) return true;
+      const hasCourseColValue = conceptsHasCourseId && c.course_id;
+      const hasKeyPointMarker = Array.isArray(c.key_points) && c.key_points.some(kp => typeof kp === 'string' && kp.startsWith('course_id:'));
+      if (!hasCourseColValue && !hasKeyPointMarker) return true;
       return false;
     }).slice(0, MAX_CONCEPTS);
     if (concepts.length === 0) return res.json({ results: [], threshold: thr, sections_evaluated: 0, truncated: false });
