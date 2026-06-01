@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Bold,
-  Italic,
-  Heading,
-  List,
-  ListOrdered,
-  Link2,
   Save,
   Upload,
   FolderOpen,
@@ -17,7 +11,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../i18n';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
-import { MarkdownMessage } from './MarkdownMessage';
+import { RichTextEditor } from './RichTextEditor';
 import { formatFileSize } from '../config/storage.config';
 
 interface InfoDoc {
@@ -88,7 +82,6 @@ export default function CursusInfoTab() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [uploading, setUploading] = useState(false);
 
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadInfo = useCallback(async () => {
@@ -139,57 +132,6 @@ export default function CursusInfoTab() {
     } finally {
       setSaving(false);
     }
-  }
-
-  // Pas markdown-opmaak toe rondom de huidige selectie in de textarea.
-  function applyFormat(kind: 'bold' | 'italic' | 'heading' | 'bullet' | 'numbered' | 'link') {
-    const el = textareaRef.current;
-    if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const selectedText = body.slice(start, end);
-    let replacement = selectedText;
-    let cursorOffset = 0;
-
-    if (kind === 'bold') {
-      replacement = `**${selectedText || 'vetgedrukt'}**`;
-      cursorOffset = selectedText ? replacement.length : replacement.length - 2;
-    } else if (kind === 'italic') {
-      replacement = `*${selectedText || 'cursief'}*`;
-      cursorOffset = selectedText ? replacement.length : replacement.length - 1;
-    } else if (kind === 'heading') {
-      const lineStart = body.lastIndexOf('\n', start - 1) + 1;
-      const before = body.slice(0, lineStart);
-      const after = body.slice(lineStart);
-      const next = `${before}## ${after}`;
-      setBody(next);
-      requestAnimationFrame(() => {
-        el.focus();
-        el.setSelectionRange(start + 3, end + 3);
-      });
-      return;
-    } else if (kind === 'bullet' || kind === 'numbered') {
-      const block = selectedText || 'lijstitem';
-      const prefix = kind === 'bullet' ? '- ' : '1. ';
-      replacement = block
-        .split('\n')
-        .map((line) => `${prefix}${line}`)
-        .join('\n');
-      cursorOffset = replacement.length;
-    } else if (kind === 'link') {
-      const url = window.prompt(t('courseInfo.linkUrlPrompt'), 'https://');
-      if (!url) return;
-      replacement = `[${selectedText || t('courseInfo.linkTextDefault')}](${url})`;
-      cursorOffset = replacement.length;
-    }
-
-    const next = body.slice(0, start) + replacement + body.slice(end);
-    setBody(next);
-    requestAnimationFrame(() => {
-      el.focus();
-      const pos = start + cursorOffset;
-      el.setSelectionRange(pos, pos);
-    });
   }
 
   async function openPicker() {
@@ -309,9 +251,6 @@ export default function CursusInfoTab() {
     );
   }
 
-  const toolbarBtn =
-    'inline-flex items-center justify-center h-8 w-8 rounded border border-slate-200 bg-white text-slate-700 hover:bg-slate-50';
-
   return (
     <div className="space-y-6" data-testid="tab-courseinfo">
       <div>
@@ -332,63 +271,27 @@ export default function CursusInfoTab() {
         </div>
       )}
 
-      {/* Editor + preview */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">
-            {t('courseInfo.editorLabel')}
-          </label>
-          <div className="flex flex-wrap gap-1 mb-2" role="toolbar" aria-label={t('courseInfo.title')}>
-            <button type="button" className={toolbarBtn} title={t('courseInfo.toolbar.bold')} aria-label={t('courseInfo.toolbar.bold')} onClick={() => applyFormat('bold')} data-testid="button-format-bold">
-              <Bold className="h-4 w-4" />
-            </button>
-            <button type="button" className={toolbarBtn} title={t('courseInfo.toolbar.italic')} aria-label={t('courseInfo.toolbar.italic')} onClick={() => applyFormat('italic')} data-testid="button-format-italic">
-              <Italic className="h-4 w-4" />
-            </button>
-            <button type="button" className={toolbarBtn} title={t('courseInfo.toolbar.heading')} aria-label={t('courseInfo.toolbar.heading')} onClick={() => applyFormat('heading')} data-testid="button-format-heading">
-              <Heading className="h-4 w-4" />
-            </button>
-            <button type="button" className={toolbarBtn} title={t('courseInfo.toolbar.bullet')} aria-label={t('courseInfo.toolbar.bullet')} onClick={() => applyFormat('bullet')} data-testid="button-format-bullet">
-              <List className="h-4 w-4" />
-            </button>
-            <button type="button" className={toolbarBtn} title={t('courseInfo.toolbar.numbered')} aria-label={t('courseInfo.toolbar.numbered')} onClick={() => applyFormat('numbered')} data-testid="button-format-numbered">
-              <ListOrdered className="h-4 w-4" />
-            </button>
-            <button type="button" className={toolbarBtn} title={t('courseInfo.toolbar.link')} aria-label={t('courseInfo.toolbar.link')} onClick={() => applyFormat('link')} data-testid="button-format-link">
-              <Link2 className="h-4 w-4" />
-            </button>
-          </div>
-          <textarea
-            ref={textareaRef}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={14}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
-            placeholder={t('courseInfo.placeholder')}
-            data-testid="input-courseinfo-body"
-          />
-          <button
-            type="button"
-            onClick={saveBody}
-            disabled={saving || loading}
-            className="mt-3 inline-flex items-center gap-2 rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-60"
-            data-testid="button-save-courseinfo"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {saving ? t('courseInfo.saving') : t('courseInfo.save')}
-          </button>
-        </div>
-
-        <div>
-          <span className="block text-sm font-medium text-slate-700 mb-1">{t('courseInfo.preview')}</span>
-          <div className="rounded border border-slate-200 bg-white p-4 min-h-[20rem]" data-testid="preview-courseinfo">
-            {body.trim() ? (
-              <MarkdownMessage content={body} />
-            ) : (
-              <p className="text-sm text-slate-400">{t('courseInfo.previewEmpty')}</p>
-            )}
-          </div>
-        </div>
+      {/* WYSIWYG-editor */}
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">
+          {t('courseInfo.editorLabel')}
+        </label>
+        <RichTextEditor
+          value={body}
+          onChange={setBody}
+          placeholder={t('courseInfo.placeholder')}
+          ariaLabel={t('courseInfo.editorLabel')}
+        />
+        <button
+          type="button"
+          onClick={saveBody}
+          disabled={saving || loading}
+          className="mt-3 inline-flex items-center gap-2 rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-60"
+          data-testid="button-save-courseinfo"
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          {saving ? t('courseInfo.saving') : t('courseInfo.save')}
+        </button>
       </div>
 
       {/* Gekoppelde bestanden */}
