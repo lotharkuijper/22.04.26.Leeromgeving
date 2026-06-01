@@ -906,65 +906,63 @@ export function QuizSourcesAdminPanel() {
           <ConceptAccordion concepts={concepts} testIdPrefix="itembank" renderConcept={concept => {
               const conceptMappings = mappings.filter(m => m.concept_id === concept.id);
               return (
-                <div key={concept.id} className="border border-gray-200 rounded-lg p-3" data-testid={`mapping-row-${concept.id}`}>
-                  <div className="flex items-center justify-between mb-2 gap-2">
-                    <div className="flex-1 min-w-0">
-                      <span className="font-medium text-gray-900">{concept.name}</span>
-                      {concept.category && <span className="ml-2 text-xs text-gray-500">{concept.category}</span>}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleSuggestMappings(concept)}
-                        disabled={suggestingConceptId === concept.id}
-                        className="px-2 py-1 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded text-xs text-amber-900 inline-flex items-center gap-1 disabled:opacity-50"
-                        data-testid={`button-suggest-mapping-${concept.id}`}
-                      >
-                        {suggestingConceptId === concept.id ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <Lightbulb className="w-3 h-3" />
-                        )}
-                        {t('admin.quizSources.itembank.suggestMapping')}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDiagnose(concept)}
-                        disabled={diagnosingConceptId === concept.id}
-                        className="px-2 py-1 bg-sky-50 border border-sky-200 hover:bg-sky-100 rounded text-xs text-sky-900 inline-flex items-center gap-1 disabled:opacity-50"
-                        data-testid={`button-diagnose-mapping-${concept.id}`}
-                      >
-                        {diagnosingConceptId === concept.id ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <Search className="w-3 h-3" />
-                        )}
-                        {t('admin.quizSources.itembank.diagnoseButton')}
-                      </button>
-                      <select
-                        onChange={e => {
-                          const idx = parseInt(e.target.value, 10);
-                          if (!Number.isNaN(idx) && sections[idx]) {
-                            addMapping(concept.id, sections[idx].exsection_path);
-                            e.target.value = '';
-                          }
-                        }}
-                        className="text-xs border border-gray-300 rounded px-2 py-1"
-                        defaultValue=""
-                        data-testid={`select-section-${concept.id}`}
-                      >
-                        <option value="">{t('admin.quizSources.itembank.linkSection')}</option>
-                        {sections.map((s, idx) => {
-                          const mcq = s.mcq_count ?? 0;
-                          const open = s.open_count ?? 0;
-                          return (
-                            <option key={s.exsection_path.join('/')} value={idx}>
-                              {s.exsection_path.join(' / ')} ({s.count} · {mcq} mcq / {open} open)
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
+                <div key={concept.id} className="border border-gray-200 rounded-lg p-3 max-w-xl" data-testid={`mapping-row-${concept.id}`}>
+                  <div className="mb-2 min-w-0">
+                    <span className="font-medium text-gray-900 break-words">{concept.name}</span>
+                    {concept.category && <span className="ml-2 text-xs text-gray-500">{concept.category}</span>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSuggestMappings(concept)}
+                      disabled={suggestingConceptId === concept.id}
+                      className="px-2 py-1 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded text-xs text-amber-900 inline-flex items-center gap-1 disabled:opacity-50"
+                      data-testid={`button-suggest-mapping-${concept.id}`}
+                    >
+                      {suggestingConceptId === concept.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Lightbulb className="w-3 h-3" />
+                      )}
+                      {t('admin.quizSources.itembank.suggestMapping')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDiagnose(concept)}
+                      disabled={diagnosingConceptId === concept.id}
+                      className="px-2 py-1 bg-sky-50 border border-sky-200 hover:bg-sky-100 rounded text-xs text-sky-900 inline-flex items-center gap-1 disabled:opacity-50"
+                      data-testid={`button-diagnose-mapping-${concept.id}`}
+                    >
+                      {diagnosingConceptId === concept.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Search className="w-3 h-3" />
+                      )}
+                      {t('admin.quizSources.itembank.diagnoseButton')}
+                    </button>
+                    <select
+                      onChange={e => {
+                        const idx = parseInt(e.target.value, 10);
+                        if (!Number.isNaN(idx) && sections[idx]) {
+                          addMapping(concept.id, sections[idx].exsection_path);
+                          e.target.value = '';
+                        }
+                      }}
+                      className="text-xs border border-gray-300 rounded px-2 py-1 max-w-[12rem]"
+                      defaultValue=""
+                      data-testid={`select-section-${concept.id}`}
+                    >
+                      <option value="">{t('admin.quizSources.itembank.linkSection')}</option>
+                      {sections.map((s, idx) => {
+                        const mcq = s.mcq_count ?? 0;
+                        const open = s.open_count ?? 0;
+                        return (
+                          <option key={s.exsection_path.join('/')} value={idx}>
+                            {s.exsection_path.join(' / ')} ({s.count} · {mcq} mcq / {open} open)
+                          </option>
+                        );
+                      })}
+                    </select>
                   </div>
                   {conceptMappings.length === 0 ? (
                     <p className="text-xs text-gray-400 italic">{t('admin.quizSources.itembank.noSectionsLinked')}</p>
