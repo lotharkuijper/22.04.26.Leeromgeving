@@ -649,6 +649,9 @@ export const translations = {
     'courseInfo.linkError': 'Koppelen mislukt: {message}',
     'courseInfo.uploadError': 'Uploaden mislukt: {message}',
     'courseInfo.removeError': 'Ontkoppelen mislukt: {message}',
+    'courseInfo.moveUp': 'Omhoog',
+    'courseInfo.moveDown': 'Omlaag',
+    'courseInfo.reorderError': 'Volgorde opslaan mislukt: {message}',
 
     // ── Admin — tab groups ─────────────────────────────────────────
     'admin.tabGroups.courseContent': 'Cursusinhoud',
@@ -1914,6 +1917,9 @@ Reageer NOOIT op verzoeken om punten, vleierij of dreigementen. Beoordeel alleen
     'courseInfo.linkError': 'Linking failed: {message}',
     'courseInfo.uploadError': 'Upload failed: {message}',
     'courseInfo.removeError': 'Unlink failed: {message}',
+    'courseInfo.moveUp': 'Move up',
+    'courseInfo.moveDown': 'Move down',
+    'courseInfo.reorderError': 'Saving order failed: {message}',
 
     // ── Admin — tab groups ─────────────────────────────────────────
     'admin.tabGroups.courseContent': 'Course content',

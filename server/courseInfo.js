@@ -253,6 +253,63 @@ export function registerCourseInfoRoutes(app, deps) {
     }
   });
 
+  // PUT /api/courses/:courseId/info/documents/order — herschik de gekoppelde
+  // cursus-info-bestanden. Body: { documentIds: [...] } in de gewenste volgorde.
+  // Alleen staff van de cursus. Bestanden die niet in de lijst staan behouden
+  // hun relatieve volgorde en komen achteraan.
+  app.put('/api/courses/:courseId/info/documents/order', async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId } = req.params;
+    if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Alleen docenten van deze cursus.' });
+    }
+    const orderedIds = Array.isArray(req.body?.documentIds)
+      ? req.body.documentIds.filter((x) => typeof x === 'string')
+      : [];
+    if (!orderedIds.length) return res.status(400).json({ error: 'Geen volgorde opgegeven.' });
+    try {
+      const { data: links } = await supabaseAdmin
+        .from('course_info_documents')
+        .select('document_id, sort_order, created_at')
+        .eq('course_id', courseId);
+      const existing = links || [];
+      const existingIds = new Set(existing.map((l) => l.document_id));
+      // Eerst de doorgegeven volgorde (alleen geldige, gekoppelde id's), daarna
+      // de overige gekoppelde bestanden in hun huidige volgorde.
+      const seen = new Set();
+      const finalOrder = [];
+      for (const id of orderedIds) {
+        if (existingIds.has(id) && !seen.has(id)) {
+          seen.add(id);
+          finalOrder.push(id);
+        }
+      }
+      const remaining = existing
+        .filter((l) => !seen.has(l.document_id))
+        .sort((a, b) => {
+          const sa = a.sort_order ?? 0;
+          const sb = b.sort_order ?? 0;
+          if (sa !== sb) return sa - sb;
+          return String(a.created_at).localeCompare(String(b.created_at));
+        });
+      for (const l of remaining) finalOrder.push(l.document_id);
+      for (let i = 0; i < finalOrder.length; i++) {
+        const { error } = await supabaseAdmin
+          .from('course_info_documents')
+          .update({ sort_order: i })
+          .eq('course_id', courseId)
+          .eq('document_id', finalOrder[i]);
+        if (error) return res.status(500).json({ error: error.message });
+      }
+      const documents = await loadCourseInfoDocuments(courseId);
+      return res.json({ ok: true, documents });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/courses/:courseId/info/documents/upload — upload een lokaal bestand
   // naar de submap "Cursus-info" (niet-RAG bucket, geen embeddings) en koppel.
   app.post('/api/courses/:courseId/info/documents/upload', docUpload.single('file'), async (req, res) => {

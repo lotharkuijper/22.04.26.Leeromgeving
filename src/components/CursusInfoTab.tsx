@@ -7,6 +7,8 @@ import {
   Download,
   Loader2,
   FileText,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../i18n';
@@ -234,6 +236,35 @@ export default function CursusInfoTab() {
     }
   }
 
+  async function reorderDocs(fromIndex: number, toIndex: number) {
+    if (!activeCourseId) return;
+    if (toIndex < 0 || toIndex >= docs.length) return;
+    const previous = docs;
+    const next = [...docs];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setDocs(next);
+    setError(null);
+    try {
+      const headers = { ...(await authHeaders()), 'Content-Type': 'application/json' };
+      const res = await fetch(`/api/courses/${activeCourseId}/info/documents/order`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ documentIds: next.map((d) => d.id) }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDocs(previous);
+        setError(t('courseInfo.reorderError', { message: json.error || res.status }));
+        return;
+      }
+      if (Array.isArray(json.documents)) setDocs(json.documents);
+    } catch (err) {
+      setDocs(previous);
+      setError(t('courseInfo.reorderError', { message: err instanceof Error ? err.message : String(err) }));
+    }
+  }
+
   async function onDownload(documentId: string) {
     if (!activeCourseId) return;
     try {
@@ -301,13 +332,37 @@ export default function CursusInfoTab() {
           <p className="text-sm text-slate-500" data-testid="text-no-linked-files">{t('courseInfo.noLinkedFiles')}</p>
         ) : (
           <ul className="space-y-2">
-            {docs.map((d) => (
+            {docs.map((d, index) => (
               <li
                 key={d.id}
                 className="flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2"
                 data-testid={`row-linked-file-${d.id}`}
               >
                 <span className="flex items-center gap-2 min-w-0">
+                  <span className="flex flex-col flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => reorderDocs(index, index - 1)}
+                      disabled={index === 0}
+                      title={t('courseInfo.moveUp')}
+                      aria-label={t('courseInfo.moveUp')}
+                      className="inline-flex items-center justify-center h-4 w-5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                      data-testid={`button-moveup-linked-${d.id}`}
+                    >
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => reorderDocs(index, index + 1)}
+                      disabled={index === docs.length - 1}
+                      title={t('courseInfo.moveDown')}
+                      aria-label={t('courseInfo.moveDown')}
+                      className="inline-flex items-center justify-center h-4 w-5 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"
+                      data-testid={`button-movedown-linked-${d.id}`}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
                   <FileText className="h-4 w-4 text-slate-400 flex-shrink-0" />
                   <span className="truncate text-sm text-slate-800">{d.title || d.filename}</span>
                   <span className="text-xs text-slate-400 flex-shrink-0">{formatFileSize(d.file_size || 0)}</span>
