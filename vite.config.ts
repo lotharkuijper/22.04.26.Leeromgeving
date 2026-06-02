@@ -20,7 +20,11 @@ function noCache(): Plugin {
 export default defineConfig({
   plugins: [react(), noCache()],
   optimizeDeps: {
-    exclude: ['lucide-react'],
+    // pdfjs-dist buiten de dep-optimizer houden: het pre-bundelen van de
+    // pdf.worker (?url) liet Vite midden in de sessie opnieuw optimaliseren,
+    // wat de module-graph invalideerde ("Failed to fetch dynamically imported
+    // module" + dubbele React → "Invalid hook call"-crash).
+    exclude: ['lucide-react', 'pdfjs-dist'],
   },
   server: {
     host: '0.0.0.0',
