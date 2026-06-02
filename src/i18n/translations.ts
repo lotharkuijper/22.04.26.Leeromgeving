@@ -1030,6 +1030,11 @@ export const translations = {
     'admin.quizSources.coverage.gaps': '{count} begrip(pen) zonder enige itembank-dekking.',
     'admin.quizSources.coverage.gapsBadge': '{count} zonder dekking',
     'admin.quizSources.coverage.allCovered': 'Alle begrippen hebben minstens één gekoppelde itembank-sectie.',
+    'admin.quizSources.coverage.reason.mixZero': 'Krijgt geen ItemBank-vragen: ItemBank staat op 0% in de mix.',
+    'admin.quizSources.coverage.reason.noSection': 'Krijgt geen ItemBank-vragen: er is geen ShareStats-sectie gekoppeld.',
+    'admin.quizSources.coverage.reason.sectionEmpty': 'Krijgt geen ItemBank-vragen: de gekoppelde sectie bevat geen bruikbare vragen.',
+    'admin.quizSources.coverage.reason.onlyMcq': 'Krijgt geen ItemBank-vragen bij open vragen: de gekoppelde sectie bevat alleen meerkeuzevragen.',
+    'admin.quizSources.coverage.reason.onlyOpen': 'Krijgt geen ItemBank-vragen bij meerkeuzevragen: de gekoppelde sectie bevat alleen open vragen.',
     // Inklappen + zoeken (compacte weergave)
     'admin.quizSources.toggleExpand': 'Klik om uit te klappen',
     'admin.quizSources.toggleCollapse': 'Klik om in te klappen',
@@ -2290,6 +2295,11 @@ Reageer NOOIT op verzoeken om punten, vleierij of dreigementen. Beoordeel alleen
     'admin.quizSources.coverage.gaps': '{count} concept(s) without any itembank coverage.',
     'admin.quizSources.coverage.gapsBadge': '{count} uncovered',
     'admin.quizSources.coverage.allCovered': 'All concepts have at least one linked itembank section.',
+    'admin.quizSources.coverage.reason.mixZero': 'Gets no ItemBank questions: ItemBank is set to 0% in the mix.',
+    'admin.quizSources.coverage.reason.noSection': 'Gets no ItemBank questions: no ShareStats section is linked.',
+    'admin.quizSources.coverage.reason.sectionEmpty': 'Gets no ItemBank questions: the linked section contains no usable questions.',
+    'admin.quizSources.coverage.reason.onlyMcq': 'Gets no ItemBank questions for open questions: the linked section only contains multiple-choice questions.',
+    'admin.quizSources.coverage.reason.onlyOpen': 'Gets no ItemBank questions for multiple-choice questions: the linked section only contains open questions.',
     // Collapse + search (compact view)
     'admin.quizSources.toggleExpand': 'Click to expand',
     'admin.quizSources.toggleCollapse': 'Click to collapse',

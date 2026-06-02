@@ -496,6 +496,29 @@ export function QuizSourcesAdminPanel() {
 
   const coverageGaps = coverage.filter(c => c.total === 0).length;
 
+  // Per begrip: waarom krijgt het (met de huidige, nog niet opgeslagen mix +
+  // koppelingen) geen ItemBank-vragen? Onderscheidt de drie oorzaken uit
+  // Task #192: (1) ItemBank staat op 0% in de mix, (2) geen sectie gekoppeld,
+  // (3) wél gekoppeld maar de sectie bevat geen vragen van het gevraagde type
+  // (alleen mcq of alleen open). `null` = krijgt voor beide types vragen.
+  type ItembankReason = 'mixZero' | 'noSection' | 'sectionEmpty' | 'onlyMcq' | 'onlyOpen';
+  const itembankReasons = useMemo(() => {
+    // Normalisatie schaalt percentages maar maakt nooit van 0 een positief
+    // getal of andersom; ItemBank levert dus 0 vragen precies wanneer het
+    // geclampte ItemBank-percentage 0 is (incl. de som=0 → 50:0:50 default).
+    const ibZero = Math.max(0, Math.min(100, mix.pct_itembank || 0)) === 0;
+    const map: Record<string, ItembankReason | null> = {};
+    for (const c of coverage) {
+      if (ibZero) map[c.id] = 'mixZero';
+      else if (!c.linked) map[c.id] = 'noSection';
+      else if (c.total === 0 || (c.mcq === 0 && c.open === 0)) map[c.id] = 'sectionEmpty';
+      else if (c.mcq === 0) map[c.id] = 'onlyOpen';
+      else if (c.open === 0) map[c.id] = 'onlyMcq';
+      else map[c.id] = null;
+    }
+    return map;
+  }, [coverage, mix.pct_itembank]);
+
   async function handleBulkMatch() {
     if (!activeCourseId) return;
     setBulkLoading(true);
@@ -738,7 +761,14 @@ export function QuizSourcesAdminPanel() {
                 ) : (
                   coverage.map(c => (
                     <tr key={c.id} className={`border-t border-gray-100 ${c.total === 0 ? 'bg-amber-50' : ''}`} data-testid={`row-coverage-${c.id}`}>
-                      <td className="px-3 py-1.5 text-gray-800">{c.name}</td>
+                      <td className="px-3 py-1.5 text-gray-800">
+                        <span>{c.name}</span>
+                        {itembankReasons[c.id] && (
+                          <span className="block text-[11px] text-amber-700 mt-0.5" data-testid={`text-coverage-reason-${c.id}`}>
+                            {t(`admin.quizSources.coverage.reason.${itembankReasons[c.id]}`)}
+                          </span>
+                        )}
+                      </td>
                       <td className={`px-3 py-1.5 text-right font-medium ${c.total === 0 ? 'text-amber-700' : 'text-gray-800'}`} data-testid={`text-coverage-total-${c.id}`}>{c.total}</td>
                       <td className={`px-3 py-1.5 text-right ${c.mcq === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.mcq}</td>
                       <td className={`px-3 py-1.5 text-right ${c.open === 0 ? 'text-gray-400' : 'text-gray-700'}`}>{c.open}</td>
@@ -995,6 +1025,16 @@ export function QuizSourcesAdminPanel() {
                         );
                       })}
                     </div>
+                  )}
+
+                  {itembankReasons[concept.id] && (
+                    <p
+                      className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 inline-flex items-start gap-1"
+                      data-testid={`text-itembank-reason-${concept.id}`}
+                    >
+                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span>{t(`admin.quizSources.coverage.reason.${itembankReasons[concept.id]}`)}</span>
+                    </p>
                   )}
 
                   {diagnoseByConcept[concept.id] && (
