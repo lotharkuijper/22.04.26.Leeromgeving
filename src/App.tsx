@@ -12,6 +12,7 @@ import ShareStatsTopicsPage from "./pages/ShareStatsTopicsPage";
 import ShareStatsQuizPage from "./pages/ShareStatsQuizPage";
 
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage').then(m => ({ default: m.ResetPasswordPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const ChatPage = lazy(() => import('./pages/ChatPage').then(m => ({ default: m.ChatPage })));
 const ExplainPage = lazy(() => import('./pages/ExplainPage').then(m => ({ default: m.ExplainPage })));
@@ -88,6 +89,8 @@ function AppRoutes() {
         path="/login"
         element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />}
       />
+
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
       <Route
         path="/dashboard"

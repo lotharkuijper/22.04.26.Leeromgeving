@@ -235,6 +235,10 @@ export function AdminPage() {
   const [roleMsg, setRoleMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [roleConfirm, setRoleConfirm] = useState<{ userId: string; newRole: UserRole; requireText?: string } | null>(null);
   const [roleConfirmInput, setRoleConfirmInput] = useState('');
+  // Bevestigingsdialoog + bezig-state voor het definitief verwijderen van
+  // een gebruiker (admin-only, destructieve actie).
+  const [deleteUserConfirm, setDeleteUserConfirm] = useState<{ userId: string; email: string; name: string } | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   // Verzameling user-ids die in minstens één cursus docent zijn — wordt
   // gebruikt om de hoogste hiërarchische rol (admin > docent > student) in
   // de Rol-kolom te tonen.
@@ -880,6 +884,36 @@ export function AdminPage() {
     setLoading(false);
   };
 
+  const confirmDeleteUser = async () => {
+    if (!deleteUserConfirm || !isAdmin) return;
+    const { userId } = deleteUserConfirm;
+    const token = session?.access_token;
+    if (!token) {
+      setRoleMsg({ type: 'error', text: t('admin.users.notLoggedIn') });
+      setDeleteUserConfirm(null);
+      return;
+    }
+    setDeleteUserConfirm(null);
+    setRoleMsg(null);
+    setDeletingUserId(userId);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `${res.status}`);
+      setRoleMsg({ type: 'success', text: t('admin.users.deleteSuccess') });
+      if (expandedUserId === userId) setExpandedUserId(null);
+      loadUsers();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t('admin.ragSettings.unknownError');
+      setRoleMsg({ type: 'error', text: t('admin.users.deleteError') + msg });
+    } finally {
+      setDeletingUserId(null);
+    }
+  };
+
   const handleRetryDocument = async (documentId: string) => {
     setRetryingDocId(documentId);
     setRetryProgress(null);
@@ -1313,6 +1347,42 @@ const tabGroups = [
                   </div>
                 </div>
               )}
+              {deleteUserConfirm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" data-testid="modal-delete-user-confirm">
+                  <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+                    <div className="flex items-start gap-3 mb-4">
+                      <AlertTriangle className="w-6 h-6 text-red-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <h3 className="text-base font-semibold text-gray-900 mb-1">
+                          {t('admin.users.deleteTitle')}
+                        </h3>
+                        <p className="text-sm text-gray-700">
+                          {t('admin.users.deleteWarning', { name: deleteUserConfirm.name, email: deleteUserConfirm.email })}
+                        </p>
+                        <p className="text-sm text-red-700 mt-2 font-medium">{t('admin.users.deleteIrreversible')}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDeleteUserConfirm(null)}
+                        className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+                        data-testid="button-cancel-delete-user"
+                      >
+                        {t('admin.cancel')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmDeleteUser}
+                        className="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700"
+                        data-testid="button-confirm-delete-user"
+                      >
+                        {t('admin.users.deleteConfirmBtn')}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {roleConfirm && (
                 <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm flex-wrap">
                   <span className="text-amber-800">{t('admin.users.changeRoleTo')} <strong>{roleConfirm.newRole}</strong>?</span>
@@ -1523,6 +1593,18 @@ const tabGroups = [
                                         {t('admin.users.makeAdmin')}
                                       </button>
                                     )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeleteUserConfirm({ userId: user.id, email: user.email, name: user.full_name || user.email })}
+                                      disabled={deletingUserId === user.id}
+                                      className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:text-red-900 px-2 py-1 rounded border border-red-200 hover:bg-red-50 transition-colors disabled:opacity-50"
+                                      data-testid={`button-delete-user-${user.id}`}
+                                    >
+                                      {deletingUserId === user.id
+                                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        : <Trash2 className="w-3.5 h-3.5" />}
+                                      {t('admin.users.deleteUser')}
+                                    </button>
                                   </div>
                                 )}
                               </td>

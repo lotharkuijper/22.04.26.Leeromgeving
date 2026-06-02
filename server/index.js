@@ -2262,6 +2262,52 @@ app.get('/api/admin/users/:userId/teacher-courses', async (req, res) => {
   }
 });
 
+// DELETE /api/admin/users/:userId — admin-only. Verwijdert een gebruiker
+// definitief via de Supabase service-role admin-API. Dit verwijdert de rij in
+// auth.users, wat cascadeert naar profiles (ON DELETE CASCADE) en gerelateerde
+// tabellen. Het e-mailadres komt daarmee weer vrij voor een nieuwe registratie.
+// De eigen account en de superuser kunnen niet verwijderd worden.
+app.delete('/api/admin/users/:userId', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin) {
+    return res.status(403).json({ error: 'Alleen admins mogen gebruikers verwijderen' });
+  }
+  const { userId } = req.params;
+  if (!userId) return res.status(400).json({ error: 'user-ID ontbreekt' });
+
+  if (userId === r.user.id) {
+    return res.status(400).json({ error: 'Je kunt je eigen account niet verwijderen' });
+  }
+
+  try {
+    // Doelprofiel ophalen om superuser-beveiliging te kunnen afdwingen.
+    const { data: targetProfile } = await supabaseAdmin
+      .from('profiles').select('id, email').eq('id', userId).maybeSingle();
+
+    if (targetProfile?.email === SUPERUSER_EMAIL) {
+      return res.status(400).json({ error: 'De superuser kan niet verwijderd worden' });
+    }
+
+    const { error: deleteErr } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (deleteErr) {
+      if (/not found/i.test(deleteErr.message || '')) {
+        return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+      }
+      throw new Error(deleteErr.message);
+    }
+
+    console.log(`[admin DELETE user] Removed user=${userId} by admin=${r.user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[admin DELETE user] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/me/teacher-courses — geeft de ingelogde gebruiker de lijst
 // cursussen waarin zij/hij per-cursus docent is. Wordt door CoursesAdmin
 // gebruikt om de 'Beheer leden'-knop te tonen voor non-admin docenten.

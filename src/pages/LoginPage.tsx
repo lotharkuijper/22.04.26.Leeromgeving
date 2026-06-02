@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { GraduationCap, Mail, Lock, LogIn } from 'lucide-react';
+import { Mail, Lock, LogIn, KeyRound } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import { useLanguage } from '../i18n';
 
 export function LoginPage() {
@@ -10,8 +11,29 @@ export function LoginPage() {
   const [fullName, setFullName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Wachtwoord-vergeten-modus: toont een apart e-mailformulier i.p.v. login.
+  const [isForgot, setIsForgot] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
   const { signIn, signUp } = useAuth();
   const { t, lang, setLang } = useLanguage();
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      // Stuur altijd een neutrale bevestiging, ongeacht of het adres bestaat,
+      // zodat we niet onthullen welke e-mailadressen geregistreerd zijn.
+      await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+    } catch (err) {
+      console.error('Reset email error:', err);
+    } finally {
+      setForgotSent(true);
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,7 +84,7 @@ export function LoginPage() {
               LEAP-VU
             </h1>
             <p className="text-gray-600 text-center">
-              {isSignUp ? t('login.signUpSubtitle') : t('login.signInSubtitle')}
+              {isForgot ? t('login.forgotSubtitle') : isSignUp ? t('login.signUpSubtitle') : t('login.signInSubtitle')}
             </p>
             {/* Language toggle on login page */}
             <button
@@ -76,6 +98,68 @@ export function LoginPage() {
             </button>
           </div>
 
+          {isForgot ? (
+            forgotSent ? (
+              <div className="space-y-5">
+                <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm" data-testid="text-forgot-sent">
+                  {t('login.forgotSent')}
+                </div>
+                <button
+                  onClick={() => { setIsForgot(false); setForgotSent(false); setError(''); }}
+                  className="w-full text-blue-600 hover:text-blue-700 font-medium transition-colors"
+                  data-testid="button-back-to-login"
+                >
+                  {t('login.backToLogin')}
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleForgotSubmit} className="space-y-5">
+                <div>
+                  <label htmlFor="forgot-email" className="block text-sm font-semibold text-gray-700 mb-2">
+                    {t('login.email')}
+                  </label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      id="forgot-email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full pl-11 pr-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
+                      placeholder={t('login.emailPlaceholder')}
+                      required
+                      data-testid="input-forgot-email"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-gradient-to-r from-blue-500 to-green-500 text-white font-semibold py-3 rounded-lg hover:from-blue-600 hover:to-green-600 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  data-testid="button-send-reset"
+                >
+                  {loading ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <KeyRound className="w-5 h-5" />
+                      {t('login.forgotSendBtn')}
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setIsForgot(false); setError(''); }}
+                  className="w-full text-blue-600 hover:text-blue-700 font-medium transition-colors"
+                  data-testid="button-cancel-forgot"
+                >
+                  {t('login.backToLogin')}
+                </button>
+              </form>
+            )
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
             {isSignUp && (
               <div>
@@ -151,8 +235,23 @@ export function LoginPage() {
                 </>
               )}
             </button>
-          </form>
 
+            {!isSignUp && (
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => { setIsForgot(true); setForgotSent(false); setError(''); }}
+                  className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors"
+                  data-testid="button-forgot-password"
+                >
+                  {t('login.forgotLink')}
+                </button>
+              </div>
+            )}
+          </form>
+          )}
+
+          {!isForgot && (
           <div className="mt-6 text-center">
             <button
               onClick={() => {
@@ -164,8 +263,9 @@ export function LoginPage() {
               {isSignUp ? t('login.switchToSignIn') : t('login.switchToSignUp')}
             </button>
           </div>
+          )}
 
-          {isSignUp && (
+          {isSignUp && !isForgot && (
             <div className="mt-6 pt-6 border-t border-gray-200">
               <p className="text-xs text-gray-500 text-center leading-relaxed">
                 {t('login.firstUserNote')}
