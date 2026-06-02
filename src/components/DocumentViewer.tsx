@@ -181,11 +181,32 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const ro = new ResizeObserver(() => {
-      if (pdfRef.current && !loading) renderPage(page);
+    const el = containerRef.current;
+    let rafId: number | null = null;
+    // Init op de huidige breedte zodat de directe observe-callback (die altijd
+    // 1× meteen vuurt) niet onnodig herrendert.
+    let lastWidth = Math.round(el.clientWidth);
+    const ro = new ResizeObserver((entries) => {
+      // Defer naar de volgende frame: renderPage resized de canvas, en dat
+      // synchroon binnen de observer-callback doen triggert "ResizeObserver loop
+      // completed with undelivered notifications" — een waarde (string) die GEEN
+      // echt Error-object is en de Replit-preview-overlay laat crashen.
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const width = Math.round(entries[0]?.contentRect.width ?? el.clientWidth);
+        // Alleen herrenderen bij een echte breedteverandering — voorkomt de
+        // feedback-lus en overbodige renders.
+        if (width === lastWidth) return;
+        lastWidth = width;
+        if (pdfRef.current && !loading) renderPage(page);
+      });
     });
-    ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    ro.observe(el);
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      ro.disconnect();
+    };
   }, [page, loading, renderPage]);
 
   const goPrev = () => setPage((p) => Math.max(1, p - 1));
