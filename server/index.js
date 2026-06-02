@@ -37,6 +37,7 @@ import {
 } from './ragProcessing.js';
 import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
+import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import {
   applyDelta as applyRelDelta,
   scoreToLabel as relScoreToLabel,
@@ -1197,6 +1198,108 @@ app.get('/api/rag/documents/:documentId/download', async (req, res) => {
     return res.status(404).json({ error: 'Dit document heeft geen downloadbaar bestand.' });
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rag/documents/:documentId/view — bekijkbare versie voor de in-app
+// documentviewer (Task #209). Zelfde toegangscontrole als de download-route.
+// - pdf        → signed URL van het origineel
+// - docx/pptx  → gecachte PDF-rendition (LibreOffice headless), signed URL
+// - txt/md     → platte tekst inline
+app.get('/api/rag/documents/:documentId/view', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const role = auth.profile?.role || 'student';
+  const isAdmin = role === 'admin' || auth.profile?.email === SUPERUSER_EMAIL;
+  const { documentId } = req.params;
+  try {
+    const { data: doc } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id, updated_at')
+      .eq('id', documentId)
+      .maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden.' });
+    if (doc.bucket && doc.bucket !== 'rag_sources') {
+      return res.status(403).json({ error: 'Dit document is geen RAG-bron.' });
+    }
+    if (!isAdmin) {
+      if (!doc.folder_id) return res.status(403).json({ error: 'Geen toegang tot dit document.' });
+      const { data: perm } = await supabaseAdmin
+        .from('folder_permissions')
+        .select('can_view')
+        .eq('folder_id', doc.folder_id)
+        .eq('role', role)
+        .maybeSingle();
+      if (!perm?.can_view) return res.status(403).json({ error: 'Geen toegang tot dit document.' });
+    }
+
+    const title = String(doc.title || doc.filename || 'document');
+    const ext = normalizeExt(doc.file_type || (doc.filename || '').split('.').pop());
+
+    // Bronbytes ophalen uit storage (file_path) of uit de DB (file_bytes).
+    const loadSourceBytes = async () => {
+      if (doc.file_path && doc.bucket) {
+        const { data, error } = await supabaseAdmin.storage.from(doc.bucket).download(doc.file_path);
+        if (error || !data) throw new Error('Kon bronbestand niet ophalen uit de opslag.');
+        return Buffer.from(await data.arrayBuffer());
+      }
+      if (pgPool) {
+        const result = await pgPool.query('SELECT file_bytes FROM documents WHERE id = $1', [documentId]);
+        const row = result.rows[0];
+        if (row?.file_bytes) return row.file_bytes;
+      }
+      throw new Error('Dit document heeft geen bestand om te tonen.');
+    };
+
+    if (TEXT_EXT.has(ext)) {
+      const bytes = await loadSourceBytes();
+      return res.json({ kind: 'text', title, sourceType: ext, text: bytes.toString('utf-8') });
+    }
+
+    if (NATIVE_PDF_EXT.has(ext)) {
+      if (!doc.file_path || !doc.bucket) {
+        return res.status(404).json({ error: 'PDF-bestand niet beschikbaar voor weergave.' });
+      }
+      const { data: signed, error: signErr } = await supabaseAdmin.storage
+        .from(doc.bucket)
+        .createSignedUrl(doc.file_path, 600);
+      if (signErr || !signed?.signedUrl) {
+        return res.status(500).json({ error: 'Kon geen weergavelink aanmaken.' });
+      }
+      return res.json({ kind: 'pdf', title, sourceType: 'pdf', url: signed.signedUrl });
+    }
+
+    if (CONVERT_TO_PDF_EXT.has(ext)) {
+      const bucket = doc.bucket || 'rag_sources';
+      // Cache-sleutel bevat updated_at zodat een vervangen bron een verse
+      // rendition krijgt en niet de oude PDF blijft tonen.
+      const stamp = doc.updated_at ? String(Date.parse(doc.updated_at) || '') : '';
+      const renditionPath = `__renditions__/${documentId}${stamp ? `-${stamp}` : ''}.pdf`;
+      let signed = (await supabaseAdmin.storage.from(bucket).createSignedUrl(renditionPath, 600)).data;
+      if (!signed?.signedUrl) {
+        // Nog geen rendition in cache — eenmalig converteren en opslaan.
+        const sourceBytes = await loadSourceBytes();
+        const pdfBuffer = await queueConversion(() => convertOfficeToPdf(sourceBytes, ext));
+        const { error: upErr } = await supabaseAdmin.storage
+          .from(bucket)
+          .upload(renditionPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+        if (upErr) return res.status(500).json({ error: 'Kon de weergaveversie niet opslaan.' });
+        signed = (await supabaseAdmin.storage.from(bucket).createSignedUrl(renditionPath, 600)).data;
+        if (!signed?.signedUrl) return res.status(500).json({ error: 'Kon geen weergavelink aanmaken.' });
+      }
+      const sourceType = (ext === 'pptx' || ext === 'ppt' || ext === 'odp') ? 'pptx' : 'docx';
+      return res.json({ kind: 'pdf', title, sourceType, url: signed.signedUrl });
+    }
+
+    return res.status(415).json({
+      error: 'Dit bestandstype kan niet in de viewer worden getoond. Download het bestand in plaats daarvan.',
+    });
+  } catch (err) {
+    // Interne details (incl. LibreOffice-stderr) niet naar de client lekken;
+    // wel volledig serverside loggen voor debugging.
+    console.error('[view] documentweergave mislukt:', err);
+    return res.status(500).json({ error: 'Kon het document niet voorbereiden voor weergave.' });
   }
 });
 

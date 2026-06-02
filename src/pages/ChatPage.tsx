@@ -8,8 +8,9 @@ import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocu
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
-import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2 } from 'lucide-react';
+import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2, Eye, Download, FileText } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
+import { DocumentViewer, type ViewerContext } from '../components/DocumentViewer';
 import { NoticeBanner, useNotice } from '../components/Notice';
 import { PromptDebugBadge } from '../components/PromptDebugBadge';
 
@@ -51,11 +52,13 @@ function AssistantMessageBody({
   content,
   retrievedContext,
   lang,
+  onRequestSource,
 }: {
   messageId: string;
   content: string;
   retrievedContext?: any;
   lang: 'nl' | 'en';
+  onRequestSource: (s: { documentId?: string; title: string }) => void;
 }) {
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const dispRaw: SourceItem[] = (retrievedContext?.displaySources as SourceItem[] | undefined)
@@ -81,13 +84,9 @@ function AssistantMessageBody({
       if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
-  const [openSourceError, setOpenSourceError] = useState<string | null>(null);
   const handleOpenSource = (s: { documentId?: string; title: string }) => {
     if (!s.documentId) return;
-    setOpenSourceError(null);
-    openRagDocument(s.documentId).catch((err) => {
-      setOpenSourceError(err?.message || (lang === 'en' ? 'Could not open source.' : 'Kon bron niet openen.'));
-    });
+    onRequestSource(s);
   };
   return (
     <>
@@ -97,22 +96,6 @@ function AssistantMessageBody({
         onCitationClick={handleCitationClick}
         onSourceOpen={handleOpenSource}
       />
-      {openSourceError && (
-        <div
-          className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
-          data-testid="alert-open-source-error"
-        >
-          <span className="flex-1 leading-snug">{openSourceError}</span>
-          <button
-            type="button"
-            onClick={() => setOpenSourceError(null)}
-            className="shrink-0 rounded px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
-            data-testid="button-dismiss-source-error"
-          >
-            ×
-          </button>
-        </div>
-      )}
       {dispRaw.length > 0 && (
         <SourceList
           sources={dispRaw}
@@ -147,6 +130,10 @@ export function ChatPage() {
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
   const [pendingRetry, setPendingRetry] = useState<{ history: Message[]; isFirstMessage: boolean } | null>(null);
+  const [sourceChoice, setSourceChoice] = useState<{ documentId: string; title: string } | null>(null);
+  const [viewerDoc, setViewerDoc] = useState<{ documentId: string; title: string } | null>(null);
+  const [viewerContext, setViewerContext] = useState<ViewerContext | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
 
@@ -332,6 +319,43 @@ export function ChatPage() {
     }
   };
 
+  const handleRequestSource = (s: { documentId?: string; title: string }) => {
+    if (!s.documentId) return;
+    setDownloadError(null);
+    setSourceChoice({ documentId: s.documentId, title: s.title });
+  };
+
+  const handleDownloadChoice = () => {
+    if (!sourceChoice) return;
+    const { documentId } = sourceChoice;
+    setSourceChoice(null);
+    openRagDocument(documentId).catch((err) => {
+      setDownloadError(err?.message || (lang === 'en' ? 'Could not open source.' : 'Kon bron niet openen.'));
+    });
+  };
+
+  const handleViewChoice = () => {
+    if (!sourceChoice) return;
+    // Wis de oude viewer-context meteen zodat een nieuw bericht tijdens het laden
+    // van de nieuwe bron niet per ongeluk de vorige pagina/dia meestuurt.
+    setViewerContext(null);
+    setViewerDoc({ documentId: sourceChoice.documentId, title: sourceChoice.title });
+    setSourceChoice(null);
+  };
+
+  // Bouwt een korte notitie over wat de student op dit moment in de viewer ziet,
+  // zodat het taalmodel daar in zijn antwoord rekening mee kan houden.
+  const buildViewerNote = (ctx: ViewerContext | null): string => {
+    if (!ctx) return '';
+    const isSlides = ctx.sourceType === 'pptx';
+    if (lang === 'en') {
+      const unit = isSlides ? 'slide' : 'page';
+      return `\n\nThe student is currently viewing ${unit} ${ctx.page} of ${ctx.totalPages} of the source "${ctx.title}". Take this into account where relevant.`;
+    }
+    const unit = isSlides ? 'dia' : 'pagina';
+    return `\n\nDe student bekijkt op dit moment ${unit} ${ctx.page} van ${ctx.totalPages} van de bron "${ctx.title}". Betrek dit waar relevant in je antwoord.`;
+  };
+
   const sendToAssistant = async (history: Message[], isFirstMessage: boolean) => {
     if (!currentConversationId || !profile) return;
 
@@ -383,7 +407,8 @@ export function ChatPage() {
       const built = chunks.length > 0
         ? buildContextWithCap(chunks)
         : { context: '', usedChunks: 0, totalChunks: 0, truncated: false, charTrimmed: false };
-      const context = built.context.length > 0 ? built.context : undefined;
+      const viewerNote = buildViewerNote(viewerContext);
+      const context = [built.context, viewerNote].filter(Boolean).join('') || undefined;
       if (built.totalChunks > 0) {
         setContextStats({ used: built.usedChunks, total: built.totalChunks, charTrimmed: built.charTrimmed });
       }
@@ -640,6 +665,7 @@ export function ChatPage() {
                         content={msg.content}
                         retrievedContext={msg.retrievedContext}
                         lang={lang}
+                        onRequestSource={handleRequestSource}
                       />
                     ) : (
                       <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -787,7 +813,87 @@ export function ChatPage() {
           </>
         )}
       </div>
+
+      {viewerDoc && (
+        <div
+          className="flex w-[44%] min-w-[340px] chic-card flex-col overflow-hidden p-0"
+          data-testid="panel-document-viewer"
+        >
+          <DocumentViewer
+            documentId={viewerDoc.documentId}
+            title={viewerDoc.title}
+            lang={lang}
+            onClose={() => { setViewerDoc(null); setViewerContext(null); }}
+            onContextChange={setViewerContext}
+          />
+        </div>
+      )}
     </div>
+
+    {downloadError && (
+      <div className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-lg" data-testid="alert-download-error">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+        <span className="flex-1 leading-snug">{downloadError}</span>
+        <button
+          type="button"
+          onClick={() => setDownloadError(null)}
+          className="shrink-0 rounded px-2 py-0.5 text-xs font-semibold hover:bg-amber-100"
+          data-testid="btn-dismiss-download-error"
+        >
+          ×
+        </button>
+      </div>
+    )}
+
+    {sourceChoice && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setSourceChoice(null)}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-blue-100 rounded-xl">
+              <FileText className="w-5 h-5 text-blue-700" />
+            </div>
+            <h2 className="text-lg font-semibold text-gray-900">
+              {lang === 'en' ? 'Open source' : 'Bron openen'}
+            </h2>
+            <button
+              onClick={() => setSourceChoice(null)}
+              className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
+              data-testid="btn-source-choice-cancel"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <p className="text-sm text-gray-600 mb-1">
+            {lang === 'en'
+              ? 'How would you like to open this source?'
+              : 'Hoe wil je deze bron openen?'}
+          </p>
+          <p className="text-sm font-medium text-gray-800 mb-5 truncate" title={sourceChoice.title}>
+            {sourceChoice.title}
+          </p>
+
+          <div className="flex flex-col gap-3">
+            <button
+              data-testid="btn-source-choice-view"
+              onClick={handleViewChoice}
+              className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-semibold rounded-xl hover:from-blue-600 hover:to-indigo-700 transition-all shadow-md"
+            >
+              <Eye className="w-4 h-4" />
+              {lang === 'en' ? 'View in chat' : 'Bekijken in de chat'}
+            </button>
+            <button
+              data-testid="btn-source-choice-download"
+              onClick={handleDownloadChoice}
+              className="flex items-center justify-center gap-2 w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all"
+            >
+              <Download className="w-4 h-4" />
+              {lang === 'en' ? 'Download' : 'Downloaden'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {archiveDialog && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
