@@ -11,6 +11,7 @@ import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2, Eye, Download, FileText } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { DocumentViewer, type ViewerContext } from '../components/DocumentViewer';
+import { ViewerErrorBoundary } from '../components/ViewerErrorBoundary';
 import { NoticeBanner, useNotice } from '../components/Notice';
 import { PromptDebugBadge } from '../components/PromptDebugBadge';
 
@@ -819,13 +820,20 @@ export function ChatPage() {
           className="flex w-[44%] min-w-[340px] chic-card flex-col overflow-hidden p-0"
           data-testid="panel-document-viewer"
         >
-          <DocumentViewer
+          <ViewerErrorBoundary
+            key={viewerDoc.documentId}
             documentId={viewerDoc.documentId}
-            title={viewerDoc.title}
             lang={lang}
             onClose={() => { setViewerDoc(null); setViewerContext(null); }}
-            onContextChange={setViewerContext}
-          />
+          >
+            <DocumentViewer
+              documentId={viewerDoc.documentId}
+              title={viewerDoc.title}
+              lang={lang}
+              onClose={() => { setViewerDoc(null); setViewerContext(null); }}
+              onContextChange={setViewerContext}
+            />
+          </ViewerErrorBoundary>
         </div>
       )}
     </div>

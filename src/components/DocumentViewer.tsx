@@ -39,6 +39,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pdfRef = useRef<any>(null);
   const renderTaskRef = useRef<any>(null);
+  const renderSeqRef = useRef(0);
 
   const isSlides = meta?.sourceType === 'pptx';
   const pageWord = isSlides
@@ -67,11 +68,18 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!pdf || !canvas || !container) return;
+    // Serialiseer renders: annuleer een lopende render en wacht tot die echt
+    // klaar/afgebroken is voordat we opnieuw op hetzelfde canvas tekenen.
+    // pdf.js gooit anders "Cannot use the same canvas during multiple render()".
+    const seq = ++renderSeqRef.current;
+    if (renderTaskRef.current) {
+      try { renderTaskRef.current.cancel(); } catch { /* ignore */ }
+      try { await renderTaskRef.current.promise; } catch { /* afgebroken render verwacht */ }
+    }
+    if (seq !== renderSeqRef.current) return; // door een nieuwere render ingehaald
     try {
-      if (renderTaskRef.current) {
-        try { renderTaskRef.current.cancel(); } catch { /* ignore */ }
-      }
       const pdfPage = await pdf.getPage(pageNum);
+      if (seq !== renderSeqRef.current) return;
       const unscaled = pdfPage.getViewport({ scale: 1 });
       const available = Math.max(240, container.clientWidth - 24);
       const scale = available / unscaled.width;
@@ -138,7 +146,8 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
         pdfRef.current = pdf;
         setTotalPages(pdf.numPages);
         setLoading(false);
-        requestAnimationFrame(() => { if (!cancelled) renderPage(1); });
+        // De [page, loading]-effect verzorgt de eerste render zodra loading
+        // op false staat; geen aparte render hier (voorkomt dubbele render).
       } catch (err: any) {
         if (cancelled) return;
         setError(err?.message || (lang === 'en' ? 'Could not open document.' : 'Kon document niet openen.'));
@@ -153,7 +162,9 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
       }
       const pdf = pdfRef.current;
       pdfRef.current = null;
-      if (pdf) { try { pdf.destroy(); } catch { /* ignore */ } }
+      // destroy() levert een promise; vang een eventuele rejection af zodat er
+      // geen unhandled rejection ontstaat die de iframe-foutmelding triggert.
+      if (pdf) { Promise.resolve(pdf.destroy()).catch(() => {}); }
     };
   }, [documentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
