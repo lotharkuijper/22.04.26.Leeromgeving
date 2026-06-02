@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
+import { mergeMappingsWithBulkSelection } from '../lib/quizMappingsMerge';
 
 interface Concept {
   id: string;
@@ -335,23 +336,9 @@ export function QuizSourcesAdminPanel() {
     // Voeg eerst de groen gevinkte bulk-voorstellen samen met de bestaande
     // mappings; daarna persisteren we alles in één keer. Zo doet één knop
     // ("Koppelingen opslaan") zowel het vastleggen als het opslaan.
-    let merged = mappings;
+    const { merged, additions } = mergeMappingsWithBulkSelection(mappings, bulkResults, bulkSelected);
     if (bulkResults) {
-      const additions: ItembankMapping[] = [];
-      const has = (cid: string, pathKey: string) =>
-        merged.some(m => m.concept_id === cid && m.exsection_path.join('/') === pathKey)
-        || additions.some(m => m.concept_id === cid && m.exsection_path.join('/') === pathKey);
-      for (const r of bulkResults) {
-        for (const cand of r.candidates) {
-          const pathKey = cand.exsection_path.join('/');
-          if (!bulkSelected.has(`${r.conceptId}|${pathKey}`)) continue;
-          if (!has(r.conceptId, pathKey)) {
-            additions.push({ concept_id: r.conceptId, exsection_path: cand.exsection_path });
-          }
-        }
-      }
       if (additions.length > 0) {
-        merged = [...merged, ...additions];
         setMappings(merged);
       }
       setBulkResults(null);
