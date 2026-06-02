@@ -67,27 +67,48 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
   // AbortException, "worker was destroyed") wanneer een render of transport tijdens
   // het laden/herrenderen wordt afgebroken. Die exceptions zijn GEEN echte Error-
   // objecten (BaseException.prototype = new Error()), dus belanden ze als
-  // "unhandledrejection" op window en triggeren de Replit-foutoverlay — óók wanneer
-  // wij ze eigenlijk netjes afhandelen. Vang die ruis af zolang de viewer open is.
+  // "unhandledrejection" óf als window "error" en triggeren de Replit-foutoverlay
+  // — óók wanneer wij ze eigenlijk netjes afhandelen. Vang die ruis (beide
+  // event-types) af zolang de viewer open is.
   useEffect(() => {
-    // Whitelist: alleen pdf.js' goedaardige annulerings-/afbreekgevallen, niet
-    // elke *Exception. Zo blijven echte fouten (ook van pdf.js zelf) zichtbaar.
-    const BENIGN_NAMES = new Set(['RenderingCancelledException', 'AbortException']);
-    const BENIGN_MSG_RE = /(worker|transport)\s+(was\s+)?destroyed|rendering cancelled|render(ing)? (was )?aborted|worker task was terminated/i;
-    const isBenignPdfNoise = (reason: any): boolean => {
-      if (!reason || typeof reason !== 'object') return false;
-      const name = typeof reason.name === 'string' ? reason.name : '';
-      const msg = typeof reason.message === 'string' ? reason.message : '';
-      return BENIGN_NAMES.has(name) || BENIGN_MSG_RE.test(msg);
+    // pdf.js' BaseException-familie (RenderingCancelledException, AbortException,
+    // …) zet `prototype = new Error()`, dus die objecten zijn WEL `instanceof
+    // Error` maar GEEN echt Error-object: `Object.prototype.toString` geeft
+    // "[object Object]" i.p.v. "[object Error]". Dat is precies wat de
+    // Replit-overlay als "the error was not an error object" detecteert. Door op
+    // exact die signatuur te filteren onderdrukken we alleen die goedaardige
+    // async-ruis; echte fouten (TypeError, RangeError, …) geven "[object Error]"
+    // en blijven dus gewoon zichtbaar.
+    const isErrorLikeNonError = (val: any): boolean => {
+      if (val == null) return false;
+      // Een ECHT Error-object (TypeError, RangeError, gewone Error, …) geeft
+      // "[object Error]" — die laten we altijd doorgaan zodat echte bugs zichtbaar
+      // blijven. Alleen "error-achtige, maar geen echt Error" waarden (pdf.js'
+      // BaseException) onderdrukken we.
+      if (Object.prototype.toString.call(val) === '[object Error]') return false;
+      return (
+        val instanceof Error ||
+        (typeof val === 'object' && typeof val.name === 'string' && typeof val.message === 'string')
+      );
     };
     const onRejection = (event: PromiseRejectionEvent) => {
-      if (isBenignPdfNoise(event.reason)) {
+      if (isErrorLikeNonError(event.reason)) {
         event.preventDefault();
-        console.warn('[DocumentViewer] onderdrukte goedaardige pdf.js async-fout:', event.reason?.name || event.reason?.message);
+        console.warn('[DocumentViewer] onderdrukte async pdf.js-fout (rejection):', event.reason?.name, event.reason?.message);
+      }
+    };
+    const onError = (event: ErrorEvent) => {
+      if (isErrorLikeNonError(event.error)) {
+        event.preventDefault();
+        console.warn('[DocumentViewer] onderdrukte async pdf.js-fout (error):', event.error?.name, event.error?.message);
       }
     };
     window.addEventListener('unhandledrejection', onRejection);
-    return () => window.removeEventListener('unhandledrejection', onRejection);
+    window.addEventListener('error', onError);
+    return () => {
+      window.removeEventListener('unhandledrejection', onRejection);
+      window.removeEventListener('error', onError);
+    };
   }, []);
 
   const renderPage = useCallback(async (pageNum: number) => {
