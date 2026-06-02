@@ -63,6 +63,33 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
     return () => onContextChange?.(null);
   }, [onContextChange]);
 
+  // pdf.js gooit goedaardige annulerings-/afbreekfouten (RenderingCancelledException,
+  // AbortException, "worker was destroyed") wanneer een render of transport tijdens
+  // het laden/herrenderen wordt afgebroken. Die exceptions zijn GEEN echte Error-
+  // objecten (BaseException.prototype = new Error()), dus belanden ze als
+  // "unhandledrejection" op window en triggeren de Replit-foutoverlay — óók wanneer
+  // wij ze eigenlijk netjes afhandelen. Vang die ruis af zolang de viewer open is.
+  useEffect(() => {
+    // Whitelist: alleen pdf.js' goedaardige annulerings-/afbreekgevallen, niet
+    // elke *Exception. Zo blijven echte fouten (ook van pdf.js zelf) zichtbaar.
+    const BENIGN_NAMES = new Set(['RenderingCancelledException', 'AbortException']);
+    const BENIGN_MSG_RE = /(worker|transport)\s+(was\s+)?destroyed|rendering cancelled|render(ing)? (was )?aborted|worker task was terminated/i;
+    const isBenignPdfNoise = (reason: any): boolean => {
+      if (!reason || typeof reason !== 'object') return false;
+      const name = typeof reason.name === 'string' ? reason.name : '';
+      const msg = typeof reason.message === 'string' ? reason.message : '';
+      return BENIGN_NAMES.has(name) || BENIGN_MSG_RE.test(msg);
+    };
+    const onRejection = (event: PromiseRejectionEvent) => {
+      if (isBenignPdfNoise(event.reason)) {
+        event.preventDefault();
+        console.warn('[DocumentViewer] onderdrukte goedaardige pdf.js async-fout:', event.reason?.name || event.reason?.message);
+      }
+    };
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => window.removeEventListener('unhandledrejection', onRejection);
+  }, []);
+
   const renderPage = useCallback(async (pageNum: number) => {
     const pdf = pdfRef.current;
     const canvas = canvasRef.current;
