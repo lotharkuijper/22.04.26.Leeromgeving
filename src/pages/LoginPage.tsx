@@ -10,6 +10,7 @@ export function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [fullName, setFullName] = useState('');
   const [error, setError] = useState('');
+  const [signUpSuccess, setSignUpSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   // Wachtwoord-vergeten-modus: toont een apart e-mailformulier i.p.v. login.
   const [isForgot, setIsForgot] = useState(false);
@@ -38,6 +39,7 @@ export function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSignUpSuccess(false);
     setLoading(true);
 
     try {
@@ -53,6 +55,11 @@ export function LoginPage() {
           return;
         }
         await signUp(email, password, fullName);
+        // Met e-mailbevestiging aan komt er geen sessie terug en navigeert de
+        // app niet weg: toon een bevestiging en schakel terug naar inloggen.
+        setSignUpSuccess(true);
+        setIsSignUp(false);
+        setPassword('');
       } else {
         await signIn(email, password);
       }
@@ -215,6 +222,12 @@ export function LoginPage() {
               </div>
             </div>
 
+            {signUpSuccess && (
+              <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm" data-testid="text-signup-success">
+                {t('login.signUpSuccess')}
+              </div>
+            )}
+
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
                 {error}
@@ -240,7 +253,7 @@ export function LoginPage() {
               <div className="text-center">
                 <button
                   type="button"
-                  onClick={() => { setIsForgot(true); setForgotSent(false); setError(''); }}
+                  onClick={() => { setIsForgot(true); setForgotSent(false); setError(''); setSignUpSuccess(false); }}
                   className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors"
                   data-testid="button-forgot-password"
                 >
@@ -257,6 +270,7 @@ export function LoginPage() {
               onClick={() => {
                 setIsSignUp(!isSignUp);
                 setError('');
+                setSignUpSuccess(false);
               }}
               className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
             >
