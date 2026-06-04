@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { isDefinitiveAuthError } from '../lib/authSession';
 import type { Database } from '../lib/database.types';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -64,6 +65,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
 
         if (!mounted) return;
+
+        // Een uit localStorage geladen sessie kan een DODE refresh-token hebben
+        // (bv. na een Supabase API-key-/JWT-rotatie). getSession() geeft die
+        // sessie dan toch terug, maar de access-token is verlopen en kan niet
+        // ververst worden — waardoor ELKE server-call 401 geeft terwijl de UI
+        // denkt dat je bent ingelogd. We valideren de sessie daarom expliciet
+        // tegen Supabase. Bij een definitieve auth-fout loggen we schoon uit
+        // zodat je opnieuw kunt inloggen i.p.v. vast te zitten in een kapotte
+        // sessie. Bij netwerk-/time-outfouten laten we de sessie staan (geen
+        // onterechte uitlog bij een haperende verbinding).
+        if (session?.user) {
+          const { error: validateError } = await withTimeout(
+            supabase.auth.getUser(),
+            10000,
+            'validateSession',
+          ).catch((e: unknown) => ({ error: e }));
+
+          if (isDefinitiveAuthError(validateError)) {
+            console.warn(
+              '[AUTH] Opgeslagen sessie is ongeldig — schoon uitloggen zodat je opnieuw kunt inloggen.',
+              (validateError as { message?: string } | null)?.message,
+            );
+            await supabase.auth.signOut().catch(() => {});
+            if (mounted) {
+              setSession(null);
+              setUser(null);
+              setProfile(null);
+            }
+            return;
+          }
+        }
 
         setSession(session);
         setUser(session?.user ?? null);
