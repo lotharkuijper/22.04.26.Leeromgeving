@@ -36,6 +36,7 @@ import {
   processPlainRagDocument as processPlainRagDocumentImpl,
 } from './ragProcessing.js';
 import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
+import { isUnsupportedSamplingParamError } from './openaiSampling.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import {
@@ -359,17 +360,31 @@ app.post('/api/chat', async (req, res) => {
     stream,
   };
 
-  try {
-    const response = await fetch(OPENAI_CHAT_URL, {
+  const postChatCompletion = async (body) => {
+    const r = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(chatBody),
+      body: JSON.stringify(body),
     });
+    return { r, body: await r.json() };
+  };
 
-    const data = await response.json();
+  try {
+    let { r: response, body: data } = await postChatCompletion(chatBody);
+
+    // Reasoning-modellen weigeren een aangepaste temperature/top_p met een 400.
+    // Probeer dan één keer opnieuw zonder die sampling-parameters, zodat het
+    // antwoord alsnog gegenereerd wordt in plaats van te falen met
+    // "het taalmodel weigerde het verzoek".
+    if (!response.ok && response.status === 400 && isUnsupportedSamplingParamError(data)) {
+      const { temperature: _t, top_p: _tp, ...retryBody } = chatBody;
+      console.warn(`[/api/chat] Model ${OPENAI_MODEL} accepteert geen aangepaste temperature/top_p — opnieuw zonder die parameters.`);
+      ({ r: response, body: data } = await postChatCompletion(retryBody));
+    }
+
     if (!response.ok) {
       const promptChars = JSON.stringify(finalMessages).length;
       const errCode = data?.error?.code || data?.error?.type || 'unknown';

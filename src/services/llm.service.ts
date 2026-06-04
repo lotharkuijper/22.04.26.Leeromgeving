@@ -38,6 +38,22 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
           : 'Try raising the RAG threshold or lowering the number of passages (match_count) to send less course material.',
       };
     }
+    if (
+      code === 'insufficient_quota' ||
+      err.status === 402 ||
+      raw.includes('quota') ||
+      raw.includes('billing') ||
+      raw.includes('exceeded your current quota')
+    ) {
+      return {
+        title: nl
+          ? 'Het tegoed of de uitgavenlimiet van de AI-dienst is bereikt.'
+          : 'The AI service credit or spending limit has been reached.',
+        detail: nl
+          ? 'Opnieuw proberen helpt pas als er weer tegoed of limiet beschikbaar is. Vraag de beheerder om de facturering en limieten van de OpenAI-account te controleren.'
+          : 'Retrying only helps once credit or limit is available again. Ask the administrator to check the billing and limits of the OpenAI account.',
+      };
+    }
     if (code === 'rate_limit_exceeded' || err.status === 429 || raw.includes('rate limit')) {
       return {
         title: nl
@@ -62,6 +78,16 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
           ? 'Het taalmodel reageert niet (serverfout).'
           : 'The language model is not responding (server error).',
         detail: err.rawMessage || `HTTP ${err.status}`,
+      };
+    }
+    if (err.status === 401 || err.status === 403 || code === 'invalid_api_key') {
+      return {
+        title: nl
+          ? 'De AI-dienst weigerde de toegang (sleutel of rechten).'
+          : 'The AI service denied access (key or permissions).',
+        detail: nl
+          ? 'Vraag de beheerder om te controleren of de OPENAI_API_KEY geldig is en toegang heeft tot het ingestelde model.'
+          : 'Ask the administrator to verify the OPENAI_API_KEY is valid and has access to the configured model.',
       };
     }
     if (code === 'invalid_request_error' || (err.status >= 400 && err.status < 500)) {
