@@ -2,3 +2,4 @@
 - [RAG ingestion pipeline](rag-ingestion.md) — most formats client-side; .pptx is server-side (slides+notes, LLM chunking); LLM is OpenAI not Groq despite replit.md.
 - [In-app document viewer rendering](document-viewer-rendering.md) — docx/pptx→PDF via headless LibreOffice (cached), pdf.js v5 worker via Vite `?url` (cdnjs `.js` URL is stale for v5).
 - [Server auth helpers](server-auth-helpers.md) — requireAuthUser returns {user,profile} with NO role field; per-course staff checks must use isStaffForCourse, not auth.role.
+- [Supabase auth flow constraints](supabase-auth-flow.md) — never await Supabase inside onAuthStateChange (deadlock); don't gate nav on profile fetch; empty signUp identities = account exists.

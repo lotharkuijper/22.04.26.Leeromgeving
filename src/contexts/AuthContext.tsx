@@ -23,6 +23,17 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SUPERUSER_EMAIL = 'l.d.j.kuijper@vu.nl';
 
+// Vangnet: voorkom dat een hangende Supabase-aanroep (netwerk/lock) de UI
+// eindeloos in 'laden' laat staan. Na `ms` ms wordt de race afgewezen.
+function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`[AUTH] ${label} duurde te lang (>${ms}ms)`)), ms),
+    ),
+  ]);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -35,17 +46,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
+    // Profiel ophalen mag NOOIT de auth-flow blokkeren of laten hangen.
+    // We draaien het los van navigatie, met een time-out-vangnet.
+    const loadProfileSafe = (userId: string) => {
+      withTimeout(fetchProfile(userId), 12000, 'fetchProfile').catch((err) => {
+        console.error('[AUTH] Profiel laden mislukt/time-out:', err);
+        if (mounted) setProfile(null);
+      });
+    };
+
     const initAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await withTimeout(
+          supabase.auth.getSession(),
+          10000,
+          'getSession',
+        );
 
         if (!mounted) return;
 
         setSession(session);
         setUser(session?.user ?? null);
 
+        // Niet awaiten: de UI mag direct door, profiel komt op de achtergrond.
         if (session?.user) {
-          await fetchProfile(session.user.id);
+          loadProfileSafe(session.user.id);
         }
       } catch (error) {
         console.error('[AUTH] Initialization error:', error);
@@ -58,23 +83,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     initAuth();
 
-const {
-  data: { subscription },
-} = supabase.auth.onAuthStateChange((event, session) => {
-  (async () => {
-    if (!mounted) return;
+    // Belangrijk: binnen deze callback GEEN Supabase-aanroepen await'en —
+    // dat is het bekende Supabase-deadlockpatroon (de callback houdt een lock
+    // vast). We zetten alleen state en defereren de profiel-ophaling.
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
 
-    console.log(`[AUTH] State change: ${event}`);
-    setSession(session);
-    setUser(session?.user ?? null);
+      console.log(`[AUTH] State change: ${event}`);
+      setSession(session);
+      setUser(session?.user ?? null);
 
-    if (session?.user) {
-      await fetchProfile(session.user.id);
-    } else {
-      setProfile(null);
-    }
-  })();
-});
+      if (session?.user) {
+        const uid = session.user.id;
+        setTimeout(() => {
+          if (mounted) loadProfileSafe(uid);
+        }, 0);
+      } else {
+        setProfile(null);
+      }
+    });
 
     return () => {
       mounted = false;
@@ -218,34 +247,51 @@ const {
   const signIn = async (email: string, password: string) => {
     clearAuthCache();
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    // Vangnet-time-out zodat de inlogknop nooit eindeloos blijft 'laden'.
+    const { error } = await withTimeout(
+      supabase.auth.signInWithPassword({ email, password }),
+      15000,
+      'signIn',
+    );
 
     if (error) throw error;
 
-    if (data.user) {
-      await fetchProfile(data.user.id);
-    }
+    // Geen await op fetchProfile: navigatie wordt door de `user`-state gedreven
+    // (App-router stuurt door zodra `user` is gezet). Het profiel laadt op de
+    // achtergrond via de onAuthStateChange-listener. Zo kan een trage of
+    // mislukte profiel-ophaling de login nooit laten vastlopen.
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
     clearAuthCache();
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
+    const { data, error } = await withTimeout(
+      supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: fullName,
+          },
         },
-      },
-    });
+      }),
+      15000,
+      'signUp',
+    );
 
     if (error) {
       console.error('[AUTH] SignUp error:', error);
       throw new Error(error.message || 'Registratie mislukt');
+    }
+
+    // Supabase verbergt bestaande accounts: bij een al geregistreerd e-mailadres
+    // (met e-mailbevestiging aan) komt er GEEN error terug, maar een 'lege' user
+    // zonder identities en zonder sessie. Detecteer dat en geef een duidelijke
+    // melding i.p.v. een stille 'success'. ('User already registered' wordt in
+    // LoginPage gemapt naar de nette melding "Account bestaat al".)
+    const identities = data.user?.identities;
+    if (data.user && Array.isArray(identities) && identities.length === 0) {
+      throw new Error('User already registered');
     }
 
     if (!data.user) {
@@ -254,9 +300,8 @@ const {
 
     console.log('[AUTH] User registered, profile created by trigger');
 
-    if (data.user.id) {
-      await fetchProfile(data.user.id);
-    }
+    // Geen await op fetchProfile: idem aan signIn — listener handelt profiel +
+    // navigatie af zonder deadlock-risico.
   };
 
   const signOut = async () => {
