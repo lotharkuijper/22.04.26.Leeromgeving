@@ -359,13 +359,19 @@ app.post('/api/chat', async (req, res) => {
   const chatBody = {
     model: OPENAI_MODEL,
     messages: finalMessages,
-    temperature,
     [MAX_TOKENS_PARAM]: max_tokens ?? 512,
-    top_p,
     stream,
   };
   if (IS_REASONING_MODEL) {
+    // Reasoning-modellen (gpt-5.x / o1 / o3 / o4) accepteren alleen de standaard
+    // temperature/top_p (1) en weigeren een aangepaste waarde met een HTTP 400.
+    // Stuur die parameters daarom proactief NIET mee — dat scheelt op elke
+    // aanvraag een mislukte call + retry. Voeg in plaats daarvan een lage
+    // reasoning_effort toe zodat er tokenbudget overblijft voor zichtbare output.
     chatBody.reasoning_effort = REASONING_EFFORT;
+  } else {
+    chatBody.temperature = temperature;
+    chatBody.top_p = top_p;
   }
 
   const postChatCompletion = async (body) => {
