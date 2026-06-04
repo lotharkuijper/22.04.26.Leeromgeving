@@ -2040,21 +2040,42 @@ app.get('/api/admin/courses/:id/members', async (req, res) => {
     return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
   }
 
-  const { data, error } = await supabaseAdmin
+  // We joinen course_members hier NIET via een PostgREST-embed
+  // (`profiles(...)`). course_members.user_id verwijst naar auth.users, niet
+  // naar profiles, dus PostgREST kent geen directe relatie en geeft anders
+  // "Could not find a relationship between 'course_members' and 'profiles'".
+  // Daarom halen we eerst de leden op en daarna de bijbehorende profiles in
+  // een tweede query, die we in JS samenvoegen (defensief, niet afhankelijk
+  // van de schema-cache).
+  const { data: rows, error } = await supabaseAdmin
     .from('course_members')
-    .select('user_id, member_role, joined_at, profiles(id, email, full_name, role)')
+    .select('user_id, member_role, joined_at')
     .eq('course_id', courseId)
     .order('joined_at', { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
 
-  const members = (data || []).map((row) => ({
-    user_id: row.user_id,
-    member_role: row.member_role || 'student',
-    joined_at: row.joined_at,
-    email: row.profiles?.email || null,
-    full_name: row.profiles?.full_name || null,
-    global_role: row.profiles?.role || 'student',
-  }));
+  const userIds = [...new Set((rows || []).map((row) => row.user_id).filter(Boolean))];
+  const profileMap = new Map();
+  if (userIds.length > 0) {
+    const { data: profs, error: profErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email, full_name, role')
+      .in('id', userIds);
+    if (profErr) return res.status(500).json({ error: profErr.message });
+    for (const p of profs || []) profileMap.set(p.id, p);
+  }
+
+  const members = (rows || []).map((row) => {
+    const p = profileMap.get(row.user_id);
+    return {
+      user_id: row.user_id,
+      member_role: row.member_role || 'student',
+      joined_at: row.joined_at,
+      email: p?.email || null,
+      full_name: p?.full_name || null,
+      global_role: p?.role || 'student',
+    };
+  });
   return res.json({ members });
 });
 
