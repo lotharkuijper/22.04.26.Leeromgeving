@@ -11022,14 +11022,21 @@ if (fs.existsSync(path.join(distPath, 'index.html'))) {
   });
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[API Server] Running on port ${PORT}`);
-  console.log(`[API Server] OpenAI model: ${OPENAI_MODEL}`);
-  detectConceptsCourseIdColumn();
-  detectQuizAttemptsSchema();
-  detectQuizSourcesSchema();
-  initChatbotPromptSection();
-  // Wacht kort tot promptsHasSection geinitialiseerd is alvorens quiz-prompts
-  // aan te maken (initChatbotPromptSection draait async).
-  setTimeout(() => { initQuizPromptDefaults(); }, 2000);
-});
+// In de testomgeving importeren we de app zonder de poort te openen of de
+// schema-detectie/seeding te draaien; integratietests mounten `app` zelf op een
+// efemere poort (zie server/__tests__/chatEndpoint.test.js).
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[API Server] Running on port ${PORT}`);
+    console.log(`[API Server] OpenAI model: ${OPENAI_MODEL}`);
+    detectConceptsCourseIdColumn();
+    detectQuizAttemptsSchema();
+    detectQuizSourcesSchema();
+    initChatbotPromptSection();
+    // Wacht kort tot promptsHasSection geinitialiseerd is alvorens quiz-prompts
+    // aan te maken (initChatbotPromptSection draait async).
+    setTimeout(() => { initQuizPromptDefaults(); }, 2000);
+  });
+}
+
+export { app };
