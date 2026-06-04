@@ -426,17 +426,31 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // Als er na een eventuele retry nog steeds geen bruikbare tekst is, geef een
-    // duidelijke fout terug i.p.v. een misleidende lege 200 — de frontend toont
-    // dan de juiste Nederlandse melding over te weinig tokenruimte.
-    const finalContent = data?.choices?.[0]?.message?.content;
+    // Als er na een eventuele retry nog steeds geen bruikbare of volledige tekst
+    // is, geef een duidelijke fout terug i.p.v. een misleidende lege/afgekapte
+    // 200 — de frontend toont dan de juiste Nederlandse melding over te weinig
+    // tokenruimte.
+    const finalChoice = data?.choices?.[0];
+    const finalContent = finalChoice?.message?.content;
+    const finalFinish = finalChoice?.finish_reason;
     if (!finalContent || !String(finalContent).trim()) {
-      const finishReason = data?.choices?.[0]?.finish_reason;
-      console.error(`[/api/chat] Lege content na verwerking (finish_reason=${finishReason}, model=${OPENAI_MODEL}).`);
+      console.error(`[/api/chat] Lege content na verwerking (finish_reason=${finalFinish}, model=${OPENAI_MODEL}).`);
       return res.status(502).json({
         error: {
           message: 'Het taalmodel gaf een lege reactie terug: er was te weinig tokenruimte voor het antwoord.',
           code: 'empty_response',
+        },
+      });
+    }
+    if (finalFinish === 'length') {
+      // Niet-lege maar afgekapte respons: voor gestructureerde feedback ("Ik leg
+      // uit") is een halve respons misleidend. Faal expliciet met een code die de
+      // frontend op de tokenruimte-melding mapt, i.p.v. partiële tekst door te geven.
+      console.error(`[/api/chat] Afgekapte respons na verwerking (finish_reason=length, model=${OPENAI_MODEL}).`);
+      return res.status(502).json({
+        error: {
+          message: 'Het antwoord werd afgekapt: er was te weinig tokenruimte voor het volledige antwoord.',
+          code: 'length',
         },
       });
     }
