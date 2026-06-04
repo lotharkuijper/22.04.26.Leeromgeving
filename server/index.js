@@ -36,7 +36,7 @@ import {
   processPlainRagDocument as processPlainRagDocumentImpl,
 } from './ragProcessing.js';
 import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
-import { isUnsupportedSamplingParamError } from './openaiSampling.js';
+import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion } from './openaiSampling.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import {
@@ -102,9 +102,14 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 // GPT-5 en o1/o3 modellen accepteren geen 'max_tokens' meer; ze vereisen
 // 'max_completion_tokens'. We detecteren dat aan de modelnaam zodat alle
 // fetches automatisch de juiste sleutel meesturen.
-const MAX_TOKENS_PARAM = /^(gpt-5|o1|o3|o4)/i.test(OPENAI_MODEL)
+const IS_REASONING_MODEL = /^(gpt-5|o1|o3|o4)/i.test(OPENAI_MODEL);
+const MAX_TOKENS_PARAM = IS_REASONING_MODEL
   ? 'max_completion_tokens'
   : 'max_tokens';
+// Reasoning-modellen verbruiken een deel van het tokenbudget aan 'reasoning'.
+// Houd die inspanning laag zodat er ruimte overblijft voor zichtbare output;
+// non-reasoning-modellen kennen deze parameter niet (zou een 400 geven).
+const REASONING_EFFORT = 'low';
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
 const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
@@ -359,6 +364,9 @@ app.post('/api/chat', async (req, res) => {
     top_p,
     stream,
   };
+  if (IS_REASONING_MODEL) {
+    chatBody.reasoning_effort = REASONING_EFFORT;
+  }
 
   const postChatCompletion = async (body) => {
     const r = await fetch(OPENAI_CHAT_URL, {
@@ -396,6 +404,43 @@ app.post('/api/chat', async (req, res) => {
       console.error(`[/api/chat] OpenAI error status=${response.status} code=${errCode} promptChars=${promptChars} body=${bodyStr.length > 2000 ? bodyStr.slice(0, 2000) + '…[truncated]' : bodyStr}`);
       return res.status(response.status).json(data);
     }
+
+    // Reasoning-modellen (zoals gpt-5.2) kunnen een HTTP 200 met lege of
+    // afgekapte content teruggeven (finish_reason: "length") wanneer de
+    // reasoning-tokens het budget opslokken. Dit raakt vooral zware,
+    // gestructureerde opdrachten zoals "Ik leg uit". Probeer in dat geval één
+    // keer opnieuw met een ruimer tokenbudget (en lage reasoning-inspanning)
+    // voordat we falen, zodat alle functies (chat én explain) profiteren.
+    if (!stream && isEmptyOrTruncatedCompletion(data)) {
+      const baseBudget = max_tokens ?? 512;
+      const retryBudget = Math.max(baseBudget * 2, 2000);
+      const retryBody = { ...chatBody, [MAX_TOKENS_PARAM]: retryBudget };
+      if (IS_REASONING_MODEL) retryBody.reasoning_effort = REASONING_EFFORT;
+      const prevFinish = data?.choices?.[0]?.finish_reason;
+      console.warn(`[/api/chat] Lege/afgekapte respons (finish_reason=${prevFinish}) — opnieuw met ruimer tokenbudget (${retryBudget}).`);
+      const retry = await postChatCompletion(retryBody);
+      if (retry.r.ok) {
+        // Behoud de retry-respons: die heeft minstens evenveel ruimte en bevat
+        // doorgaans de volledige tekst. Zo niet, dan vangt de check hieronder af.
+        data = retry.body;
+      }
+    }
+
+    // Als er na een eventuele retry nog steeds geen bruikbare tekst is, geef een
+    // duidelijke fout terug i.p.v. een misleidende lege 200 — de frontend toont
+    // dan de juiste Nederlandse melding over te weinig tokenruimte.
+    const finalContent = data?.choices?.[0]?.message?.content;
+    if (!finalContent || !String(finalContent).trim()) {
+      const finishReason = data?.choices?.[0]?.finish_reason;
+      console.error(`[/api/chat] Lege content na verwerking (finish_reason=${finishReason}, model=${OPENAI_MODEL}).`);
+      return res.status(502).json({
+        error: {
+          message: 'Het taalmodel gaf een lege reactie terug: er was te weinig tokenruimte voor het antwoord.',
+          code: 'empty_response',
+        },
+      });
+    }
+
     return res.json(data);
   } catch (err) {
     console.error('[/api/chat] Error:', err);

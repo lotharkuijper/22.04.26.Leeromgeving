@@ -20,3 +20,19 @@ export function isUnsupportedSamplingParamError(data) {
       msg.includes('not supported'))
   );
 }
+
+// Reasoning-modellen (gpt-5/o1/o3/o4) verbruiken hun tokenbudget deels aan
+// 'reasoning'. Bij een zware, gestructureerde opdracht kan een chat-completion
+// daardoor een HTTP 200 met lege of afgekapte content opleveren
+// (finish_reason: "length"). Detecteer dat zodat de aanroeper één keer opnieuw
+// kan proberen met een ruimer budget i.p.v. een misleidende lege 200 door te
+// geven. Een succesvolle respons met echte tekst en finish_reason "stop"
+// levert hier false op.
+export function isEmptyOrTruncatedCompletion(data) {
+  const choice = data && Array.isArray(data.choices) ? data.choices[0] : undefined;
+  if (!choice) return true;
+  const content = choice.message && choice.message.content;
+  if (!content || !String(content).trim()) return true;
+  if (choice.finish_reason === 'length') return true;
+  return false;
+}

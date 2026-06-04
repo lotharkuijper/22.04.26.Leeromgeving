@@ -72,6 +72,16 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
         detail: err.rawMessage || (nl ? 'Controleer of de OPENAI_API_KEY beschikbaar is.' : 'Check whether the OPENAI_API_KEY is available.'),
       };
     }
+    if (code === 'empty_response' || code === 'length' || raw.includes('lege reactie') || raw.includes('te weinig tokenruimte')) {
+      return {
+        title: nl
+          ? 'Het antwoord paste niet in de beschikbare tokenruimte.'
+          : 'The answer did not fit in the available token space.',
+        detail: nl
+          ? 'Het taalmodel had te weinig ruimte om volledige feedback te geven. Probeer het opnieuw, of stuur minder cursusmateriaal mee (verhoog de RAG-drempel of verlaag het aantal passages / match_count).'
+          : 'The language model had too little room to give complete feedback. Try again, or send less course material (raise the RAG threshold or lower the number of passages / match_count).',
+      };
+    }
     if (err.status >= 500) {
       return {
         title: nl
@@ -276,7 +286,10 @@ Geef gestructureerde feedback met:
     model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: evaluationPrompt }],
     temperature: 0.3,
-    max_tokens: 1500,
+    // Ruim budget: reasoning-modellen (bv. gpt-5.2) verbruiken een deel van het
+    // tokenbudget aan 'reasoning'. Met een krap budget bleef er geen ruimte over
+    // voor de 4-delige gestructureerde feedback (lege/afgekapte respons).
+    max_tokens: 4000,
     skipSystemPrompt: true,
     ...(systemPrompt ? { systemPromptOverride: systemPrompt } : {}),
   });

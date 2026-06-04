@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isUnsupportedSamplingParamError } from '../openaiSampling.js';
+import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion } from '../openaiSampling.js';
 
 describe('isUnsupportedSamplingParamError', () => {
   it('returns false for empty/ok responses', () => {
@@ -45,5 +45,28 @@ describe('isUnsupportedSamplingParamError', () => {
         error: { message: 'The temperature outside is nice today' },
       }),
     ).toBe(false);
+  });
+});
+
+describe('isEmptyOrTruncatedCompletion', () => {
+  it('treats missing/empty choices as empty', () => {
+    expect(isEmptyOrTruncatedCompletion(undefined)).toBe(true);
+    expect(isEmptyOrTruncatedCompletion(null)).toBe(true);
+    expect(isEmptyOrTruncatedCompletion({})).toBe(true);
+    expect(isEmptyOrTruncatedCompletion({ choices: [] })).toBe(true);
+  });
+
+  it('treats empty or whitespace content as empty', () => {
+    expect(isEmptyOrTruncatedCompletion({ choices: [{ message: { content: '' }, finish_reason: 'stop' }] })).toBe(true);
+    expect(isEmptyOrTruncatedCompletion({ choices: [{ message: { content: '   \n' }, finish_reason: 'stop' }] })).toBe(true);
+    expect(isEmptyOrTruncatedCompletion({ choices: [{ message: {}, finish_reason: 'stop' }] })).toBe(true);
+  });
+
+  it('treats finish_reason "length" as truncated even with content', () => {
+    expect(isEmptyOrTruncatedCompletion({ choices: [{ message: { content: 'partial' }, finish_reason: 'length' }] })).toBe(true);
+  });
+
+  it('returns false for a complete response', () => {
+    expect(isEmptyOrTruncatedCompletion({ choices: [{ message: { content: 'volledige feedback' }, finish_reason: 'stop' }] })).toBe(false);
   });
 });
