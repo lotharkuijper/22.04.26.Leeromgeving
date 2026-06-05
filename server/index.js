@@ -46,6 +46,7 @@ import {
   isBlockedHost as isBlockedWebHost,
   WEB_IMPORT_LIMITS,
 } from './webImport.js';
+import { promises as dnsPromises } from 'node:dns';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion } from './openaiSampling.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
@@ -67,6 +68,16 @@ import {
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
 // uitvoeren, zoals bytea-inserts van binaire bestanden.
 
+
+// DNS-resolver voor de SSRF-bescherming van de web-import: resolved een hostnaam
+// naar al zijn A/AAAA-adressen zodat `fetchPage`/`discoverPages` elk resolved IP
+// tegen de geblokkeerde ranges kunnen toetsen (DNS-rebinding/SSRF-bypass). Wordt
+// als `lookup` geïnjecteerd; bij een resolutiefout gooit het, wat de helpers als
+// "geblokkeerd" (fail-safe) behandelen.
+async function resolveHostAddresses(hostname) {
+  const records = await dnsPromises.lookup(hostname, { all: true });
+  return records.map((rec) => rec.address);
+}
 
 let pgPool = null;
 if (process.env.SUPABASE_DB_URL) {
@@ -2010,7 +2021,7 @@ app.post('/api/admin/import-web/discover', async (req, res) => {
   }
 
   try {
-    const { pages, method, warnings } = await discoverWebPages(start, fetch);
+    const { pages, method, warnings } = await discoverWebPages(start, fetch, { lookup: resolveHostAddresses });
     return res.json({ pages, method, warnings, baseUrl: start });
   } catch (err) {
     console.error('[import-web/discover] fout:', err);
@@ -2081,10 +2092,18 @@ app.post('/api/admin/import-web/import', async (req, res) => {
 
     for (const target of targets) {
       try {
-        const resp = await fetchWebPage(target.url, fetch);
+        const resp = await fetchWebPage(target.url, fetch, { scope, lookup: resolveHostAddresses });
         if (!resp.ok) {
           errors++;
-          results.push({ url: target.url, status: 'error', message: `HTTP ${resp.status || 'netwerkfout'}` });
+          results.push({ url: target.url, status: 'error', message: resp.error || `HTTP ${resp.status || 'netwerkfout'}` });
+          continue;
+        }
+        // Verdedigend: ook al checkt fetchWebPage redirects tegen de scope, valideer
+        // de uiteindelijke URL nog eens zodat content buiten de webomgeving nooit
+        // als RAG-bron belandt.
+        if (resp.finalUrl && (isBlockedWebHost(resp.finalUrl) || !sameWebEnv(scope, resp.finalUrl))) {
+          outOfScope++;
+          results.push({ url: target.url, status: 'skipped', message: 'Redirect buiten de website-scope' });
           continue;
         }
         const text = webHtmlToText(resp.html);

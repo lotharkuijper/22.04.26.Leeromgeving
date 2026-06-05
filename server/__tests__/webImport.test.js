@@ -9,6 +9,8 @@ import {
   extractLinks,
   discoverPages,
   isBlockedHost,
+  isBlockedIp,
+  hostResolvesToBlocked,
   fetchPage,
 } from '../webImport.js';
 
@@ -221,6 +223,90 @@ describe('fetchPage SSRF-redirect-hardening', () => {
     const res = await fetchPage('https://example.com/start', f);
     expect(res.ok).toBe(true);
     expect(res.html).toContain('ok');
+    expect(res.finalUrl).toBe('https://example.com/eind');
+  });
+  it('weigert een redirect naar een geblokkeerde host op een latere hop', async () => {
+    const f = makeRedirectFetch({
+      'https://example.com/start': 'https://example.com/door',
+      'https://example.com/door': 'http://127.0.0.1/intern',
+    });
+    const res = await fetchPage('https://example.com/start', f);
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/geblokkeerde host/i);
+  });
+});
+
+describe('fetchPage DNS-resolutie SSRF-guard', () => {
+  const okFetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'text/html' : null) },
+    text: async () => '<html><body><p>ok</p></body></html>',
+  });
+
+  it('weigert een publieke hostnaam die naar een privé-IP resolveert', async () => {
+    const lookup = async () => ['10.0.0.5'];
+    const res = await fetchPage('https://intranet.example.com/page', okFetch, { lookup });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/geblokkeerd adres/i);
+  });
+
+  it('weigert wanneer één van meerdere resolved IP\'s privé is', async () => {
+    const lookup = async () => ['93.184.216.34', '169.254.169.254'];
+    const res = await fetchPage('https://rebind.example.com/page', okFetch, { lookup });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/geblokkeerd adres/i);
+  });
+
+  it('staat een hostnaam toe die naar een publiek IP resolveert', async () => {
+    const lookup = async () => ['93.184.216.34'];
+    const res = await fetchPage('https://example.com/page', okFetch, { lookup });
+    expect(res.ok).toBe(true);
+    expect(res.html).toContain('ok');
+  });
+
+  it('faalt veilig (blocked) wanneer DNS-resolutie een fout gooit', async () => {
+    const lookup = async () => { throw new Error('ENOTFOUND'); };
+    const res = await fetchPage('https://example.com/page', okFetch, { lookup });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/geblokkeerd adres/i);
+  });
+});
+
+describe('fetchPage scope-aware redirects', () => {
+  it('weigert een redirect buiten de toegestane webomgeving (scope)', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/book/p1': 'https://example.com/elders/x' });
+    const res = await fetchPage('https://example.com/book/p1', f, { scope: 'https://example.com/book/' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/scope/i);
+  });
+  it('volgt een redirect binnen dezelfde scope', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/book/p1': 'https://example.com/book/p2' });
+    const res = await fetchPage('https://example.com/book/p1', f, { scope: 'https://example.com/book/' });
+    expect(res.ok).toBe(true);
+    expect(res.finalUrl).toBe('https://example.com/book/p2');
+  });
+});
+
+describe('isBlockedIp / hostResolvesToBlocked', () => {
+  it('herkent privé en publieke IP-literals', () => {
+    expect(isBlockedIp('10.1.2.3')).toBe(true);
+    expect(isBlockedIp('172.16.0.1')).toBe(true);
+    expect(isBlockedIp('192.168.1.1')).toBe(true);
+    expect(isBlockedIp('169.254.1.1')).toBe(true);
+    expect(isBlockedIp('127.0.0.1')).toBe(true);
+    expect(isBlockedIp('::1')).toBe(true);
+    expect(isBlockedIp('fe80::1')).toBe(true);
+    expect(isBlockedIp('fc00::1')).toBe(true);
+    expect(isBlockedIp('93.184.216.34')).toBe(false);
+    expect(isBlockedIp('2606:2800:220:1::1')).toBe(false);
+  });
+  it('slaat DNS over zonder lookup en faalt veilig bij fouten', async () => {
+    expect(await hostResolvesToBlocked('example.com', null)).toBe(false);
+    expect(await hostResolvesToBlocked('example.com', async () => { throw new Error('x'); })).toBe(true);
+    expect(await hostResolvesToBlocked('example.com', async () => [])).toBe(true);
+    expect(await hostResolvesToBlocked('example.com', async () => ['10.0.0.1'])).toBe(true);
+    expect(await hostResolvesToBlocked('example.com', async () => ['93.184.216.34'])).toBe(false);
   });
 });
 

@@ -74,24 +74,15 @@ export function normalizeUrl(raw, base) {
   return u.toString();
 }
 
-// SSRF-bescherming: blokkeert URL's die naar het interne/private netwerk
-// wijzen (loopback, RFC1918, link-local, unique-local IPv6, .internal/.local).
-// Pure helper — geen DNS-resolutie. Vangt de voor de hand liggende IP-literals
-// en interne hostnamen af zodat een docent geen interne services kan laten
-// ophalen via de server-side fetch. Geeft `true` als de host geblokkeerd is.
-export function isBlockedHost(rawUrl) {
-  let host;
-  try {
-    host = new URL(rawUrl).hostname.toLowerCase();
-  } catch {
-    return true;
-  }
+// Geeft `true` als een IP-literal (IPv4, IPv6 of IPv4-mapped IPv6) naar het
+// interne/private netwerk wijst (loopback, RFC1918, link-local, unique-local,
+// multicast/reserved). Pure helper; gebruikt voor zowel URL-literals als voor
+// IP's die uit DNS-resolutie komen (zie `hostResolvesToBlocked`).
+export function isBlockedIp(rawIp) {
+  let host = String(rawIp || '').toLowerCase().trim();
   if (!host) return true;
-  // URL.hostname levert IPv6-literals mét vierkante haken; strip ze voor de match.
   if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host.endsWith('.internal') || host.endsWith('.local')) return true;
-  // IPv6 loopback / unique-local (fc00::/7) / link-local (fe80::/10).
+  // IPv6 loopback / unspecified / unique-local (fc00::/7) / link-local (fe80::/10).
   if (host === '::1' || host === '::') return true;
   if (/^f[cd][0-9a-f]{2}:/i.test(host)) return true;
   if (/^fe[89ab][0-9a-f]:/i.test(host)) return true;
@@ -108,6 +99,53 @@ export function isBlockedHost(rawUrl) {
     if (a >= 224) return true;                                    // multicast/reserved
   }
   return false;
+}
+
+// Herkent of een hostnaam in feite een IP-literal is (IPv4 of IPv6). Voor die
+// gevallen is DNS-resolutie zinloos en volstaat `isBlockedIp`.
+export function isIpLiteral(host) {
+  if (!host) return false;
+  let h = host.toLowerCase();
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':');
+}
+
+// SSRF-bescherming op naamniveau: blokkeert URL's die naar het interne/private
+// netwerk wijzen (loopback, RFC1918, link-local, unique-local IPv6,
+// .internal/.local en IP-literals). Pure, synchrone helper — geen DNS-resolutie
+// (zie `hostResolvesToBlocked` voor de netwerklaag). Geeft `true` als geblokkeerd.
+export function isBlockedHost(rawUrl) {
+  let host;
+  try {
+    host = new URL(rawUrl).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  if (!host) return true;
+  // URL.hostname levert IPv6-literals mét vierkante haken; strip ze voor de match.
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host.endsWith('.internal') || host.endsWith('.local')) return true;
+  if (isBlockedIp(host)) return true;
+  return false;
+}
+
+// SSRF-bescherming op netwerklaag: resolved een hostnaam (A/AAAA) en geeft
+// `true` als één van de resolved IP's in een geblokkeerde range valt — dit vangt
+// de klassieke DNS-rebinding/SSRF-bypass waarbij een publieke hostnaam naar een
+// privé-adres wijst. `lookup` is injecteerbaar voor tests; ontbreekt die, dan
+// wordt de DNS-controle overgeslagen (de synchrone `isBlockedHost`-checks
+// blijven gelden). Bij een resolutiefout of leeg resultaat → `true` (fail-safe).
+export async function hostResolvesToBlocked(hostname, lookup) {
+  if (!lookup) return false;
+  if (isIpLiteral(hostname)) return isBlockedIp(hostname);
+  try {
+    const ips = await lookup(hostname);
+    if (!Array.isArray(ips) || ips.length === 0) return true;
+    return ips.some((ip) => isBlockedIp(ip));
+  } catch {
+    return true;
+  }
 }
 
 // Bepaalt het "directory"-pad-prefix van een basis-URL (lowercase) zodat we
@@ -228,22 +266,43 @@ export function extractLinks(html, pageUrl) {
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 5;
 
+function hostnameOf(rawUrl) {
+  try {
+    let h = new URL(rawUrl).hostname.toLowerCase();
+    if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+    return h;
+  } catch {
+    return '';
+  }
+}
+
 export async function fetchPage(url, fetchImpl, {
   timeoutMs = WEB_IMPORT_LIMITS.FETCH_TIMEOUT_MS,
   maxBytes = WEB_IMPORT_LIMITS.MAX_HTML_BYTES,
+  scope = null,
+  lookup = null,
 } = {}) {
   if (isBlockedHost(url)) {
-    return { ok: false, status: 0, html: '', contentType: '', error: 'geblokkeerde host (intern netwerk)' };
+    return { ok: false, status: 0, html: '', contentType: '', finalUrl: url, error: 'geblokkeerde host (intern netwerk)' };
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     // SSRF-hardening: volg redirects HANDMATIG (`redirect: 'manual'`) zodat elke
-    // hop opnieuw tegen isBlockedHost wordt gecontroleerd. Met `redirect: 'follow'`
-    // zou een toegestane publieke URL kunnen doorverwijzen naar een intern adres
-    // (bijv. 169.254.169.254 of loopback) zonder dat wij dat zien.
+    // hop opnieuw wordt gevalideerd. Met `redirect: 'follow'` zou een toegestane
+    // publieke URL kunnen doorverwijzen naar een intern adres (bijv.
+    // 169.254.169.254 of loopback) zonder dat wij dat zien. Per hop checken we:
+    //   1. isBlockedHost (naam/IP-literal),
+    //   2. hostResolvesToBlocked (DNS A/AAAA → privé-IP, indien `lookup` gegeven),
+    //   3. scope (sameWebEnvironment, indien `scope` gegeven) — voor redirecthops.
     let current = url;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      if (isBlockedHost(current)) {
+        return { ok: false, status: 0, html: '', contentType: '', finalUrl: current, error: 'geblokkeerde host (intern netwerk)' };
+      }
+      if (await hostResolvesToBlocked(hostnameOf(current), lookup)) {
+        return { ok: false, status: 0, html: '', contentType: '', finalUrl: current, error: 'host resolvet naar geblokkeerd adres (intern netwerk)' };
+      }
       const resp = await fetchImpl(current, {
         signal: controller.signal,
         redirect: 'manual',
@@ -252,24 +311,24 @@ export async function fetchPage(url, fetchImpl, {
       const status = resp.status;
       if (REDIRECT_STATUSES.has(status)) {
         const location = resp.headers?.get?.('location');
-        if (!location) return { ok: false, status, html: '', contentType: '', error: 'redirect zonder Location' };
+        if (!location) return { ok: false, status, html: '', contentType: '', finalUrl: current, error: 'redirect zonder Location' };
         const next = normalizeUrl(location, current);
-        if (!next) return { ok: false, status, html: '', contentType: '', error: 'ongeldige redirect-URL' };
-        if (isBlockedHost(next)) {
-          return { ok: false, status, html: '', contentType: '', error: 'redirect naar geblokkeerde host (intern netwerk)' };
+        if (!next) return { ok: false, status, html: '', contentType: '', finalUrl: current, error: 'ongeldige redirect-URL' };
+        if (scope && !sameWebEnvironment(scope, next)) {
+          return { ok: false, status, html: '', contentType: '', finalUrl: next, error: 'redirect buiten de toegestane webomgeving (scope)' };
         }
         current = next;
         continue;
       }
       const contentType = (resp.headers?.get?.('content-type') || '').toLowerCase();
-      if (!resp.ok) return { ok: false, status, html: '', contentType };
+      if (!resp.ok) return { ok: false, status, html: '', contentType, finalUrl: current };
       const text = await resp.text();
       const html = text.length > maxBytes ? text.slice(0, maxBytes) : text;
-      return { ok: true, status, html, contentType };
+      return { ok: true, status, html, contentType, finalUrl: current };
     }
-    return { ok: false, status: 0, html: '', contentType: '', error: 'te veel redirects' };
+    return { ok: false, status: 0, html: '', contentType: '', finalUrl: current, error: 'te veel redirects' };
   } catch (err) {
-    return { ok: false, status: 0, html: '', contentType: '', error: err?.message || 'fetch failed' };
+    return { ok: false, status: 0, html: '', contentType: '', finalUrl: url, error: err?.message || 'fetch failed' };
   } finally {
     clearTimeout(timer);
   }
@@ -286,6 +345,7 @@ function isHtmlResponse(contentType) {
 export async function discoverPages(baseUrl, fetchImpl, opts = {}) {
   const maxPages = opts.maxPages ?? WEB_IMPORT_LIMITS.MAX_PAGES;
   const maxDepth = opts.maxDepth ?? WEB_IMPORT_LIMITS.MAX_DEPTH;
+  const lookup = opts.lookup ?? null;
   const warnings = [];
 
   const start = normalizeUrl(baseUrl);
@@ -304,7 +364,7 @@ export async function discoverPages(baseUrl, fetchImpl, opts = {}) {
   for (const sm of sitemapCandidates) {
     if (seenSitemap.has(sm)) continue;
     seenSitemap.add(sm);
-    const res = await fetchPage(sm, fetchImpl);
+    const res = await fetchPage(sm, fetchImpl, { lookup });
     if (!res.ok || !/<urlset|<sitemapindex|<loc>/i.test(res.html)) continue;
     const locs = parseSitemap(res.html)
       .map((u) => normalizeUrl(u))
@@ -332,7 +392,7 @@ export async function discoverPages(baseUrl, fetchImpl, opts = {}) {
     if (visited.has(url)) continue;
     visited.add(url);
 
-    const res = await fetchPage(url, fetchImpl);
+    const res = await fetchPage(url, fetchImpl, { lookup });
     if (!res.ok) {
       warnings.push(`Kon pagina niet ophalen (${res.status || 'netwerkfout'}): ${url}`);
       continue;
