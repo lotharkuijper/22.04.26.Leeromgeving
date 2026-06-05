@@ -50,6 +50,7 @@ import { promises as dnsPromises } from 'node:dns';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion } from './openaiSampling.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
+import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
 import {
   applyDelta as applyRelDelta,
   scoreToLabel as relScoreToLabel,
@@ -3729,24 +3730,41 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     // cursus dan met een lege begrippenlijst achter. We voeren de replace
     // pas uit zodra we daadwerkelijk nieuwe begrippen hebben om in te
     // voegen — zie verderop in deze handler (`runReplace`).
-    async function runReplace() {
+    async function runReplace(keepNames = new Set()) {
       if (!replace) return;
+      const ragMarkerLocal = '[RAG-geëxtraheerd uit cursusmateriaal]';
       if (conceptsHasCourseId) {
-        const { error: delErr } = await supabaseAdmin
+        // Verwijder alleen verouderde RAG-begrippen: die wél RAG zijn maar in deze
+        // run NIET opnieuw zijn voorgesteld. Zojuist (her)ingevoegde begrippen
+        // staan in keepNames en blijven dus behouden.
+        const { data: courseConcepts, error: fetchErr } = await supabaseAdmin
           .from('concepts')
-          .delete()
-          .eq('course_id', courseId)
-          .contains('key_points', ['[RAG-geëxtraheerd uit cursusmateriaal]']);
-        if (delErr) {
-          console.error('[extract-concepts] Delete (replace) error:', delErr);
-          throw new Error(`Verwijderen mislukt: ${delErr.message}`);
+          .select('id, name, key_points')
+          .eq('course_id', courseId);
+        if (fetchErr) {
+          console.error('[extract-concepts] Fetch (replace) error:', fetchErr);
+          throw new Error(`Ophalen mislukt: ${fetchErr.message}`);
         }
-        console.log(`[extract-concepts] Deleted extracted concepts for course ${courseId} (replace mode, course_id)`);
+        const staleIds = (courseConcepts || [])
+          .filter((c) => (c.key_points || []).includes(ragMarkerLocal))
+          .filter((c) => !keepNames.has(String(c.name || '').toLowerCase().trim()))
+          .map((c) => c.id);
+        if (staleIds.length > 0) {
+          const { error: delErr } = await supabaseAdmin
+            .from('concepts')
+            .delete()
+            .in('id', staleIds);
+          if (delErr) {
+            console.error('[extract-concepts] Delete (replace) error:', delErr);
+            throw new Error(`Verwijderen mislukt: ${delErr.message}`);
+          }
+        }
+        console.log(`[extract-concepts] Replace (course_id): deleted ${staleIds.length} stale RAG concepts for course ${courseId}`);
         return;
       }
       const { data: taggedConcepts, error: taggedErr } = await supabaseAdmin
         .from('concepts')
-        .select('id, key_points')
+        .select('id, name, key_points')
         .contains('key_points', [courseMarker]);
 
       if (taggedErr) {
@@ -3754,32 +3772,33 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
         throw new Error(`Ophalen mislukt: ${taggedErr.message}`);
       }
 
-      const ragMarkerLocal = '[RAG-geëxtraheerd uit cursusmateriaal]';
-      const toDeleteIds = [];
-      const toUntag = [];
-
-      for (const concept of taggedConcepts || []) {
-        const isRagExtracted = (concept.key_points || []).includes(ragMarkerLocal);
-        if (isRagExtracted) {
-          toDeleteIds.push(concept.id);
-        } else {
-          toUntag.push({ id: concept.id, key_points: (concept.key_points || []).filter((kp) => kp !== courseMarker) });
-        }
-      }
+      // Cursusbewust opruimen: alleen verouderde RAG-begrippen van DEZE cursus
+      // (niet meer voorgesteld); begrippen die ook bij een andere cursus horen
+      // verliezen enkel deze markering. keepNames beschermt zojuist geschreven en
+      // opnieuw voorgestelde begrippen.
+      const { toDeleteIds, toUntag } = planConceptReplace(taggedConcepts, { courseMarker, keepNames });
 
       if (toDeleteIds.length > 0) {
         const { error: delErr } = await supabaseAdmin
           .from('concepts')
           .delete()
           .in('id', toDeleteIds);
-        if (delErr) console.error('[extract-concepts] Delete (replace fallback) error:', delErr);
+        if (delErr) {
+          console.error('[extract-concepts] Delete (replace fallback) error:', delErr);
+          throw new Error(`Verwijderen mislukt: ${delErr.message}`);
+        }
       }
 
       for (const u of toUntag) {
-        await supabaseAdmin.from('concepts').update({ key_points: u.key_points }).eq('id', u.id);
+        const { error: untagErr } = await supabaseAdmin
+          .from('concepts').update({ key_points: u.key_points }).eq('id', u.id);
+        if (untagErr) {
+          console.error('[extract-concepts] Untag (replace fallback) error:', untagErr);
+          throw new Error(`Loskoppelen mislukt: ${untagErr.message}`);
+        }
       }
 
-      console.log(`[extract-concepts] Replace (fallback): deleted ${toDeleteIds.length} RAG-extracted, untagged ${toUntag.length} seeds`);
+      console.log(`[extract-concepts] Replace (fallback): deleted ${toDeleteIds.length} RAG-extracted, untagged ${toUntag.length} shared`);
     }
 
     const { data: assignments } = await supabaseAdmin
@@ -4045,12 +4064,17 @@ ${combinedText}`;
       });
     }
 
-    // Volgorde: eerst inserten/updaten, daarna pas eventueel oude
-    // RAG-begrippen wissen. Zo blijven bestaande begrippen behouden als
-    // de schrijfactie zelf faalt (bv. transient DB-fout). In replace-modus
-    // negeren we bestaande RAG-begrippen bij de duplicaat-check, want die
-    // worden direct na de succesvolle insert weggegooid.
+    // Volgorde (belangrijk): in replace/hergenereer-modus eerst de nieuwe
+    // begrippen schrijven, dán pas de VEROUDERDE RAG-begrippen opruimen.
+    // - Schrijven-eerst voorkomt dat de cursus leeg achterblijft als een
+    //   DB-schrijfactie faalt (we keren dan met 500 terug vóór het opruimen).
+    // - De opruimstap (`runReplace`) is "keep-aware": elke naam die in deze run
+    //   is geëxtraheerd (keepNames) blijft behouden, dus de zojuist geschreven
+    //   én de opnieuw voorgestelde begrippen worden nooit per ongeluk gewist
+    //   (dat was de bug waardoor de Begrippen-tab leeg bleef). Alleen
+    //   RAG-begrippen die NIET meer voorgesteld worden, worden opgeruimd.
     const ragMarker = '[RAG-geëxtraheerd uit cursusmateriaal]';
+    const keepNames = new Set(validConcepts.map((c) => String(c.name || '').toLowerCase().trim()));
     let inserted = [];
     let updatedCount = 0;
     let skipped = 0;
@@ -4063,9 +4087,7 @@ ${combinedText}`;
         .eq('course_id', courseId);
 
       const alreadyByCourse = new Set(
-        (existingForCourse || [])
-          .filter((c) => !replace || !(c.key_points || []).includes(ragMarker))
-          .map((c) => c.name.toLowerCase().trim())
+        (existingForCourse || []).map((c) => c.name.toLowerCase().trim())
       );
 
       const toInsert = [];
@@ -4100,57 +4122,33 @@ ${combinedText}`;
         inserted = ins || [];
       }
     } else {
+      // planConceptWrites herkent bestaande (gedeelde/handmatige) begrippen:
+      // al voor deze cursus gemarkeerd → overslaan/behouden; zelfde naam in een
+      // andere cursus → bijwerken (delen); anders → nieuw invoegen. De oude
+      // RAG-begrippen worden pas ná deze schrijfstap opgeruimd (keep-aware).
       const { data: allExisting } = await supabaseAdmin
         .from('concepts')
         .select('id, name, key_points');
 
-      const existingByName = new Map(
-        (allExisting || []).map((c) => [c.name.toLowerCase().trim(), c])
+      const { toInsert, toUpdate, skipped: skippedCount } = planConceptWrites(
+        validConcepts, allExisting, { courseMarker, ragMarker }
       );
-
-      const alreadyTaggedForCourse = new Set(
-        (allExisting || [])
-          .filter((c) => (c.key_points || []).includes(courseMarker))
-          .filter((c) => !replace || !(c.key_points || []).includes(ragMarker))
-          .map((c) => c.name.toLowerCase().trim())
-      );
-
-      const toInsert = [];
-      const toUpdate = [];
-      const seenInBatch = new Set();
-
-      for (const c of validConcepts) {
-        const key = c.name.toLowerCase().trim();
-        if (alreadyTaggedForCourse.has(key)) { skipped++; continue; }
-        if (seenInBatch.has(key)) { skipped++; continue; }
-        seenInBatch.add(key);
-
-        const existing = existingByName.get(key);
-        // In replace-modus skipt de update-tak ook bestaande RAG-extracten;
-        // die worden door runReplace() verwijderd, dus we voegen het begrip
-        // gewoon opnieuw in.
-        if (existing && !(replace && (existing.key_points || []).includes(ragMarker))) {
-          const updatedKeyPoints = [...new Set([...(existing.key_points || []), courseMarker])];
-          toUpdate.push({ id: existing.id, key_points: updatedKeyPoints });
-        } else {
-          toInsert.push({
-            name: c.name.trim(),
-            category: c.category,
-            definition: c.definition.trim(),
-            key_points: [courseMarker, ragMarker],
-            examples: [],
-          });
-        }
-      }
+      skipped = skippedCount;
 
       for (const u of toUpdate) {
         const { error: updErr } = await supabaseAdmin
           .from('concepts')
           .update({ key_points: u.key_points })
           .eq('id', u.id);
-        if (updErr) console.error('[extract-concepts] Update error:', updErr);
+        if (updErr) {
+          // Hard falen vóór de opruimstap: een gedeeltelijke schrijfactie mag
+          // nooit gevolgd worden door runReplace, anders verdwijnen verouderde
+          // RAG-begrippen terwijl de bedoelde updates niet zijn doorgevoerd.
+          console.error('[extract-concepts] Update error (key_points path):', updErr);
+          return res.status(500).json({ error: `Begrippen bijwerken mislukt: ${updErr.message}` });
+        }
+        updatedCount += 1;
       }
-      updatedCount = toUpdate.length;
 
       if (toInsert.length > 0) {
         // Gebruik upsert met ignoreDuplicates zodat begrippen waarvan de naam
@@ -4168,13 +4166,15 @@ ${combinedText}`;
       }
     }
 
-    // Schrijven gelukt — nu pas de oude RAG-begrippen wissen (replace-modus).
-    // Als runReplace faalt, hebben we al een geslaagde insert; we loggen de
-    // fout maar laten de nieuwe begrippen staan.
+    // Schrijven gelukt — nu pas de VEROUDERDE RAG-begrippen opruimen
+    // (keep-aware: namen uit deze run blijven behouden). Door dit ná de
+    // succesvolle insert/update te doen blijft de cursus nooit leeg achter.
     try {
-      await runReplace();
+      await runReplace(keepNames);
     } catch (replaceErr) {
-      console.error('[extract-concepts] runReplace na insert mislukt:', replaceErr);
+      console.error('[extract-concepts] runReplace na schrijven mislukt:', replaceErr);
+      // De nieuwe begrippen staan al opgeslagen; we loggen de opruimfout maar
+      // laten de geschreven begrippen staan in plaats van te falen.
     }
 
     // Task #243: schrijf de begrip ↔ bronfragment-koppeling weg. Voor elk
