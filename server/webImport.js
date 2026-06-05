@@ -225,6 +225,9 @@ export function extractLinks(html, pageUrl) {
 
 // Eén pagina ophalen met timeout + groottebegrenzing. Retourneert
 // { ok, status, html, contentType }. Gooit niet; fouten komen als ok:false terug.
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
+
 export async function fetchPage(url, fetchImpl, {
   timeoutMs = WEB_IMPORT_LIMITS.FETCH_TIMEOUT_MS,
   maxBytes = WEB_IMPORT_LIMITS.MAX_HTML_BYTES,
@@ -235,16 +238,36 @@ export async function fetchPage(url, fetchImpl, {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const resp = await fetchImpl(url, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: { 'User-Agent': 'LEAP-VU-RAG-Import/1.0 (+educational)' },
-    });
-    const contentType = (resp.headers?.get?.('content-type') || '').toLowerCase();
-    if (!resp.ok) return { ok: false, status: resp.status, html: '', contentType };
-    const text = await resp.text();
-    const html = text.length > maxBytes ? text.slice(0, maxBytes) : text;
-    return { ok: true, status: resp.status, html, contentType };
+    // SSRF-hardening: volg redirects HANDMATIG (`redirect: 'manual'`) zodat elke
+    // hop opnieuw tegen isBlockedHost wordt gecontroleerd. Met `redirect: 'follow'`
+    // zou een toegestane publieke URL kunnen doorverwijzen naar een intern adres
+    // (bijv. 169.254.169.254 of loopback) zonder dat wij dat zien.
+    let current = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const resp = await fetchImpl(current, {
+        signal: controller.signal,
+        redirect: 'manual',
+        headers: { 'User-Agent': 'LEAP-VU-RAG-Import/1.0 (+educational)' },
+      });
+      const status = resp.status;
+      if (REDIRECT_STATUSES.has(status)) {
+        const location = resp.headers?.get?.('location');
+        if (!location) return { ok: false, status, html: '', contentType: '', error: 'redirect zonder Location' };
+        const next = normalizeUrl(location, current);
+        if (!next) return { ok: false, status, html: '', contentType: '', error: 'ongeldige redirect-URL' };
+        if (isBlockedHost(next)) {
+          return { ok: false, status, html: '', contentType: '', error: 'redirect naar geblokkeerde host (intern netwerk)' };
+        }
+        current = next;
+        continue;
+      }
+      const contentType = (resp.headers?.get?.('content-type') || '').toLowerCase();
+      if (!resp.ok) return { ok: false, status, html: '', contentType };
+      const text = await resp.text();
+      const html = text.length > maxBytes ? text.slice(0, maxBytes) : text;
+      return { ok: true, status, html, contentType };
+    }
+    return { ok: false, status: 0, html: '', contentType: '', error: 'te veel redirects' };
   } catch (err) {
     return { ok: false, status: 0, html: '', contentType: '', error: err?.message || 'fetch failed' };
   } finally {

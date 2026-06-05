@@ -7,6 +7,7 @@ import {
   type WebImportResult,
 } from '../services/web-import.service';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
+import { useLanguage } from '../i18n';
 
 type NoticeKind = 'info' | 'warning' | 'error' | 'success';
 interface Notice {
@@ -23,6 +24,7 @@ const NOTICE_STYLES: Record<NoticeKind, { box: string; icon: string }> = {
 
 export function WebImportPanel() {
   const { activeCourseId, activeCourse } = useActiveCourse();
+  const { t } = useLanguage();
   const [url, setUrl] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [discovering, setDiscovering] = useState(false);
@@ -35,30 +37,36 @@ export function WebImportPanel() {
   const handleDiscover = async () => {
     const trimmed = url.trim();
     if (!trimmed) {
-      setNotice({ kind: 'warning', message: 'Vul eerst een website-URL in.' });
+      setNotice({ kind: 'warning', message: t('admin.imports.web.noticeEnterUrl') });
       return;
     }
     setDiscovering(true);
     setResult(null);
     setPages([]);
     setSelected(new Set());
-    setNotice({ kind: 'info', message: 'Pagina\'s van de webomgeving worden ontdekt — dit kan even duren.' });
+    setNotice({ kind: 'info', message: t('admin.imports.web.noticeDiscovering') });
     try {
       const res = await discoverWebPages(trimmed);
       setPages(res.pages);
       setBaseUrl(res.baseUrl);
       setSelected(new Set(res.pages.map((p) => p.url)));
       if (res.pages.length === 0) {
-        setNotice({ kind: 'warning', message: 'Geen pagina\'s gevonden voor deze URL. Controleer of het adres klopt.' });
+        setNotice({ kind: 'warning', message: t('admin.imports.web.noticeNoPages') });
       } else {
-        const via = res.method === 'sitemap' ? 'sitemap' : 'links';
+        const via = res.method === 'sitemap' ? t('admin.imports.web.viaSitemap') : t('admin.imports.web.viaLinks');
+        const base = t('admin.imports.web.noticeFound', { count: String(res.pages.length), via });
         setNotice({
           kind: 'success',
-          message: `${res.pages.length} pagina('s) gevonden via ${via}.${res.warnings.length ? ' ' + res.warnings.join(' ') : ''}`,
+          message: base + (res.warnings.length ? ' ' + res.warnings.join(' ') : ''),
         });
       }
     } catch (err) {
-      setNotice({ kind: 'error', message: 'Ontdekken mislukt: ' + (err instanceof Error ? err.message : 'Onbekende fout') });
+      setNotice({
+        kind: 'error',
+        message: t('admin.imports.web.noticeDiscoverFailed', {
+          error: err instanceof Error ? err.message : t('admin.imports.web.unknownError'),
+        }),
+      });
     }
     setDiscovering(false);
   };
@@ -79,26 +87,36 @@ export function WebImportPanel() {
 
   const handleImport = async () => {
     if (!activeCourseId) {
-      setNotice({ kind: 'warning', message: 'Kies eerst een actieve cursus om de bronnen in op te slaan.' });
+      setNotice({ kind: 'warning', message: t('admin.imports.web.noticeNoCourse') });
       return;
     }
     const chosen = pages.filter((p) => selected.has(p.url));
     if (chosen.length === 0) {
-      setNotice({ kind: 'warning', message: 'Selecteer minimaal één pagina om te importeren.' });
+      setNotice({ kind: 'warning', message: t('admin.imports.web.noticeSelectPage') });
       return;
     }
     setImporting(true);
     setResult(null);
-    setNotice({ kind: 'info', message: `Import gestart voor ${chosen.length} pagina('s) — dit kan een paar minuten duren.` });
+    setNotice({ kind: 'info', message: t('admin.imports.web.noticeImportStarted', { count: String(chosen.length) }) });
     try {
       const res = await importWebPages(activeCourseId, baseUrl, chosen);
       setResult(res);
       setNotice({
         kind: 'success',
-        message: `Klaar — ${res.imported} geïmporteerd, ${res.skipped} overgeslagen, ${res.errors} fouten (${res.totalChunks} chunks).`,
+        message: t('admin.imports.web.noticeDone', {
+          imported: String(res.imported),
+          skipped: String(res.skipped),
+          errors: String(res.errors),
+          chunks: String(res.totalChunks),
+        }),
       });
     } catch (err) {
-      setNotice({ kind: 'error', message: 'Importeren mislukt: ' + (err instanceof Error ? err.message : 'Onbekende fout') });
+      setNotice({
+        kind: 'error',
+        message: t('admin.imports.web.noticeImportFailed', {
+          error: err instanceof Error ? err.message : t('admin.imports.web.unknownError'),
+        }),
+      });
     }
     setImporting(false);
   };
@@ -125,7 +143,7 @@ export function WebImportPanel() {
             type="button"
             onClick={() => setNotice(null)}
             className="opacity-70 hover:opacity-100"
-            aria-label="Sluit melding"
+            aria-label={t('admin.imports.web.dismiss')}
             data-testid="button-dismiss-web-notice"
           >
             <X className="w-4 h-4" />
@@ -137,13 +155,8 @@ export function WebImportPanel() {
         <div className="flex items-start gap-3">
           <Globe className="w-5 h-5 text-blue-700 mt-0.5" />
           <div className="flex-1">
-            <h3 className="font-semibold text-gray-900 mb-1">Website importeren</h3>
-            <p className="text-sm text-gray-700">
-              Plak het adres van een leeromgeving of documentatiesite. LEAP-VU ontdekt
-              de onderliggende pagina's, haalt de leesbare tekst op en slaat die als
-              doorzoekbare RAG-bronnen op in je actieve cursus. Je kiest zelf welke
-              pagina's je meeneemt. Importeer alleen sites waarvan je het materiaal mag gebruiken.
-            </p>
+            <h3 className="font-semibold text-gray-900 mb-1">{t('admin.imports.web.title')}</h3>
+            <p className="text-sm text-gray-700">{t('admin.imports.web.intro')}</p>
           </div>
         </div>
       </div>
@@ -152,30 +165,22 @@ export function WebImportPanel() {
       <div className="flex items-start gap-2 text-xs bg-blue-50 border border-blue-200 rounded-lg p-3" data-testid="text-web-active-course">
         <Link2 className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
         <div className="text-blue-900">
-          {activeCourseId && activeCourse ? (
-            <>
-              <strong>Doelcursus:</strong> de geïmporteerde pagina's komen in de RAG-map van
-              cursus <strong>{activeCourse.name}</strong>.
-            </>
-          ) : (
-            <>
-              <strong>Geen actieve cursus:</strong> wissel naar een cursus voordat je importeert,
-              zodat de bronnen op de juiste plek worden opgeslagen.
-            </>
-          )}
+          {activeCourseId && activeCourse
+            ? t('admin.imports.web.targetCourse', { course: activeCourse.name })
+            : t('admin.imports.web.noCourse')}
         </div>
       </div>
 
       {/* URL-invoer */}
       <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-3">
-        <h3 className="font-semibold text-gray-900">Website-URL</h3>
+        <h3 className="font-semibold text-gray-900">{t('admin.imports.web.urlLabel')}</h3>
         <div className="flex gap-2">
           <input
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !discovering) void handleDiscover(); }}
-            placeholder="https://voorbeeld.nl/cursusboek/"
+            placeholder={t('admin.imports.web.urlPlaceholder')}
             className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
             data-testid="input-web-url"
           />
@@ -186,7 +191,7 @@ export function WebImportPanel() {
             data-testid="button-discover-web"
           >
             {discovering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-            {discovering ? 'Ontdekken...' : 'Ontdek pagina\'s'}
+            {discovering ? t('admin.imports.web.discovering') : t('admin.imports.web.discover')}
           </button>
         </div>
       </div>
@@ -196,14 +201,17 @@ export function WebImportPanel() {
         <div className="bg-white border border-gray-200 rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-gray-900">
-              Gevonden pagina's <span className="text-sm font-normal text-gray-500">({selected.size}/{pages.length} geselecteerd)</span>
+              {t('admin.imports.web.foundPages')}{' '}
+              <span className="text-sm font-normal text-gray-500">
+                ({t('admin.imports.web.selectedCount', { selected: String(selected.size), total: String(pages.length) })})
+              </span>
             </h3>
             <button
               onClick={toggleAll}
               className="text-sm text-blue-600 hover:text-blue-700 font-medium"
               data-testid="button-toggle-all-web-pages"
             >
-              {selected.size === pages.length ? 'Deselecteer alles' : 'Selecteer alles'}
+              {selected.size === pages.length ? t('admin.imports.web.deselectAll') : t('admin.imports.web.selectAll')}
             </button>
           </div>
 
@@ -236,7 +244,7 @@ export function WebImportPanel() {
             data-testid="button-import-web-pages"
           >
             {importing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-            {importing ? 'Importeren...' : `Importeer ${selected.size} pagina('s)`}
+            {importing ? t('admin.imports.web.importing') : t('admin.imports.web.import', { count: String(selected.size) })}
           </button>
         </div>
       )}
@@ -248,21 +256,21 @@ export function WebImportPanel() {
             <div className="bg-green-50 border border-green-200 rounded-lg p-4" data-testid="result-web-imported">
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle className="w-5 h-5 text-green-600" />
-                <span className="text-sm font-medium text-green-900">Geïmporteerd</span>
+                <span className="text-sm font-medium text-green-900">{t('admin.imports.web.imported')}</span>
               </div>
               <p className="text-2xl font-bold text-green-900">{result.imported}</p>
             </div>
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4" data-testid="result-web-skipped">
               <div className="flex items-center gap-2 mb-2">
                 <AlertTriangle className="w-5 h-5 text-yellow-600" />
-                <span className="text-sm font-medium text-yellow-900">Overgeslagen</span>
+                <span className="text-sm font-medium text-yellow-900">{t('admin.imports.web.skipped')}</span>
               </div>
               <p className="text-2xl font-bold text-yellow-900">{result.skipped}</p>
             </div>
             <div className="bg-red-50 border border-red-200 rounded-lg p-4" data-testid="result-web-errors">
               <div className="flex items-center gap-2 mb-2">
                 <XCircle className="w-5 h-5 text-red-600" />
-                <span className="text-sm font-medium text-red-900">Fouten</span>
+                <span className="text-sm font-medium text-red-900">{t('admin.imports.web.errors')}</span>
               </div>
               <p className="text-2xl font-bold text-red-900">{result.errors}</p>
             </div>
@@ -273,7 +281,7 @@ export function WebImportPanel() {
               {result.results.filter((r) => r.status !== 'imported').map((r) => (
                 <div key={r.url} className="truncate">
                   <span className={r.status === 'error' ? 'text-red-600' : 'text-yellow-700'}>
-                    {r.status === 'error' ? 'Fout' : 'Overgeslagen'}
+                    {r.status === 'error' ? t('admin.imports.web.statusError') : t('admin.imports.web.statusSkipped')}
                   </span>{' '}— {r.url}{r.message ? ` (${r.message})` : ''}
                 </div>
               ))}

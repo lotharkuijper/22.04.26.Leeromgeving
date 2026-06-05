@@ -9,6 +9,7 @@ import {
   extractLinks,
   discoverPages,
   isBlockedHost,
+  fetchPage,
 } from '../webImport.js';
 
 describe('decodeHtmlEntities', () => {
@@ -174,6 +175,54 @@ function makeFetch(pages) {
     };
   };
 }
+
+// Fake fetch die één redirect-hop simuleert: bij `from` geeft het een 302 met
+// Location=`to`; bij elke andere URL een gewone 200 met wat HTML.
+function makeRedirectFetch(hops) {
+  return async (url) => {
+    if (hops[url]) {
+      return {
+        ok: false,
+        status: 302,
+        headers: { get: (k) => (k.toLowerCase() === 'location' ? hops[url] : null) },
+        text: async () => '',
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'text/html' : null) },
+      text: async () => '<html><body><p>ok</p></body></html>',
+    };
+  };
+}
+
+describe('fetchPage SSRF-redirect-hardening', () => {
+  it('weigert een redirect naar een link-local metadata-adres', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/start': 'http://169.254.169.254/latest/meta-data/' });
+    const res = await fetchPage('https://example.com/start', f);
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/geblokkeerde host/i);
+  });
+  it('weigert een redirect naar loopback', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/start': 'http://127.0.0.1:8080/admin' });
+    const res = await fetchPage('https://example.com/start', f);
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/geblokkeerde host/i);
+  });
+  it('weigert een redirect naar een interne hostname', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/start': 'http://vault.internal/secret' });
+    const res = await fetchPage('https://example.com/start', f);
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/geblokkeerde host/i);
+  });
+  it('volgt een redirect naar een toegestane publieke host', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/start': 'https://example.com/eind' });
+    const res = await fetchPage('https://example.com/start', f);
+    expect(res.ok).toBe(true);
+    expect(res.html).toContain('ok');
+  });
+});
 
 describe('discoverPages', () => {
   it('gebruikt de sitemap wanneer beschikbaar en filtert op de omgeving', async () => {
