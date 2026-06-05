@@ -403,6 +403,17 @@ export default function DocumentsPage() {
         setNotice({ kind: 'error', message: body.error || (en ? 'Download failed.' : 'Download mislukt.') });
         return;
       }
+      // Web-bron of getekende-URL-respons: de server geeft JSON met een URL terug
+      // in plaats van bytes. Open die in een nieuw tabblad.
+      if ((res.headers.get('content-type') || '').includes('application/json')) {
+        const body = await res.json().catch(() => ({} as { url?: string }));
+        if (body.url) {
+          window.open(body.url, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        setNotice({ kind: 'error', message: en ? 'Download failed.' : 'Download mislukt.' });
+        return;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

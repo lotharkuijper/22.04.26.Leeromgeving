@@ -1,9 +1,10 @@
 import { type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Download, ArrowRight, Library, Sparkles, Info } from 'lucide-react';
+import { Download, ArrowRight, Library, Sparkles, Info, Globe } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useLanguage } from '../i18n';
 import { ShareStatsImportPanel } from './ShareStatsImportPanel';
+import { WebImportPanel } from './WebImportPanel';
 
 // Een importbron = één bibliotheek die app-breed aan LEAP-VU gekoppeld is.
 // Nieuwe bibliotheken voeg je toe door één entry aan `sources` toe te voegen
@@ -31,6 +32,13 @@ export function ImportsHubPanel({ onNavigateToQuizSources }: ImportsHubPanelProp
       description: t('admin.imports.sources.sharestats.desc'),
       icon: Download,
       render: () => <ShareStatsImportPanel />,
+    },
+    {
+      id: 'website',
+      label: t('admin.imports.sources.website.label'),
+      description: t('admin.imports.sources.website.desc'),
+      icon: Globe,
+      render: () => <WebImportPanel />,
     },
   ];
 

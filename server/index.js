@@ -36,6 +36,16 @@ import {
   processPlainRagDocument as processPlainRagDocumentImpl,
 } from './ragProcessing.js';
 import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
+import {
+  discoverPages as discoverWebPages,
+  fetchPage as fetchWebPage,
+  htmlToText as webHtmlToText,
+  extractTitle as webExtractTitle,
+  normalizeUrl as normalizeWebUrl,
+  sameWebEnvironment as sameWebEnv,
+  isBlockedHost as isBlockedWebHost,
+  WEB_IMPORT_LIMITS,
+} from './webImport.js';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion } from './openaiSampling.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
@@ -1248,6 +1258,11 @@ app.get('/api/rag/documents/:documentId/download', async (req, res) => {
       if (!perm?.can_view) return res.status(403).json({ error: 'Geen toegang tot dit document.' });
     }
     const filename = String(doc.filename || doc.title || 'download').replace(/[\r\n"]/g, '_');
+    // Web-bron (Task #234): geen renderbaar/bewaard bestand, maar een externe
+    // URL. Geef die als JSON terug zodat de frontend de pagina in een tab opent.
+    if ((doc.file_type || '').toLowerCase() === 'web' && doc.file_path) {
+      return res.json({ url: doc.file_path, filename });
+    }
     const mimeType = doc.mime_type || getFileMimeType((doc.file_type || '').toLowerCase());
     if (!doc.file_path && pgPool) {
       const result = await pgPool.query(
@@ -1315,6 +1330,11 @@ app.get('/api/rag/documents/:documentId/view', async (req, res) => {
     }
 
     const title = String(doc.title || doc.filename || 'document');
+    // Web-bron (Task #234): geen renderbaar bestand — geef de externe URL terug
+    // zodat de viewer een link toont in plaats van te proberen te renderen.
+    if ((doc.file_type || '').toLowerCase() === 'web' && doc.file_path) {
+      return res.json({ kind: 'url', title, sourceType: 'web', url: doc.file_path });
+    }
     const ext = normalizeExt(doc.file_type || (doc.filename || '').split('.').pop());
 
     // Bronbytes ophalen uit storage (file_path) of uit de DB (file_bytes).
@@ -1414,6 +1434,10 @@ app.get('/api/admin/documents/:documentId/download', async (req, res) => {
       .maybeSingle();
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
     const filename = String(doc.filename || doc.title || 'download').replace(/[\r\n"]/g, '_');
+    // Web-bron (Task #234): geen bestand, maar een externe URL — open in een tab.
+    if ((doc.file_type || '').toLowerCase() === 'web' && doc.file_path) {
+      return res.json({ url: doc.file_path, filename });
+    }
     const mimeType = doc.mime_type || getFileMimeType((doc.file_type || '').toLowerCase());
     // Route 1: binary opgeslagen in DB (bijv. .omv, .sav) — lees via pgPool voor correcte bytes
     if (!doc.file_path && pgPool) {
@@ -1879,6 +1903,273 @@ app.post('/api/admin/create-rag-folder', async (req, res) => {
   } catch (err) {
     console.error('[create-rag-folder] Unexpected error:', err);
     return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+// Zorgt dat er een RAG-map (`RAG - <cursusnaam>`) bestaat, met permissies en
+// een koppeling aan de cursus. Hergebruikt een bestaande map (idempotent).
+// Spiegelt de logica van /api/admin/create-rag-folder voor server-side gebruik
+// door de web-import. Retourneert { folderId, created }.
+async function ensureCourseRagFolder(courseId, courseName, userId) {
+  // 1) Heeft de cursus al een gekoppelde RAG-map? Hergebruik die dan, ook als de
+  //    cursusnaam intussen is gewijzigd. Dit voorkomt dubbele mappen.
+  const { data: assignments } = await supabaseAdmin
+    .from('course_folder_assignments')
+    .select('folder_id')
+    .eq('course_id', courseId);
+  const assignedIds = (assignments || []).map((a) => a.folder_id).filter(Boolean);
+  if (assignedIds.length > 0) {
+    const { data: ragFolder } = await supabaseAdmin
+      .from('document_folders')
+      .select('id')
+      .in('id', assignedIds)
+      .eq('folder_type', 'rag_sources')
+      .limit(1)
+      .maybeSingle();
+    if (ragFolder) {
+      return { folderId: ragFolder.id, created: false };
+    }
+  }
+
+  // 2) Anders: zoek op naam (mogelijk al aangemaakt zonder koppeling) of maak nieuw.
+  const { data: existingFolder } = await supabaseAdmin
+    .from('document_folders')
+    .select('id')
+    .eq('name', `RAG - ${courseName}`)
+    .eq('folder_type', 'rag_sources')
+    .maybeSingle();
+
+  let folderId;
+  let created = false;
+  if (existingFolder) {
+    folderId = existingFolder.id;
+  } else {
+    const { data: newFolder, error: folderError } = await supabaseAdmin
+      .from('document_folders')
+      .insert({
+        name: `RAG - ${courseName}`,
+        description: `RAG-bronnen voor cursus ${courseName}`,
+        parent_folder_id: null,
+        created_by: userId,
+        folder_type: 'rag_sources',
+        is_root: false,
+      })
+      .select()
+      .single();
+    if (folderError || !newFolder) {
+      throw new Error(`Kon RAG-map niet aanmaken: ${folderError?.message || 'onbekende fout'}`);
+    }
+    folderId = newFolder.id;
+    created = true;
+
+    const { error: permError } = await supabaseAdmin
+      .from('folder_permissions')
+      .insert([
+        { folder_id: folderId, role: 'admin', can_view: true, can_edit: true },
+        { folder_id: folderId, role: 'docent', can_view: true, can_edit: true },
+        { folder_id: folderId, role: 'student', can_view: true, can_edit: false },
+      ]);
+    if (permError) {
+      console.warn('[ensureCourseRagFolder] permissions insert error (non-fatal):', permError.message);
+    }
+  }
+
+  const { data: existingAssignment } = await supabaseAdmin
+    .from('course_folder_assignments')
+    .select('id')
+    .eq('course_id', courseId)
+    .eq('folder_id', folderId)
+    .maybeSingle();
+  if (!existingAssignment) {
+    const { error: assignError } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .insert({ course_id: courseId, folder_id: folderId });
+    if (assignError) {
+      throw new Error(`Kon map niet koppelen aan cursus: ${assignError.message}`);
+    }
+  }
+
+  return { folderId, created };
+}
+
+// POST /api/admin/import-web/discover — ontdek de pagina's van een webomgeving
+// (Task #234). Body: { url }. Crawlt (sitemap of BFS) binnen dezelfde omgeving
+// en geeft een lijst { url, title } terug zodat de docent kan kiezen wat te
+// importeren. Beschikbaar voor staff (admin of docent ergens).
+app.post('/api/admin/import-web/discover', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Alleen docenten of admins mogen importeren.' });
+
+  const rawUrl = String(req.body?.url || '').trim();
+  const start = normalizeWebUrl(rawUrl);
+  if (!start) return res.status(400).json({ error: 'Ongeldige URL. Geef een volledige http(s)-URL op.' });
+  if (isBlockedWebHost(start)) {
+    return res.status(400).json({ error: 'Deze URL wijst naar een intern of niet-toegestaan adres.' });
+  }
+
+  try {
+    const { pages, method, warnings } = await discoverWebPages(start, fetch);
+    return res.json({ pages, method, warnings, baseUrl: start });
+  } catch (err) {
+    console.error('[import-web/discover] fout:', err);
+    return res.status(500).json({ error: err.message || 'Ontdekken van pagina\'s mislukt.' });
+  }
+});
+
+// POST /api/admin/import-web/import — importeer geselecteerde pagina's als
+// RAG-bronnen in de cursus (Task #234). Body: { courseId, baseUrl, pages: [{url,title?}] }.
+// Per pagina: ophalen → schone tekst → chunks → embeddings → opslaan als
+// documents-rij (file_type='web', file_path=url) + document_chunks. Idempotent
+// per (folder, url): bestaande web-bron wordt hergebruikt en bijgewerkt.
+app.post('/api/admin/import-web/import', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+
+  const courseId = req.body?.courseId;
+  const baseUrl = String(req.body?.baseUrl || '').trim();
+  const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
+  if (!courseId) return res.status(400).json({ error: 'courseId is verplicht.' });
+  if (pages.length === 0) return res.status(400).json({ error: 'Geen pagina\'s geselecteerd om te importeren.' });
+
+  if (!(await isStaffForCourse(r.user, r.profile, courseId))) {
+    return res.status(403).json({ error: 'Je bent geen docent van deze cursus.' });
+  }
+
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!openaiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet geconfigureerd.' });
+
+  try {
+    const { data: course } = await supabaseAdmin
+      .from('courses').select('id, name').eq('id', courseId).maybeSingle();
+    if (!course) return res.status(404).json({ error: 'Cursus niet gevonden.' });
+
+    const { folderId } = await ensureCourseRagFolder(courseId, course.name, r.user.id);
+
+    // De baseUrl bepaalt de toegestane scope: alleen pagina's binnen dezelfde
+    // webomgeving mogen geïmporteerd worden. Zonder geldige baseUrl weigeren we,
+    // zodat een client niet zomaar willekeurige URL's kan laten ophalen.
+    const scope = normalizeWebUrl(baseUrl);
+    if (!scope || isBlockedWebHost(scope)) {
+      return res.status(400).json({ error: 'Ongeldige of niet-toegestane baseUrl.' });
+    }
+
+    // Pagina-URL's normaliseren, ontdubbelen, binnen de scope houden en niet naar
+    // interne adressen laten wijzen. Buiten de scope/limiet wordt overgeslagen.
+    const seen = new Set();
+    const targets = [];
+    let outOfScope = 0;
+    for (const p of pages) {
+      const url = normalizeWebUrl(String(p?.url || '').trim());
+      if (!url || seen.has(url)) continue;
+      if (isBlockedWebHost(url) || !sameWebEnv(scope, url)) { outOfScope++; continue; }
+      seen.add(url);
+      targets.push({ url, title: typeof p?.title === 'string' ? p.title.trim() : '' });
+      if (targets.length >= WEB_IMPORT_LIMITS.MAX_PAGES) break;
+    }
+    if (targets.length === 0) {
+      return res.status(400).json({ error: 'Geen geldige pagina\'s binnen de opgegeven website-scope.' });
+    }
+
+    let imported = 0;
+    let skipped = 0;
+    let errors = 0;
+    let totalChunks = 0;
+    const results = [];
+
+    for (const target of targets) {
+      try {
+        const resp = await fetchWebPage(target.url, fetch);
+        if (!resp.ok) {
+          errors++;
+          results.push({ url: target.url, status: 'error', message: `HTTP ${resp.status || 'netwerkfout'}` });
+          continue;
+        }
+        const text = webHtmlToText(resp.html);
+        if (text.length < WEB_IMPORT_LIMITS.MIN_TEXT_CHARS) {
+          skipped++;
+          results.push({ url: target.url, status: 'skipped', message: 'Te weinig leesbare tekst' });
+          continue;
+        }
+        const title = (target.title || webExtractTitle(resp.html) || target.url).slice(0, 280);
+        const chunks = chunkPlainText(text);
+        if (!chunks.length) {
+          skipped++;
+          results.push({ url: target.url, status: 'skipped', message: 'Geen chunks' });
+          continue;
+        }
+        const embeddings = await embedTextsServer(chunks, openaiKey);
+
+        // Idempotent: bestaande web-bron voor dezelfde URL in deze map hergebruiken.
+        const { data: existingDoc } = await supabaseAdmin
+          .from('documents')
+          .select('id')
+          .eq('folder_id', folderId)
+          .eq('file_path', target.url)
+          .eq('file_type', 'web')
+          .maybeSingle();
+
+        let docId;
+        if (existingDoc) {
+          docId = existingDoc.id;
+          const { error: delErr } = await supabaseAdmin
+            .from('document_chunks').delete().eq('document_id', docId);
+          if (delErr) throw new Error(`Kon oude chunks niet verwijderen: ${delErr.message}`);
+          const { error: updErr } = await supabaseAdmin.from('documents').update({
+            title,
+            filename: title,
+            mime_type: 'text/html',
+            processing_status: 'completed',
+            total_chunks: chunks.length,
+          }).eq('id', docId);
+          if (updErr) throw new Error(`Kon document niet bijwerken: ${updErr.message}`);
+        } else {
+          const { data: newDoc, error: docErr } = await supabaseAdmin
+            .from('documents')
+            .insert({
+              title,
+              filename: title,
+              file_path: target.url,
+              file_type: 'web',
+              bucket: 'rag_sources',
+              folder_id: folderId,
+              mime_type: 'text/html',
+              processing_status: 'completed',
+              total_chunks: chunks.length,
+              uploaded_by: r.user.id,
+            })
+            .select('id')
+            .single();
+          if (docErr || !newDoc) throw new Error(docErr?.message || 'Kon document niet aanmaken');
+          docId = newDoc.id;
+        }
+
+        const rows = chunks.map((content, i) => ({
+          document_id: docId,
+          content,
+          embedding: embeddings[i],
+          chunk_index: i,
+          metadata: { source: 'web', sourceUrl: target.url },
+        }));
+        const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
+        if (insErr) throw new Error(insErr.message);
+
+        imported++;
+        totalChunks += chunks.length;
+        results.push({ url: target.url, status: 'imported', title, chunks: chunks.length });
+      } catch (err) {
+        errors++;
+        results.push({ url: target.url, status: 'error', message: err.message || 'Onbekende fout' });
+        console.error(`[import-web/import] pagina mislukt (${target.url}):`, err.message);
+      }
+    }
+
+    return res.json({ imported, skipped, errors, outOfScope, totalChunks, folderId, courseName: course.name, results });
+  } catch (err) {
+    console.error('[import-web/import] fout:', err);
+    return res.status(500).json({ error: err.message || 'Web-import mislukt.' });
   }
 });
 

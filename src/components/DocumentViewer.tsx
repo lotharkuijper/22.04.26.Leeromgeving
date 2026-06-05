@@ -25,7 +25,8 @@ interface DocumentViewerProps {
 
 type ViewResponse =
   | { kind: 'pdf'; title: string; sourceType: string; url: string }
-  | { kind: 'text'; title: string; sourceType: string; text: string };
+  | { kind: 'text'; title: string; sourceType: string; text: string }
+  | { kind: 'url'; title: string; sourceType: string; url: string };
 
 export function DocumentViewer({ documentId, title, lang, onClose, onContextChange }: DocumentViewerProps) {
   const [loading, setLoading] = useState(true);
@@ -140,6 +141,15 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
           setTextContent(data.text);
           setTotalPages(1);
           setLoading(false);
+          return;
+        }
+
+        // Webbron: er is geen lokaal bestand om te renderen. Open de originele
+        // pagina in een nieuw tabblad en sluit de viewer weer.
+        if (data.kind === 'url') {
+          window.open(data.url, '_blank', 'noopener,noreferrer');
+          setLoading(false);
+          onClose();
           return;
         }
 
