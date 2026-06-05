@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { evaluateExplanation, llmErrorToDutch } from '../services/llm.service';
-import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, chunkToDisplaySource, ragDocumentDownloadUrl, openRagDocument } from '../services/rag.service';
+import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocument, chunkToDisplaySource, ragDocumentDownloadUrl, openRagDocument, fetchConceptEvidence } from '../services/rag.service';
 import { BookOpen, Search, Send, CheckCircle, AlertCircle, RefreshCw, LogOut, Sparkles, Trash2, BookText, X, Loader2, History } from 'lucide-react';
 import { SourceList } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
@@ -407,10 +407,28 @@ export function ExplainPage() {
             }
           : undefined
       );
-      const chunks = ragResult.chunks;
+      // Task #243: voeg de bij extractie opgeslagen bewijsfragmenten samen met
+      // de live RAG-resultaten. Zo is er voor geëxtraheerde begrippen altijd
+      // cursusmateriaal-context beschikbaar, ook als de live zoekopdracht door
+      // drempel/instellingen niets oplevert. Dedupe op chunk-id of op
+      // document+begin-van-tekst; bij dubbels houden we de hoogste similarity.
+      const storedEvidence = selectedConcept.id
+        ? await fetchConceptEvidence(selectedConcept.id)
+        : [];
+      const mergedMap = new Map<string, typeof ragResult.chunks[number]>();
+      for (const ch of [...ragResult.chunks, ...storedEvidence]) {
+        const key = ch.id || `${ch.documentId || ''}:${(ch.content || '').slice(0, 80)}`;
+        const existing = mergedMap.get(key);
+        if (!existing || (ch.similarity || 0) > (existing.similarity || 0)) {
+          mergedMap.set(key, ch);
+        }
+      }
+      const chunks = Array.from(mergedMap.values()).sort(
+        (a, b) => (b.similarity || 0) - (a.similarity || 0)
+      );
       setRetrievedStats({
         threshold: ragResult.threshold,
-        maxSimilarity: ragResult.maxSimilarity,
+        maxSimilarity: Math.max(ragResult.maxSimilarity, ...chunks.map(c => c.similarity || 0), 0),
         candidatesConsidered: ragResult.candidatesConsidered,
         searchPerformed: ragResult.searchPerformed,
       });

@@ -86,6 +86,26 @@ async function fetchPrimaryRagFolders(
   }
 }
 
+// Task #243: haal de bij extractie opgeslagen bewijsfragmenten voor een begrip
+// op. Deze dienen in "Ik leg uit" als gegarandeerde basis-context uit het
+// cursusmateriaal, onafhankelijk van de live RAG-zoekopdracht. Faalt stil
+// (lege lijst) zodat de pagina blijft werken zonder de migratie.
+export async function fetchConceptEvidence(conceptId: string): Promise<DocumentChunk[]> {
+  if (!conceptId) return [];
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const headers: Record<string, string> = {};
+    if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+    const res = await fetch(`/api/concepts/evidence?conceptId=${encodeURIComponent(conceptId)}`, { headers });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.evidence) ? (data.evidence as DocumentChunk[]) : [];
+  } catch (err) {
+    console.warn('[RAG] Bewijsfragmenten ophalen mislukt:', err);
+    return [];
+  }
+}
+
 export interface RAGSearchStats {
   chunks: DocumentChunk[];
   threshold: number;

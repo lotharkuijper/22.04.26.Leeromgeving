@@ -96,6 +96,8 @@ export function RAGSetupPanel() {
     minEvidenceChunks?: number;
     rejected?: { name: string; maxScore: number }[];
     concepts?: { id: string; name: string; category: string; definition: string }[];
+    evidenceWritten?: number;
+    conceptsLinked?: number;
   } | null>(null);
   const [conceptLanguage, setConceptLanguage] = useState<'nl' | 'en' | 'auto'>('auto');
   const [loweringThreshold, setLoweringThreshold] = useState(false);
@@ -232,6 +234,8 @@ export function RAGSetupPanel() {
         minEvidenceChunks: data.minEvidenceChunks,
         rejected: Array.isArray(data.rejected) ? data.rejected : [],
         concepts: Array.isArray(data.concepts) ? data.concepts : [],
+        evidenceWritten: data.evidenceWritten,
+        conceptsLinked: data.conceptsLinked,
       });
     } catch (err) {
       setExtractResult({
@@ -477,6 +481,15 @@ export function RAGSetupPanel() {
                         <span>{t('admin.ragSetup.extract.statsThreshold', { value: extractResult.verificationThreshold.toFixed(2), min: String(extractResult.minEvidenceChunks ?? 1) })}</span>
                       </>
                     )}
+                  </div>
+                )}
+
+                {typeof extractResult.conceptsLinked === 'number' && extractResult.conceptsLinked > 0 && (
+                  <div className="text-xs text-emerald-700" data-testid="text-extract-evidence">
+                    {t('admin.ragSetup.extract.statsEvidenceLinked', {
+                      concepts: String(extractResult.conceptsLinked),
+                      fragments: String(extractResult.evidenceWritten ?? 0),
+                    })}
                   </div>
                 )}
 

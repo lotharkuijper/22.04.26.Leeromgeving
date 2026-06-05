@@ -72,6 +72,11 @@ Per module (`chat`, `explain`, `quiz`, `project`) en per cursus instelbaar via `
 - Prompt-injection-hardening: `sanitizeEventNote` in `personaRelationship.js` strippt newlines/tabs/control-chars + aanhalingstekens uit event-notes (incl. cue-redenen) vóór ze opnieuw in een system-prompt via `formatEvent` belanden; redenen worden tussen aanhalingstekens als citaat gewrapped en gecapt op 200 tekens, zodat een LLM-gegenereerde reden (uit studentcontent) geen nieuwe instructies kan injecteren in latere persona-chats.
 - i18n: `room.relationship.eventSource.persona_chat_close` ("gespreksafronding" / "conversation close") + admin-keys `admin.projects.personas.cueEmissionLabel/Hint/cueTableTemplateTitle/cueTableTemplate` (NL+EN). `ProjectRoomPage` mapt de nieuwe event-source naar de label.
 
+## Begrip ↔ bron-bewijs bij extractie (Task #243)
+- Migratie `20260605100000_concept_evidence.sql` + RLS-verstrenging `20260605110000_concept_evidence_rls_tighten.sql`: tabel `concept_evidence` (concept_id FK CASCADE, course_id, document_id, chunk_id, snippet, similarity, created_at). RLS is cursus-scoped (admin/superuser + `course_members` van de cursus); schrijven enkel via service-role. Server detecteert defensief via `conceptEvidenceSchemaReady` (`detectConceptEvidenceSchema()` bij startup).
+- `/api/admin/extract-concepts`: de verificatielus bewaart nu de `matched`-chunks (i.p.v. weggooien) en schrijft na `runReplace()` per geaccepteerd begrip de top-5 bronfragmenten weg (case-insensitief begrip-resolven, oude koppelingen eerst opruimen). Response bevat `evidenceWritten`/`conceptsLinked`; `RAGSetupPanel` toont dit via `admin.ragSetup.extract.statsEvidenceLinked` (NL+EN).
+- `GET /api/concepts/evidence?conceptId=` (auth via `requireAuthUser`): filtert bewijsrijen per `course_id` via `userHasCourseAccess` (begrippen kunnen in de key_points-fallback gedeeld zijn tussen cursussen). `ExplainPage` merget opgeslagen bewijs (`fetchConceptEvidence` in `rag.service`) met de live RAG-chunks (dedupe op id of `documentId:content`-prefix, hoogste similarity wint), zodat geëxtraheerde begrippen altijd cursusmateriaal-context hebben.
+
 ## Conventies
 - TypeScript strict, geen package.json edits.
 - Data-testids op interactieve elementen.

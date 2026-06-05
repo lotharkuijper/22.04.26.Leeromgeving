@@ -3987,15 +3987,22 @@ ${combinedText}`;
           matchedCount: result?.matched?.length || 0,
           maxScore: result?.maxScore || 0,
           candidates: result?.candidatesInAllowed || 0,
+          // Task #243: bewaar de ondersteunende chunks zodat we ze later als
+          // begrip-bronkoppeling kunnen wegschrijven (i.p.v. weggooien).
+          matched: result?.matched || [],
         };
       })
     );
 
     const validConcepts = [];
     const rejectedConcepts = [];
+    // Task #243: map begripsnaam (genormaliseerd) → top-bewijschunks. Wordt na
+    // de insert/update gebruikt om de koppeling in concept_evidence te schrijven.
+    const evidenceByName = new Map();
     for (const r of verificationResults) {
       if (r.matchedCount >= minEvidence) {
         validConcepts.push(r.concept);
+        evidenceByName.set(r.concept.name.toLowerCase().trim(), r.matched);
       } else {
         rejectedConcepts.push(r);
       }
@@ -4170,6 +4177,72 @@ ${combinedText}`;
       console.error('[extract-concepts] runReplace na insert mislukt:', replaceErr);
     }
 
+    // Task #243: schrijf de begrip ↔ bronfragment-koppeling weg. Voor elk
+    // geaccepteerd begrip dat nu in de cursus bestaat (nieuw, bijgewerkt of
+    // reeds aanwezig) bewaren we de top-bewijschunks uit de verificatiestap.
+    // Bij opnieuw extraheren worden de oude koppelingen per begrip eerst
+    // opgeruimd, zodat er geen verouderde fragmenten blijven rondslingeren.
+    let evidenceWritten = 0;
+    let conceptsLinked = 0;
+    if (conceptEvidenceSchemaReady && validConcepts.length > 0) {
+      try {
+        const acceptedNames = validConcepts.map((c) => c.name.toLowerCase().trim());
+        // Resolveer de concept-id's die nu bij deze cursus horen.
+        let conceptRows = [];
+        if (conceptsHasCourseId) {
+          // Case-insensitief matchen: de duplicaat-detectie elders normaliseert
+          // op lowercase, dus resolveren we hier net zo om geaccepteerde
+          // begrippen niet te missen door hoofdletterverschillen.
+          const { data } = await supabaseAdmin
+            .from('concepts')
+            .select('id, name')
+            .eq('course_id', courseId);
+          conceptRows = (data || []).filter((c) => acceptedNames.includes(c.name.toLowerCase().trim()));
+        } else {
+          const { data } = await supabaseAdmin
+            .from('concepts')
+            .select('id, name, key_points')
+            .contains('key_points', [courseMarker]);
+          conceptRows = (data || []).filter((c) => acceptedNames.includes(c.name.toLowerCase().trim()));
+        }
+
+        const idsToRefresh = conceptRows.map((c) => c.id);
+        if (idsToRefresh.length > 0) {
+          // Verouderde koppelingen voor deze begrippen verwijderen vóór de herinsert.
+          await supabaseAdmin.from('concept_evidence').delete().in('concept_id', idsToRefresh);
+
+          const evidenceRows = [];
+          for (const row of conceptRows) {
+            const matched = evidenceByName.get(row.name.toLowerCase().trim()) || [];
+            const top = matched.slice(0, 5);
+            if (top.length > 0) conceptsLinked++;
+            for (const m of top) {
+              evidenceRows.push({
+                concept_id: row.id,
+                course_id: courseId,
+                document_id: m.document_id || null,
+                chunk_id: m.id || null,
+                snippet: typeof m.content === 'string' ? m.content.slice(0, 4000) : '',
+                similarity: Number.isFinite(m.similarity) ? m.similarity : 0,
+              });
+            }
+          }
+
+          if (evidenceRows.length > 0) {
+            const { error: evErr } = await supabaseAdmin.from('concept_evidence').insert(evidenceRows);
+            if (evErr) {
+              console.error('[extract-concepts] concept_evidence insert error:', evErr.message);
+            } else {
+              evidenceWritten = evidenceRows.length;
+            }
+          }
+        }
+        console.log(`[extract-concepts] Bewijskoppeling: ${conceptsLinked} begrippen, ${evidenceWritten} fragmenten`);
+      } catch (evErr) {
+        console.error('[extract-concepts] Bewijskoppeling wegschrijven mislukt:', evErr.message);
+      }
+    }
+
     const totalAdded = inserted.length + updatedCount;
 
     console.log(`[extract-concepts] Done for course ${courseId}: ${inserted.length} new, ${updatedCount} updated, ${skipped} already tagged, ${verificationRejected} afgewezen door verificatie`);
@@ -4190,6 +4263,8 @@ ${combinedText}`;
       minEvidenceChunks: minEvidence,
       rejected: rejectedSamples,
       language: conceptLanguage,
+      evidenceWritten,
+      conceptsLinked,
       message: `${totalAdded} begrippen toegevoegd/bijgewerkt voor deze cursus${verifMsg}`,
     });
   } catch (err) {
@@ -4296,6 +4371,80 @@ app.get('/api/concepts', async (req, res) => {
     return res.json({ concepts: allConcepts || [], source: 'global' });
   } catch (err) {
     console.error('[concepts] Unexpected error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Task #243: opgeslagen bewijsfragmenten per begrip. Wordt door "Ik leg uit"
+// gebruikt als gegarandeerde basis-context uit het cursusmateriaal, los van de
+// live RAG-zoekopdracht. Geeft een lege lijst terug als de migratie nog niet is
+// toegepast, zodat de pagina blijft werken.
+app.get('/api/concepts/evidence', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { conceptId } = req.query;
+  if (!conceptId) {
+    return res.status(400).json({ error: 'conceptId is required' });
+  }
+  if (!conceptEvidenceSchemaReady) {
+    return res.json({ evidence: [] });
+  }
+  try {
+    const { data: allRows, error } = await supabaseAdmin
+      .from('concept_evidence')
+      .select('id, chunk_id, document_id, snippet, similarity, course_id')
+      .eq('concept_id', conceptId)
+      .order('similarity', { ascending: false })
+      .limit(20);
+    if (error) {
+      console.error('[concepts/evidence] query error:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
+    // Autorisatie: begrippen kunnen (in de key_points-fallback) gedeeld zijn
+    // tussen cursussen, dus filteren we de bewijsrijen tot de cursussen waar de
+    // beller toegang toe heeft. Zo lekt een willekeurig concept-id geen
+    // cursusmateriaal van een andere cursus. Toegang wordt per course_id
+    // gecachet om herhaalde checks te voorkomen.
+    const accessCache = new Map();
+    const allowed = [];
+    for (const r of allRows || []) {
+      if (!r.course_id) { allowed.push(r); continue; }
+      if (!accessCache.has(r.course_id)) {
+        accessCache.set(r.course_id, await userHasCourseAccess(auth.user, auth.profile, r.course_id));
+      }
+      if (accessCache.get(r.course_id)) allowed.push(r);
+    }
+    const rows = allowed.slice(0, 10);
+    const docIds = [...new Set((rows || []).map((r) => r.document_id).filter(Boolean))];
+    const titleById = new Map();
+    const metaById = new Map();
+    if (docIds.length > 0) {
+      const { data: docs } = await supabaseAdmin
+        .from('documents')
+        .select('id, title')
+        .in('id', docIds);
+      for (const d of docs || []) titleById.set(d.id, d.title);
+      // Dia-reeks-metadata van de chunk meenemen wanneer beschikbaar.
+      const chunkIds = [...new Set((rows || []).map((r) => r.chunk_id).filter(Boolean))];
+      if (chunkIds.length > 0) {
+        const { data: chunkMeta } = await supabaseAdmin
+          .from('document_chunks')
+          .select('id, metadata')
+          .in('id', chunkIds);
+        for (const c of chunkMeta || []) metaById.set(c.id, c.metadata);
+      }
+    }
+    const evidence = (rows || []).map((r) => ({
+      id: r.chunk_id || r.id,
+      content: r.snippet || '',
+      documentTitle: titleById.get(r.document_id) || 'Cursusmateriaal',
+      documentId: r.document_id || undefined,
+      similarity: typeof r.similarity === 'number' ? r.similarity : 0,
+      metadata: (r.chunk_id && metaById.get(r.chunk_id)) || null,
+    }));
+    return res.json({ evidence });
+  } catch (err) {
+    console.error('[concepts/evidence] Unexpected error:', err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -5970,6 +6119,26 @@ async function initChatbotPromptSection() {
 // de migratie nog niet is toegepast; endpoints geven dan een 503 met
 // duidelijke uitleg.
 let quizSourcesSchemaReady = false;
+// Task #243: concept_evidence koppelt elk begrip aan zijn ondersteunende
+// RAG-bronfragmenten bij extractie. Detecteer defensief of de migratie is
+// toegepast, zodat extractie en "Ik leg uit" zonder de tabel blijven werken.
+let conceptEvidenceSchemaReady = false;
+async function detectConceptEvidenceSchema() {
+  if (!supabaseAdmin) return;
+  try {
+    const { error } = await supabaseAdmin.from('concept_evidence').select('id').limit(1);
+    conceptEvidenceSchemaReady = !error;
+    if (error) {
+      console.warn('[init] concept_evidence schema NIET gevonden:', error.message);
+      console.warn('[init] Pas migratie 20260605100000_concept_evidence.sql toe in Supabase.');
+    } else {
+      console.log('[init] concept_evidence schema beschikbaar.');
+    }
+  } catch (e) {
+    conceptEvidenceSchemaReady = false;
+    console.warn('[init] concept_evidence schema detectie mislukt:', e.message);
+  }
+}
 // Bron-agnostische itembank: alle 'itembank'-achtige bronnen die items in
 // quiz_questions wegschrijven met een exsection_path. ShareStats is er één van;
 // 'csv_import' is een tweede provider (docent-geüploade CSV). Lees-endpoints
@@ -11380,6 +11549,7 @@ if (process.env.NODE_ENV !== 'test') {
     detectConceptsCourseIdColumn();
     detectQuizAttemptsSchema();
     detectQuizSourcesSchema();
+    detectConceptEvidenceSchema();
     initChatbotPromptSection();
     // Wacht kort tot promptsHasSection geinitialiseerd is alvorens quiz-prompts
     // aan te maken (initChatbotPromptSection draait async).
