@@ -86,7 +86,20 @@ export function RAGSetupPanel() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<ActiveSection>('upload');
   const [extracting, setExtracting] = useState(false);
-  const [extractResult, setExtractResult] = useState<{ count: number; skipped: number; message: string } | null>(null);
+  const [extractResult, setExtractResult] = useState<{
+    count: number;
+    skipped: number;
+    message: string;
+    candidatesFromLLM?: number;
+    verificationRejected?: number;
+    verificationThreshold?: number;
+    minEvidenceChunks?: number;
+    rejected?: { name: string; maxScore: number }[];
+    concepts?: { id: string; name: string; category: string; definition: string }[];
+  } | null>(null);
+  const [conceptLanguage, setConceptLanguage] = useState<'nl' | 'en' | 'auto'>('auto');
+  const [loweringThreshold, setLoweringThreshold] = useState(false);
+  const [lowerThresholdNote, setLowerThresholdNote] = useState<string | null>(null);
   const [processedDocs, setProcessedDocs] = useState<ProcessedDocument[]>([]);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const [existingConceptCount, setExistingConceptCount] = useState(0);
@@ -190,6 +203,7 @@ export function RAGSetupPanel() {
     if (!activeCourseId || !session?.access_token) return;
     setExtracting(true);
     setExtractResult(null);
+    setLowerThresholdNote(null);
     try {
       const response = await fetch('/api/admin/extract-concepts', {
         method: 'POST',
@@ -200,6 +214,7 @@ export function RAGSetupPanel() {
         body: JSON.stringify({
           courseId: activeCourseId,
           replace: replaceMode,
+          language: conceptLanguage,
           documentIds: selectedDocIds.size < processedDocs.length ? Array.from(selectedDocIds) : [],
         }),
       });
@@ -211,6 +226,12 @@ export function RAGSetupPanel() {
         count: (data.concepts?.length ?? 0) + (data.updated ?? 0),
         skipped: data.skipped ?? 0,
         message: data.message || '',
+        candidatesFromLLM: data.candidatesFromLLM,
+        verificationRejected: data.verificationRejected,
+        verificationThreshold: data.verificationThreshold,
+        minEvidenceChunks: data.minEvidenceChunks,
+        rejected: Array.isArray(data.rejected) ? data.rejected : [],
+        concepts: Array.isArray(data.concepts) ? data.concepts : [],
       });
     } catch (err) {
       setExtractResult({
@@ -221,6 +242,43 @@ export function RAGSetupPanel() {
     } finally {
       setExtracting(false);
     }
+  };
+
+  // Verlaag de extractie-drempel (-0.1, min 0.10) en draai de extractie
+  // direct opnieuw. Geeft de docent een 1-klik-uitweg wanneer alle kandidaten
+  // net onder de verificatiedrempel bleven steken.
+  const handleLowerThresholdAndRetry = async () => {
+    if (!activeCourseId || !session?.access_token) return;
+    const current = extractResult?.verificationThreshold ?? 0.55;
+    // Verlaag met 0.1 maar nooit onder 0.10 — en nooit hoger dan de huidige
+    // waarde (anders zou een toch al lage drempel per ongeluk omhoog gaan).
+    const next = Math.min(current, Math.max(0.10, Math.round((current - 0.1) * 100) / 100));
+    setLoweringThreshold(true);
+    setLowerThresholdNote(null);
+    try {
+      const resp = await fetch('/api/rag-settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          courseId: activeCourseId,
+          settings: { extraction: { similarity_threshold: next } },
+        }),
+      });
+      if (!resp.ok) {
+        const d = await resp.json().catch(() => ({}));
+        throw new Error(d.error || `Server error ${resp.status}`);
+      }
+      setLowerThresholdNote(t('admin.ragSetup.extract.thresholdLowered', { value: next.toFixed(2) }));
+    } catch (err) {
+      setLowerThresholdNote(err instanceof Error ? err.message : t('common.unknownError'));
+      setLoweringThreshold(false);
+      return;
+    }
+    setLoweringThreshold(false);
+    await handleExtractConcepts();
   };
 
   if (activeCourseRagFolderIds.length === 0) {
@@ -387,18 +445,115 @@ export function RAGSetupPanel() {
             )}
 
             {extractResult && (
-              <div className={`mb-3 text-sm px-3 py-2 rounded-lg ${
-                extractResult.count > 0
-                  ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-                  : 'bg-gray-100 border border-gray-200 text-gray-700'
-              }`}>
-                {extractResult.message}
-                {extractResult.skipped > 0 && (
-                  <span className="ml-1 text-gray-500">({extractResult.skipped} {t('admin.ragSetup.extract.alreadyPresent')})</span>
+              <div
+                className={`mb-3 text-sm px-3 py-2.5 rounded-lg space-y-2 ${
+                  extractResult.count > 0
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : 'bg-gray-100 border border-gray-200 text-gray-700'
+                }`}
+                data-testid="text-extract-result"
+              >
+                <div>
+                  {extractResult.message}
+                  {extractResult.skipped > 0 && (
+                    <span className="ml-1 text-gray-500">({extractResult.skipped} {t('admin.ragSetup.extract.alreadyPresent')})</span>
+                  )}
+                </div>
+
+                {typeof extractResult.candidatesFromLLM === 'number' && (
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
+                    <span data-testid="text-extract-candidates">{t('admin.ragSetup.extract.statsCandidates', { count: String(extractResult.candidatesFromLLM) })}</span>
+                    <span>·</span>
+                    <span className="text-emerald-700" data-testid="text-extract-accepted">{t('admin.ragSetup.extract.statsAccepted', { count: String(extractResult.count) })}</span>
+                    {typeof extractResult.verificationRejected === 'number' && extractResult.verificationRejected > 0 && (
+                      <>
+                        <span>·</span>
+                        <span className="text-amber-700" data-testid="text-extract-rejected">{t('admin.ragSetup.extract.statsRejected', { count: String(extractResult.verificationRejected) })}</span>
+                      </>
+                    )}
+                    {typeof extractResult.verificationThreshold === 'number' && (
+                      <>
+                        <span>·</span>
+                        <span>{t('admin.ragSetup.extract.statsThreshold', { value: extractResult.verificationThreshold.toFixed(2), min: String(extractResult.minEvidenceChunks ?? 1) })}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {extractResult.concepts && extractResult.concepts.length > 0 && (
+                  <div className="pt-1">
+                    <p className="text-xs font-medium text-emerald-800 mb-1">{t('admin.ragSetup.extract.savedPreviewTitle')}</p>
+                    <div className="flex flex-wrap gap-1.5" data-testid="list-saved-concepts">
+                      {extractResult.concepts.slice(0, 24).map((c) => (
+                        <span
+                          key={c.id}
+                          title={c.definition}
+                          className="inline-flex items-center px-2 py-0.5 bg-white text-emerald-800 text-xs rounded-full border border-emerald-200"
+                          data-testid={`chip-saved-concept-${c.id}`}
+                        >
+                          {c.name}
+                        </span>
+                      ))}
+                      {extractResult.concepts.length > 24 && (
+                        <span className="text-xs text-emerald-700">{t('admin.ragSetup.extract.savedPreviewMore', { count: String(extractResult.concepts.length - 24) })}</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-emerald-700 mt-1.5">{t('admin.ragSetup.extract.appearsOnExplain')}</p>
+                  </div>
+                )}
+
+                {extractResult.count === 0 && extractResult.rejected && extractResult.rejected.length > 0 && (
+                  <div className="pt-1">
+                    <p className="text-xs font-medium text-amber-800 mb-1">{t('admin.ragSetup.extract.rejectedPreviewTitle')}</p>
+                    <div className="flex flex-wrap gap-1.5" data-testid="list-rejected-concepts">
+                      {extractResult.rejected.slice(0, 12).map((r, i) => (
+                        <span
+                          key={`${r.name}-${i}`}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-white text-amber-800 text-xs rounded-full border border-amber-200"
+                          data-testid={`chip-rejected-concept-${i}`}
+                        >
+                          {r.name}
+                          <span className="text-amber-500 font-mono">{r.maxScore.toFixed(2)}</span>
+                        </span>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleLowerThresholdAndRetry}
+                      disabled={loweringThreshold || extracting}
+                      data-testid="button-lower-threshold-retry"
+                      className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 disabled:opacity-60 transition-colors"
+                    >
+                      {loweringThreshold || extracting ? (
+                        <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('admin.ragSetup.extract.lowerThresholdBusy')}</>
+                      ) : (
+                        <><RefreshCw className="w-3.5 h-3.5" /> {t('admin.ragSetup.extract.lowerThresholdRetry')}</>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {lowerThresholdNote && (
+                  <p className="text-xs text-gray-600" data-testid="text-lower-threshold-note">{lowerThresholdNote}</p>
                 )}
               </div>
             )}
             <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <label htmlFor="select-concept-language" className="text-sm font-medium text-gray-700">{t('admin.ragSetup.extract.languageLabel')}</label>
+                <select
+                  id="select-concept-language"
+                  value={conceptLanguage}
+                  onChange={e => setConceptLanguage(e.target.value as 'nl' | 'en' | 'auto')}
+                  data-testid="select-concept-language"
+                  className="w-full sm:max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="auto">{t('admin.ragSetup.extract.languageAuto')}</option>
+                  <option value="nl">{t('admin.ragSetup.extract.languageNl')}</option>
+                  <option value="en">{t('admin.ragSetup.extract.languageEn')}</option>
+                </select>
+                <p className="text-xs text-gray-500">{t('admin.ragSetup.extract.languageHint')}</p>
+              </div>
               <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-700">
                 <input
                   type="checkbox"

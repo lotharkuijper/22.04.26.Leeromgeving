@@ -3651,11 +3651,18 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     return res.status(401).json({ error: 'Authorization header required' });
   }
 
-  const { courseId, replace = false, documentIds } = req.body;
+  const { courseId, replace = false, documentIds, language } = req.body;
   if (!courseId) {
     return res.status(400).json({ error: 'courseId is required' });
   }
   const filterDocIds = Array.isArray(documentIds) && documentIds.length > 0 ? documentIds : null;
+  // Doeltaal van de geëxtraheerde begrippen. 'nl'/'en' forceren de taal van
+  // naam + definitie; 'auto' laat de LLM de taal van het bronmateriaal volgen.
+  // Dit is cruciaal: de verificatiestap embed de begrípsnaam en vergelijkt die
+  // met de chunks. Bij Engels cursusmateriaal scoort een Nederlandse term laag,
+  // waardoor alle kandidaten worden afgewezen en de docent "niets" ziet.
+  // Default is 'auto' zodat ook niet-UI-callers de taal van het materiaal volgen.
+  const conceptLanguage = ['nl', 'en', 'auto'].includes(language) ? language : 'auto';
 
   const courseMarker = `course_id:${courseId}`;
   const regenKey = `__concepts_regen_${courseId}__`;
@@ -3847,18 +3854,28 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       .join('\n\n---\n\n')
       .slice(0, 14000);
 
+    // Taal-instructie voor naam + definitie. De categorie blijft altijd de
+    // Nederlandse enum-waarde ("epidemiologie"/"biostatistiek") omdat die
+    // server-side gevalideerd wordt.
+    const languageDirective = {
+      nl: '- name: de gangbare Nederlandse vakterm (internationale Engelse termen mogen als ze zo in het Nederlandse veld gebruikt worden, bv. "odds ratio")\n- definition: een heldere definitie van 1-2 zinnen in het NEDERLANDS',
+      en: '- name: the common English term for the concept\n- definition: a clear 1-2 sentence definition in ENGLISH',
+      auto: '- name: the concept term in the SAME language as the course material below\n- definition: a clear 1-2 sentence definition in the SAME language as the course material below',
+    }[conceptLanguage];
+
     const extractionPrompt = `Je bent een expert in epidemiologie en biostatistiek aan de VU Amsterdam.
 
 Analyseer de onderstaande tekst uit universitair cursusmateriaal. Identificeer ALLE relevante vakbegrippen die studenten moeten kennen en kunnen uitleggen — ook als ze slechts terloops of impliciet in de tekst voorkomen. Wees volledig en breed: liever 30 begrippen dan 10.
+
+BELANGRIJK: kies de begripsnamen zó dat ze letterlijk of bijna-letterlijk in het onderstaande cursusmateriaal voorkomen, want de namen worden daarna automatisch tegen dat materiaal geverifieerd.
 
 Geschikte begrippen omvatten (maar zijn niet beperkt tot):
 - Epidemiologie: incidentie, prevalentie, relatief risico, odds ratio, attributief risico, confounding, effect modification, selectiebias, informatiebias, cohortonderzoek, patiënt-controleonderzoek, cross-sectioneel onderzoek, gerandomiseerd gecontroleerd onderzoek, ecologisch onderzoek, case report, surveillance, screening, sensitiviteit, specificiteit, positief voorspellende waarde, negatief voorspellende waarde, DAG (gerichte acyclische graaf), mediatie, effect modificatie, interactie
 - Biostatistiek: gemiddelde, mediaan, standaarddeviatie, variantie, normaalverdeling, binomiale verdeling, Poisson-verdeling, betrouwbaarheidsinterval, p-waarde, nulhypothese, statistische toets, t-toets, chi-kwadraattoets, regressieanalyse, logistische regressie, Kaplan-Meier, log-rank toets, hazard ratio, steekproefomvang, power, type I fout, type II fout, effectgrootte, multiple testing
 
 Geef elk gevonden begrip de volgende velden:
-- name: de gangbare Nederlandse (of internationaal gebruikte) term
+${languageDirective}
 - category: precies "epidemiologie" of "biostatistiek"
-- definition: een heldere definitie van 1-2 zinnen in het Nederlands
 
 Geef UITSLUITEND een JSON-array terug, zonder extra tekst of uitleg:
 [
@@ -3992,6 +4009,13 @@ ${combinedText}`;
       console.log(`[extract-concepts] Voorbeeld afgewezen: ${sample}`);
     }
 
+    // Gestructureerde lijst van afgewezen kandidaten (naam + hoogste score)
+    // zodat de docent-UI precies kan tonen wat de AI vond en hoe dichtbij het
+    // de drempel kwam.
+    const rejectedSamples = rejectedConcepts
+      .slice(0, 10)
+      .map((r) => ({ name: r.concept.name, maxScore: Number(r.maxScore.toFixed(3)) }));
+
     // Niets te schrijven? Geef een duidelijke melding TERUG zonder de
     // bestaande begrippen weg te gooien. De gebruiker kan dan in
     // Beheer → RAG-instellingen → Extractie de drempels verlagen.
@@ -3999,7 +4023,7 @@ ${combinedText}`;
       const sampleNames = rejectedConcepts.slice(0, 6).map((r) => r.concept.name).join(', ');
       const msg = rawValidConcepts.length === 0
         ? 'De LLM vond geen begrippen in dit cursusmateriaal.'
-        : `De LLM stelde ${rawValidConcepts.length} begrippen voor, maar geen enkele haalde de RAG-verificatiedrempel (similarity ≥ ${verifyThreshold.toFixed(2)}, ≥ ${minEvidence} chunks). Verlaag de drempels via Beheer → RAG-instellingen → Extractie en probeer opnieuw. Voorbeelden: ${sampleNames}.`;
+        : `De LLM stelde ${rawValidConcepts.length} begrippen voor, maar geen enkele haalde de RAG-verificatiedrempel (similarity ≥ ${verifyThreshold.toFixed(2)}, ≥ ${minEvidence} chunks). Verlaag de drempel via Beheer → RAG-instellingen → Extractie en probeer opnieuw. Voorbeelden: ${sampleNames}.`;
       await writeRegenTimestamp().catch(() => {});
       return res.json({
         concepts: [],
@@ -4007,6 +4031,9 @@ ${combinedText}`;
         skipped: 0,
         verificationRejected: rejectedConcepts.length,
         candidatesFromLLM: rawValidConcepts.length,
+        verificationThreshold: verifyThreshold,
+        minEvidenceChunks: minEvidence,
+        rejected: rejectedSamples,
         message: msg,
       });
     }
@@ -4158,6 +4185,11 @@ ${combinedText}`;
       updated: updatedCount,
       skipped,
       verificationRejected,
+      candidatesFromLLM: rawValidConcepts.length,
+      verificationThreshold: verifyThreshold,
+      minEvidenceChunks: minEvidence,
+      rejected: rejectedSamples,
+      language: conceptLanguage,
       message: `${totalAdded} begrippen toegevoegd/bijgewerkt voor deze cursus${verifMsg}`,
     });
   } catch (err) {

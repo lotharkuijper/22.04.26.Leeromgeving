@@ -5,3 +5,4 @@
 - [Supabase session rotation](supabase-session-rotation.md) — new `sb_publishable_` anon key = key rotation; cached sessions die → 401 on ALL server endpoints while client still SIGNED_IN (misreads as OpenAI error). Validate session on load, sign out only on definitive auth errors.
 - [OpenAI sampling params](openai-sampling-params.md) — gpt-5.2 accepts custom temperature; don't blanket-strip by model name. Only o1/o3-style reject it; handle via runtime 400 retry.
 - [Supabase auth flow constraints](supabase-auth-flow.md) — never await Supabase inside onAuthStateChange (deadlock); don't gate nav on profile fetch; empty signUp identities = account exists.
+- [Concept extraction verification gate](concept-extraction-verification.md) — extract-concepts silently saves 0 when LLM names concepts in a different language than chunks (cross-language embedding < threshold); use language param + rejected scores to diagnose.
