@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import { MarkdownMessage } from '../components/MarkdownMessage';
@@ -25,6 +26,8 @@ interface JournalEntry {
   activity_type: string;
   created_at: string;
   updated_at: string;
+  course_id?: string | null;
+  course_name?: string | null;
 }
 
 type GroupKey = 'chat' | 'explain' | 'quiz' | 'project' | 'other';
@@ -122,6 +125,7 @@ function classifyActivity(activityType: string): GroupKey {
 
 export function FeedbackPage() {
   const { profile } = useAuth();
+  const { activeCourseId } = useActiveCourse();
   const { t, lang } = useLanguage();
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -269,7 +273,7 @@ export function FeedbackPage() {
       } else {
         const { data: inserted, error } = await supabase
           .from('learning_journal_entries')
-          .insert({ user_id: profile.id, title, content, activity_type: activityType })
+          .insert({ user_id: profile.id, title, content, activity_type: activityType, course_id: activeCourseId })
           .select('id')
           .single();
 
@@ -560,6 +564,15 @@ export function FeedbackPage() {
                                       <Calendar className="w-3.5 h-3.5" />
                                       <span data-testid={`date-${entry.id}`}>{formatDate(entry.created_at)}</span>
                                     </div>
+                                    {entry.course_name && (
+                                      <div
+                                        className="flex items-center gap-1"
+                                        title={t('feedback.courseBadgeTitle')}
+                                      >
+                                        <GraduationCap className="w-3.5 h-3.5" />
+                                        <span data-testid={`course-${entry.id}`}>{entry.course_name}</span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               </div>

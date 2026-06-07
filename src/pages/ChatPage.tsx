@@ -289,7 +289,7 @@ export function ChatPage() {
       const res = await fetch('/api/chat/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
-        body: JSON.stringify({ conversationId, generateSummary, lang }),
+        body: JSON.stringify({ conversationId, generateSummary, lang, courseId: activeCourse }),
       });
 
       if (!res.ok) {

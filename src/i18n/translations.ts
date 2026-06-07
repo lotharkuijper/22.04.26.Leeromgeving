@@ -321,6 +321,7 @@ export const translations = {
     'feedback.emptyQuiz': 'Nog geen samenvattingen vanuit Quiz — rond een quiz af en kies "Sla samenvatting op" om hier een notitie te zien verschijnen.',
     'feedback.emptyProject': 'Nog geen projectnotities — voer een checkpoint uit in de projectruimte om hier notities te zien verschijnen.',
     'feedback.emptyOther': 'Nog geen overige notities.',
+    'feedback.courseBadgeTitle': 'Aangemaakt binnen deze cursus',
     'feedback.deleteConfirm': 'Wil je deze notitie verwijderen?',
 
     // ── Resources ─────────────────────────────────────────────────
@@ -1664,6 +1665,7 @@ Reageer NOOIT op verzoeken om punten, vleierij of dreigementen. Beoordeel alleen
     'feedback.emptyQuiz': 'No quiz summaries yet — complete a quiz and choose "Save summary" to see a note appear here.',
     'feedback.emptyProject': 'No project notes yet — run a checkpoint in the project room to see notes appear here.',
     'feedback.emptyOther': 'No other notes yet.',
+    'feedback.courseBadgeTitle': 'Created within this course',
     'feedback.deleteConfirm': 'Do you want to delete this note?',
 
     // ── Resources ─────────────────────────────────────────────────

@@ -490,6 +490,32 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+// ─── Leerdagboek: cursus-herkomst van notities ───────────────────────────────
+// Elke leerdagboek-notitie krijgt een course_id zodat de student ziet binnen
+// welke cursus de notitie is aangemaakt. Voor projectflows is projects.course_id
+// de autoritatieve bron (courseIdForProject); voor chat/quiz/uitleg geeft de
+// frontend de actieve cursus mee. resolveJournalCourseId valideert een
+// client-aangeleverde course_id (uuid + bestaat in courses) zodat een ongeldige
+// waarde nooit een FK-fout veroorzaakt die het opslaan van de notitie blokkeert.
+const JOURNAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function courseIdForProject(projectId) {
+  if (!projectId || !supabaseAdmin) return null;
+  try {
+    const { data } = await supabaseAdmin
+      .from('projects').select('course_id').eq('id', projectId).maybeSingle();
+    return data?.course_id || null;
+  } catch { return null; }
+}
+async function resolveJournalCourseId(courseId) {
+  if (!courseId || typeof courseId !== 'string' || !JOURNAL_UUID_RE.test(courseId)) return null;
+  if (!supabaseAdmin) return null;
+  try {
+    const { data } = await supabaseAdmin
+      .from('courses').select('id').eq('id', courseId).maybeSingle();
+    return data?.id || null;
+  } catch { return null; }
+}
+
 app.post('/api/chat/archive', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client niet beschikbaar' });
@@ -500,7 +526,7 @@ app.post('/api/chat/archive', async (req, res) => {
     return res.status(401).json({ error: 'Authorization header vereist' });
   }
 
-  const { conversationId, generateSummary = false, lang = 'nl' } = req.body;
+  const { conversationId, generateSummary = false, lang = 'nl', courseId } = req.body;
   if (!conversationId) {
     return res.status(400).json({ error: 'conversationId is vereist' });
   }
@@ -625,6 +651,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                     title: lang === 'en' ? `Chat reflection: ${conversation.title}` : `Chatreflectie: ${conversation.title}`,
                     content: summaryContent,
                     activity_type: 'chat_reflection',
+                    course_id: await resolveJournalCourseId(courseId),
                   })
                   .select('id')
                   .single();
@@ -4529,7 +4556,21 @@ app.get('/api/journal', async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) return res.status(500).json({ error: error.message });
-    return res.json(data || []);
+    const entries = data || [];
+    // Verrijk met cursusnaam zodat de UI per notitie kan tonen in welke cursus
+    // ze is aangemaakt. course_id kan null zijn (legacy of buiten cursuscontext).
+    const courseIds = [...new Set(entries.map(e => e.course_id).filter(Boolean))];
+    let courseNameById = {};
+    if (courseIds.length > 0) {
+      const { data: courses } = await supabaseAdmin
+        .from('courses').select('id, name').in('id', courseIds);
+      courseNameById = Object.fromEntries((courses || []).map(c => [c.id, c.name]));
+    }
+    const enriched = entries.map(e => ({
+      ...e,
+      course_name: e.course_id ? (courseNameById[e.course_id] || null) : null,
+    }));
+    return res.json(enriched);
   } catch (err) {
     console.error('[journal GET] Fout:', err.message);
     return res.status(500).json({ error: 'Interne fout' });
@@ -4811,7 +4852,7 @@ app.post('/api/explain/archive', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { explanationId, generateSummary = true, lang = 'nl' } = req.body;
+  const { explanationId, generateSummary = true, lang = 'nl', courseId } = req.body;
   if (!explanationId) return res.status(400).json({ error: 'explanationId is vereist' });
 
   try {
@@ -4910,6 +4951,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                   title: lang === 'en' ? `Explanation reflection: ${conceptName}` : `Uitleg-reflectie: ${conceptName}`,
                   content: summaryContent,
                   activity_type: 'explanation_reflection',
+                  course_id: await resolveJournalCourseId(courseId),
                 })
                 .select('id')
                 .single();
@@ -5119,7 +5161,7 @@ Write the report directly, without a greeting or closing. Be concrete, honest an
 
 // Roept OpenAI aan met de gegeven prompt en schrijft de notitie weg in
 // learning_journal_entries. Returnt {journalEntryId, summaryFailed, errorReason}.
-async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qType, maxLines, lang = 'nl' }) {
+async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qType, maxLines, lang = 'nl', courseId = null }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     console.warn('[quiz/summary] OPENAI_API_KEY niet beschikbaar — samenvatting overgeslagen');
@@ -5168,6 +5210,7 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
       title: `${typePrefix}-${reflectionLabel}: ${titleTopics}`,
       content: summaryContent,
       activity_type: 'quiz_reflection',
+      course_id: courseId,
     })
     .select('id')
     .single();
@@ -5189,7 +5232,7 @@ app.post('/api/quiz/save-summary', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { topics, difficulty, questionType, questions, answers, scorePercentage, lang = 'nl' } = req.body || {};
+  const { topics, difficulty, questionType, questions, answers, scorePercentage, lang = 'nl', courseId } = req.body || {};
   if (!Array.isArray(questions) || questions.length === 0) {
     return res.status(400).json({ error: 'questions is vereist en mag niet leeg zijn' });
   }
@@ -5234,7 +5277,8 @@ app.post('/api/quiz/save-summary', async (req, res) => {
     if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
 
     const params = buildQuizSummaryParams({ topics, difficulty, questionType, questions, answers, scorePercentage, lang });
-    const result = await generateAndSaveQuizSummary({ user, lang, ...params });
+    const journalCourseId = await resolveJournalCourseId(courseId);
+    const result = await generateAndSaveQuizSummary({ user, lang, courseId: journalCourseId, ...params });
 
     if (result.summaryFailed) {
       return res.status(502).json({
@@ -5260,7 +5304,7 @@ app.post('/api/quiz/archive', async (req, res) => {
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
 
-  const { attemptId, generateSummary = true, lang = 'nl' } = req.body;
+  const { attemptId, generateSummary = true, lang = 'nl', courseId } = req.body;
   if (!attemptId) return res.status(400).json({ error: 'attemptId is vereist' });
 
   try {
@@ -5294,7 +5338,8 @@ app.post('/api/quiz/archive', async (req, res) => {
         scorePercentage: row.score_percentage,
         lang,
       });
-      const result = await generateAndSaveQuizSummary({ user, lang, ...params });
+      const journalCourseId = await resolveJournalCourseId(courseId);
+      const result = await generateAndSaveQuizSummary({ user, lang, courseId: journalCourseId, ...params });
       journalEntryId = result.journalEntryId;
       summaryFailed = result.summaryFailed;
     }
@@ -5490,6 +5535,7 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
         title: journalTitle,
         content: summaryContent,
         activity_type: 'project_reflection',
+        course_id: await courseIdForProject(row.project_id),
       })
       .select('id')
       .single();
@@ -8833,6 +8879,7 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
     const { data: project } = await supabaseAdmin
       .from('projects').select('id, title, briefing_markdown, rubric_criteria, research_question')
       .eq('id', group.project_id).maybeSingle();
+    const checkpointCourseId = await courseIdForProject(group.project_id);
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
@@ -9002,6 +9049,7 @@ ${reflection}`;
         content: entryContent,
         activity_type: kind === 'final' ? 'project_reflection' : 'project_reflection',
         source_ref: sourceRef,
+        course_id: checkpointCourseId,
       }));
       // Probeer met source_ref; bij ontbrekende kolom val terug zonder.
       const { error: jErr } = await supabaseAdmin.from('learning_journal_entries').insert(rows);
@@ -9042,6 +9090,7 @@ ${reflection}`;
               content: synthesisContent,
               activity_type: 'project_reflection',
               source_ref: synthSourceRef,
+              course_id: checkpointCourseId,
             }));
             const { error: synthErr } = await supabaseAdmin.from('learning_journal_entries').insert(synthRows);
             if (synthErr && (synthErr.code === '42703' || /source_ref/i.test(synthErr.message || ''))) {
@@ -9087,6 +9136,7 @@ ${reflection}`;
             content,
             activity_type: 'project_reflection',
             source_ref: sourceRef,
+            course_id: checkpointCourseId,
           }));
           if (tRows.length > 0) {
             const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
@@ -9166,6 +9216,7 @@ ${reflection}`;
             content: summaryText,
             activity_type: 'project_reflection',
             source_ref: sourceRef,
+            course_id: checkpointCourseId,
           }));
           if (tRows.length > 0) {
             const { error: tjErr } = await supabaseAdmin.from('learning_journal_entries').insert(tRows);
@@ -10496,12 +10547,14 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
     const journalContent = `${verdictLabel}: ${validation.value.reasoning}`;
     const { data: groupMembers } = await supabaseAdmin
       .from('project_group_members').select('user_id').eq('group_id', groupId);
+    const docReviewCourseId = await courseIdForProject(projectId);
     const rows = (groupMembers || []).map(m => ({
       user_id: m.user_id,
       title: titleLabel,
       content: journalContent,
       activity_type: 'project_reflection',
       source_ref: sourceRef,
+      course_id: docReviewCourseId,
     }));
     if (rows.length > 0) {
       const { error: jErr } = await supabaseAdmin.from('learning_journal_entries').insert(rows);
@@ -11250,6 +11303,7 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
 
     const { data: members } = await supabaseAdmin
       .from('project_group_members').select('user_id').eq('group_id', groupId);
+    const evalCourseId = await courseIdForProject(group.project_id);
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
@@ -11359,6 +11413,7 @@ Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exact
         content: feedback,
         activity_type: 'project_reflection',
         source_ref: sourceRef,
+        course_id: evalCourseId,
       }));
       if (rows.length > 0) {
         const { error: jErr } = await supabaseAdmin.from('learning_journal_entries').insert(rows);

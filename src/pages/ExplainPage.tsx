@@ -302,7 +302,7 @@ export function ExplainPage() {
       const res = await fetch('/api/explain/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ explanationId: id, generateSummary, lang: (localStorage.getItem('lair-vu-lang') || 'nl') }),
+        body: JSON.stringify({ explanationId: id, generateSummary, lang: (localStorage.getItem('lair-vu-lang') || 'nl'), courseId: activeCourse }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

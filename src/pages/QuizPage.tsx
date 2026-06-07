@@ -595,6 +595,7 @@ export function QuizPage() {
           answers,
           scorePercentage: scorePct,
           lang,
+          courseId: activeCourse,
         }),
       });
 
@@ -621,7 +622,7 @@ export function QuizPage() {
       const res = await fetch('/api/quiz/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: authHeader },
-        body: JSON.stringify({ attemptId, generateSummary, lang }),
+        body: JSON.stringify({ attemptId, generateSummary, lang, courseId: activeCourse }),
       });
 
       if (!res.ok) {
