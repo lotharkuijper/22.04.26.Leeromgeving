@@ -16,4 +16,6 @@ description: Why project RLS must scope by course membership, not global docent 
 - Verify RLS changes with impersonation: `BEGIN; SET LOCAL role authenticated; SELECT set_config('request.jwt.claims', json_build_object('sub','<userId>','role','authenticated')::text, true); SELECT ... ; ROLLBACK;`
 - Sharing a project to another course is by COPYING (no copy-to-course feature exists yet); do not widen RLS to emulate sharing.
 
+**Frontend active-course scoping (separate from RLS):** `/api/projects/student-overview` returns projects for *all* courses the user is a member of, grouped by course — it does NOT filter by the active course. `ProjectsPage` must filter the returned `courses` to `activeCourseId` (from `useActiveCourse()`), like every other course-scoped page (ChatPage/QuizPage/ExplainPage). Without this, a user enrolled in multiple courses sees another course's project even when that course isn't the active one — which reads as a leak even though RLS is correct.
+
 **Still leaky (deferred, deeper hardening):** `group_chat_messages.gcm_select`, `group_checkpoints.gcp_select`, `student_project_sessions` reads, and `learning_journal_entries` "Docents can view all" still carry blanket-docent reads. Cross-course, but they expose student *work* to staff, not the project entity; tightening risks breaking teacher dashboards.

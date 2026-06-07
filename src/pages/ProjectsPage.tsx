@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
+import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import {
   PlayCircle, RefreshCw, ArrowRight, FolderOpen, BookOpen, Loader2,
   AlertCircle, Users,
@@ -29,6 +30,7 @@ interface OverviewCourse {
 export function ProjectsPage() {
   const { t, lang } = useLanguage();
   const { profile, session } = useAuth();
+  const { activeCourseId } = useActiveCourse();
   const navigate = useNavigate();
   const [overview, setOverview] = useState<OverviewCourse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,6 +136,13 @@ export function ProjectsPage() {
     return <div className="p-12 text-center text-gray-500"><Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" /> {t('common.loading')}</div>;
   }
 
+  // Toon alleen projecten van de actieve cursus. Een project hoort bij precies
+  // één cursus; staat de actieve cursus op iets anders, dan mag dat project
+  // hier niet verschijnen.
+  const visibleCourses = activeCourseId
+    ? overview.filter(c => c.course.id === activeCourseId)
+    : overview;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -153,13 +162,13 @@ export function ProjectsPage() {
         </div>
       )}
 
-      {overview.length === 0 ? (
+      {visibleCourses.length === 0 ? (
         <div className="chic-card p-12 text-center text-gray-500">
           <FolderOpen className="w-12 h-12 mx-auto mb-3 text-gray-400" />
           <p>{t('projects.notLinked')}</p>
         </div>
       ) : (
-        overview.map(c => (
+        visibleCourses.map(c => (
           <div key={c.course.id} className="chic-card overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
               <h2 className="font-semibold text-gray-900 flex items-center gap-2">
