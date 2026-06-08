@@ -18,3 +18,9 @@ id = "PhgTtQBXWLdMSJzRtbjrV"
 uri = "file://exports/migratie-naar-azure.md"
 type = "text"
 title = "Migratie naar VU Azure — overzicht"
+
+[[outputs]]
+id = "cmj-WDCKCQSw93oRZnXnE"
+uri = "file://exports/leap-vu-projectoverzicht.docx"
+type = "word_document"
+title = "LEAP-VU — Projectoverzicht (volledig)"
