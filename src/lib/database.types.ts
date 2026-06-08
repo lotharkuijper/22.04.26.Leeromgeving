@@ -124,6 +124,7 @@ export type Database = {
           title: string
           module_type: 'general' | 'explain' | 'project' | 'quiz'
           context_id: string | null
+          course_id: string | null
           status: 'active' | 'archived'
           created_at: string
           updated_at: string
@@ -134,6 +135,7 @@ export type Database = {
           title?: string
           module_type?: 'general' | 'explain' | 'project' | 'quiz'
           context_id?: string | null
+          course_id?: string | null
           status?: 'active' | 'archived'
           created_at?: string
           updated_at?: string
@@ -144,6 +146,7 @@ export type Database = {
           title?: string
           module_type?: 'general' | 'explain' | 'project' | 'quiz'
           context_id?: string | null
+          course_id?: string | null
           status?: 'active' | 'archived'
           created_at?: string
           updated_at?: string
@@ -341,6 +344,7 @@ export type Database = {
           id: string
           quiz_set_id: string | null
           student_id: string
+          course_id: string | null
           started_at: string
           completed_at: string | null
           score: number
@@ -358,6 +362,7 @@ export type Database = {
           id?: string
           quiz_set_id?: string | null
           student_id: string
+          course_id?: string | null
           started_at?: string
           completed_at?: string | null
           score?: number
@@ -375,6 +380,7 @@ export type Database = {
           id?: string
           quiz_set_id?: string | null
           student_id?: string
+          course_id?: string | null
           started_at?: string
           completed_at?: string | null
           score?: number

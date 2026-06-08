@@ -206,7 +206,7 @@ export function ExplainPage() {
 
   useEffect(() => {
     if (profile) loadHistory();
-  }, [profile]);
+  }, [profile, activeCourse]);
 
   useEffect(() => {
     filterConcepts();
@@ -215,9 +215,16 @@ export function ExplainPage() {
   const loadHistory = async () => {
     const session = (await supabase.auth.getSession()).data.session;
     if (!session?.access_token) return;
+    // Zonder actieve cursus tonen we geen uitleg-geschiedenis (consistent met de
+    // chat- en quizlijsten die ook leeg blijven zonder actieve cursus).
+    if (!activeCourse) {
+      setHistory([]);
+      return;
+    }
     setHistoryLoading(true);
     try {
-      const res = await fetch('/api/explain/history', {
+      const url = `/api/explain/history?courseId=${encodeURIComponent(activeCourse)}`;
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) {

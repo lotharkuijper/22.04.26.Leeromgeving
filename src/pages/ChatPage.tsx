@@ -163,7 +163,7 @@ export function ChatPage() {
     }
     console.log('[CHAT] Profile loaded, loading conversations');
     loadConversations();
-  }, [profile]);
+  }, [profile, activeCourse]);
 
   useEffect(() => {
     if (currentConversationId) {
@@ -188,8 +188,16 @@ export function ChatPage() {
       return;
     }
 
+    // Zonder actieve cursus tonen we geen chats (consistent met de andere
+    // cursus-gescoorde lijsten). Studenten zien zo alleen de gesprekken die
+    // binnen de actieve cursus zijn gevoerd.
+    if (!activeCourse) {
+      setConversations([]);
+      return;
+    }
+
     try {
-      console.log('[CHAT] Loading conversations for user:', profile.id);
+      console.log('[CHAT] Loading conversations for user:', profile.id, 'course:', activeCourse);
 
       const { data, error } = await supabase
         .from('conversations')
@@ -197,6 +205,7 @@ export function ChatPage() {
         .eq('user_id', profile.id)
         .eq('status', 'active')
         .eq('module_type', 'general')
+        .eq('course_id', activeCourse)
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -210,8 +219,18 @@ export function ChatPage() {
 
       console.log('[CHAT] Loaded conversations:', data?.length || 0);
       setConversations(data || []);
-      if (data && data.length > 0 && !currentConversationId) {
-        setCurrentConversationId(data[0].id);
+      // Bij cursuswissel kan de geopende conversatie tot een andere cursus
+      // behoren. Selecteer alleen een gesprek dat in de huidige (cursus-gefilterde)
+      // lijst voorkomt; anders openen we het meest recente gesprek, of wissen we
+      // de selectie + berichten als deze cursus nog geen gesprekken heeft.
+      const ids = new Set((data || []).map(c => c.id));
+      if (data && data.length > 0) {
+        if (!currentConversationId || !ids.has(currentConversationId)) {
+          setCurrentConversationId(data[0].id);
+        }
+      } else {
+        setCurrentConversationId(null);
+        setMessages([]);
       }
     } catch (error) {
       console.error('[CHAT] Unexpected error loading conversations:', error);
@@ -252,6 +271,15 @@ export function ChatPage() {
       });
       return;
     }
+    // Gesprekken horen bij een cursus; zonder actieve cursus zou een gesprek
+    // nergens zichtbaar zijn. Blokkeer het aanmaken met een duidelijke melding.
+    if (!activeCourse) {
+      setPageNotice({
+        kind: 'error',
+        message: lang === 'en' ? 'Select a course first to start a conversation.' : 'Kies eerst een cursus om een gesprek te starten.',
+      });
+      return;
+    }
 
     console.log('Creating conversation for user:', profile.id, 'role:', profile.role);
 
@@ -260,7 +288,8 @@ export function ChatPage() {
       .insert({
         user_id: profile.id,
         title: lang === 'en' ? 'New conversation' : 'Nieuwe conversatie',
-        module_type: 'general'
+        module_type: 'general',
+        course_id: activeCourse,
       })
       .select()
       .single();

@@ -4675,11 +4675,70 @@ app.get('/api/explain/history', async (req, res) => {
     const { data: { user }, error: userError } = await callerClient.auth.getUser();
     if (userError || !user) return res.status(401).json({ error: 'Niet geauthenticeerd' });
 
-    const { data, error } = await supabaseAdmin
+    // Cursus-scoping (Task #246): alleen uitleg van begrippen uit de actieve
+    // cursus tonen. Begrippen zijn cursus-gekoppeld via een echte course_id-kolom
+    // (nieuw schema) óf via de key_points-marker `course_id:<uuid>` (fallback).
+    // We resolven eerst de begrip-ids van de cursus en filteren de uitleg daarop.
+    const courseId = typeof req.query.courseId === 'string' ? req.query.courseId.trim() : '';
+
+    let allowedConceptIds = null; // null = geen cursusfilter
+    if (courseId) {
+      // Resolve cursus-begrippen exact zoals /api/concepts: begrippen mét
+      // cursus-koppeling tellen als cursus-begrippen; heeft de cursus geen eigen
+      // begrippen, dan val terug op globale begrippen (zonder cursus-koppeling).
+      if (conceptsHasCourseId) {
+        const { data: courseConcepts, error: courseErr } = await supabaseAdmin
+          .from('concepts').select('id').eq('course_id', courseId);
+        if (courseErr) {
+          console.error('[explain/history] cursus-begrip-query fout:', courseErr);
+          return res.status(500).json({ error: courseErr.message });
+        }
+        if (courseConcepts && courseConcepts.length > 0) {
+          allowedConceptIds = courseConcepts.map((c) => c.id);
+        } else {
+          const { data: globalConcepts, error: globalErr } = await supabaseAdmin
+            .from('concepts').select('id').is('course_id', null);
+          if (globalErr) {
+            console.error('[explain/history] globale-begrip-query fout:', globalErr);
+            return res.status(500).json({ error: globalErr.message });
+          }
+          allowedConceptIds = (globalConcepts || []).map((c) => c.id);
+        }
+      } else {
+        const { data: courseConcepts, error: courseErr } = await supabaseAdmin
+          .from('concepts').select('id').contains('key_points', [`course_id:${courseId}`]);
+        if (courseErr) {
+          console.error('[explain/history] cursus-begrip-query fout:', courseErr);
+          return res.status(500).json({ error: courseErr.message });
+        }
+        if (courseConcepts && courseConcepts.length > 0) {
+          allowedConceptIds = courseConcepts.map((c) => c.id);
+        } else {
+          const { data: allConcepts, error: allErr } = await supabaseAdmin
+            .from('concepts').select('id, key_points');
+          if (allErr) {
+            console.error('[explain/history] globale-begrip-query fout:', allErr);
+            return res.status(500).json({ error: allErr.message });
+          }
+          allowedConceptIds = (allConcepts || [])
+            .filter((c) => !(c.key_points || []).some((kp) => kp.startsWith('course_id:')))
+            .map((c) => c.id);
+        }
+      }
+      // Geen begrippen in deze cursus ⇒ geen uitleg-geschiedenis.
+      if (allowedConceptIds.length === 0) {
+        return res.json({ items: [] });
+      }
+    }
+
+    let query = supabaseAdmin
       .from('student_explanations')
       .select('id, concept_id, version, created_at, concepts(id, name, category)')
-      .eq('student_id', user.id)
-      .order('created_at', { ascending: false });
+      .eq('student_id', user.id);
+    if (allowedConceptIds !== null) {
+      query = query.in('concept_id', allowedConceptIds);
+    }
+    const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) {
       console.error('[explain/history] query error:', error);

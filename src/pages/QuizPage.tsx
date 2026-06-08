@@ -212,7 +212,7 @@ export function QuizPage() {
 
   // Kiezen van quiz-onderwerpen + recente pogingen herladen wanneer cursus
   // wisselt of gebruiker beschikbaar wordt.
-  useEffect(() => { void loadAttempts(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [profile?.id]);
+  useEffect(() => { void loadAttempts(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [profile?.id, activeCourse]);
   // Triggered op zowel cursus-wissel als zodra het profiel binnenkomt — anders
   // blijven gebruikers die de pagina bezoeken voordat AuthContext klaar is
   // hangen op een lege onderwerpenlijst.
@@ -287,12 +287,21 @@ export function QuizPage() {
 
   const loadAttempts = useCallback(async () => {
     if (!profile) return;
+    // Zonder actieve cursus tonen we geen afgeronde quizzen (consistent met de
+    // andere cursus-gescoorde lijsten).
+    if (!activeCourse) {
+      setAttempts([]);
+      setAttemptsLoading(false);
+      setAttemptsError(null);
+      return;
+    }
     setAttemptsLoading(true);
     setAttemptsError(null);
     const { data, error } = await supabase
       .from('quiz_attempts')
       .select('id, topics, difficulty, question_type, questions_data, answers, score_percentage, total_questions, created_at')
       .eq('student_id', profile.id)
+      .eq('course_id', activeCourse)
       .order('created_at', { ascending: false })
       .limit(50);
 
@@ -307,7 +316,7 @@ export function QuizPage() {
       setAttempts((data || []) as QuizAttemptRow[]);
     }
     setAttemptsLoading(false);
-  }, [profile]);
+  }, [profile, activeCourse]);
 
   const filteredTopics = useMemo(() => {
     const q = topicSearch.trim().toLowerCase();
@@ -530,6 +539,7 @@ export function QuizPage() {
     if (profile) {
       const { error } = await supabase.from('quiz_attempts').insert({
         student_id: profile.id,
+        course_id: activeCourse,
         topics: selectedTopics.map(t => t.name),
         difficulty,
         question_type: questionType,

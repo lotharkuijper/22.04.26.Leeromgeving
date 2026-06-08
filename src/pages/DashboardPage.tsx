@@ -204,14 +204,24 @@ export function DashboardPage() {
       setLoading(true);
       try {
         const [convRes, explRes, quizRes, personaRes, projRes, journalRes] = await Promise.all([
-          supabase
-            .from('conversations')
-            .select('id, title, updated_at')
-            .eq('user_id', profile.id)
-            .eq('status', 'active')
-            .order('updated_at', { ascending: false })
-            .limit(1)
-            .maybeSingle(),
+          activeCourseId
+            ? supabase
+                .from('conversations')
+                .select('id, title, updated_at')
+                .eq('user_id', profile.id)
+                .eq('status', 'active')
+                .eq('course_id', activeCourseId)
+                .order('updated_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            : supabase
+                .from('conversations')
+                .select('id, title, updated_at')
+                .eq('user_id', profile.id)
+                .eq('status', 'active')
+                .order('updated_at', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
           activeCourseId
             ? supabase
                 .from('student_explanations')
@@ -228,13 +238,22 @@ export function DashboardPage() {
                 .order('created_at', { ascending: false })
                 .limit(1)
                 .maybeSingle(),
-          supabase
-            .from('quiz_attempts')
-            .select('id, topics, score_percentage, created_at')
-            .eq('student_id', profile.id)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle(),
+          activeCourseId
+            ? supabase
+                .from('quiz_attempts')
+                .select('id, topics, score_percentage, created_at')
+                .eq('student_id', profile.id)
+                .eq('course_id', activeCourseId)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            : supabase
+                .from('quiz_attempts')
+                .select('id, topics, score_percentage, created_at')
+                .eq('student_id', profile.id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
           supabase
             .from('group_persona_messages')
             .select('id, created_at, group_persona_threads!inner(persona_id, project_personas!inner(name, project_id, projects!inner(title, course_id)))')
