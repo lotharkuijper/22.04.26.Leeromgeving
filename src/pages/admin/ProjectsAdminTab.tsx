@@ -57,6 +57,8 @@ interface ProjectPersona {
   sort_order: number;
   persona_type?: string;
   cue_emission_enabled?: boolean;
+  max_consultations?: number | null;
+  auto_close_hours?: number | null;
 }
 
 interface ProjectDoc {
@@ -558,6 +560,8 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
           cue_emission_enabled: (editingPersona.persona_type || 'conversational') === 'evaluator'
             ? false
             : (editingPersona.cue_emission_enabled ?? true),
+          max_consultations: editingPersona.max_consultations ?? null,
+          auto_close_hours: editingPersona.auto_close_hours ?? null,
         }),
       });
       const d = await r.json();
@@ -1012,6 +1016,41 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                   </details>
                 </div>
               )}
+              <div className="border-t border-gray-100 pt-2 grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.maxConsultationsLabel')}</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={editingPersona.max_consultations ?? ''}
+                    placeholder={t('admin.projects.personas.maxConsultationsUnlimited')}
+                    onChange={e => {
+                      const v = e.target.value.trim();
+                      setEditingPersona({ ...editingPersona, max_consultations: v === '' ? null : Math.max(0, Math.floor(Number(v))) });
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                    data-testid="input-pp-max-consultations"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">{t('admin.projects.personas.maxConsultationsHint')}</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.autoCloseHoursLabel')}</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={editingPersona.auto_close_hours ?? ''}
+                    placeholder={t('admin.projects.personas.autoCloseHoursOff')}
+                    onChange={e => {
+                      const v = e.target.value.trim();
+                      setEditingPersona({ ...editingPersona, auto_close_hours: v === '' ? null : Math.max(0, Math.floor(Number(v))) });
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                    data-testid="input-pp-auto-close-hours"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">{t('admin.projects.personas.autoCloseHoursHint')}</p>
+                </div>
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setEditingPersona(null)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">{t('admin.projects.personas.cancelBtn')}</button>

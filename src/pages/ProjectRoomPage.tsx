@@ -143,6 +143,18 @@ interface RelationshipInfo {
   updatedAt: string | null;
   history: RelationshipHistoryEvent[];
 }
+// Task #252 — raadpleeglimiet per project-persona (per groep).
+interface ConsultationInfo {
+  personaId: string;
+  used: number;
+  extra: number;
+  baseLimit: number | null;
+  limit: number | null;
+  remaining: number | null;
+  blocked: boolean;
+  hasOpenThread?: boolean;
+  autoCloseHours: number | null;
+}
 interface ClosedConversation {
   threadId: string;
   personaId: string;
@@ -202,6 +214,14 @@ export function ProjectRoomPage() {
   const [adjustNote, setAdjustNote] = useState<string>('');
   const [adjustSaving, setAdjustSaving] = useState(false);
   const [adjustError, setAdjustError] = useState<string | null>(null);
+  // Task #252 — raadpleeglimieten + grant-modal + bevestiging nieuwe raadpleging
+  const [consultations, setConsultations] = useState<ConsultationInfo[]>([]);
+  const [grantingPersona, setGrantingPersona] = useState<{ personaId: string; personaName: string } | null>(null);
+  const [grantExtra, setGrantExtra] = useState<number>(1);
+  const [grantNote, setGrantNote] = useState<string>('');
+  const [grantSaving, setGrantSaving] = useState(false);
+  const [grantError, setGrantError] = useState<string | null>(null);
+  const [confirmConsult, setConfirmConsult] = useState<ConsultationInfo | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -237,7 +257,7 @@ export function ProjectRoomPage() {
     if (!token || !projectId || !groupId) return;
     setLoadingRoom(true);
     try {
-      const r = await fetch(`/api/projects/${projectId}/room?groupId=${groupId}`, {
+      const r = await fetch(`/api/projects/${projectId}/room?groupId=${groupId}&lang=${lang}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) {
@@ -253,6 +273,7 @@ export function ProjectRoomPage() {
       setProjectMaterials(data.projectDocuments || []);
       setEvaluators(data.evaluators || []);
       setHasEvaluator(!!data.hasEvaluator);
+      setConsultations(data.consultations || []);
       if (!activePersonaId && data.personas?.length > 0) {
         setActivePersonaId(data.personas[0].id);
       }
@@ -261,7 +282,7 @@ export function ProjectRoomPage() {
     } finally {
       setLoadingRoom(false);
     }
-  }, [token, projectId, groupId, activePersonaId]);
+  }, [token, projectId, groupId, activePersonaId, lang]);
 
   useEffect(() => { loadRoom(); }, [loadRoom]);
 
@@ -597,9 +618,25 @@ export function ProjectRoomPage() {
     }
   };
 
-  const sendPersona = async () => {
+  // Task #252: bepaalt of dit bericht een NIEUWE raadpleging start (geen open
+  // thread) terwijl er een eindige limiet geldt — dan eerst bevestigen.
+  const sendPersona = () => {
     if (!personaInput.trim() || !activePersonaId || !groupId || !token) return;
-    const text = personaInput.trim();
+    const consult = consultations.find(c => c.personaId === activePersonaId);
+    if (consult?.blocked) return; // input is dan toch al uitgeschakeld
+    const startsNewConsultation = consult
+      && consult.limit !== null
+      && !activeThreadId
+      && !consult.hasOpenThread;
+    if (startsNewConsultation) {
+      setConfirmConsult(consult!);
+      return;
+    }
+    doSendPersona(personaInput.trim());
+  };
+
+  const doSendPersona = async (text: string) => {
+    if (!text || !activePersonaId || !groupId || !token) return;
     setPersonaInput('');
     const tempId = `local-${Date.now()}`;
     setPersonaMessages(prev => [...prev, {
@@ -623,6 +660,9 @@ export function ProjectRoomPage() {
       // Task #167: server kan een blokkade signaleren — herlaad relaties zodat
       // de banner + dropdown-label direct synchroniseren.
       if (data.relationshipBlocked) loadRelationships();
+      // Task #252: verbruik bijwerken (nieuwe raadpleging gestart of limiet
+      // bereikt) zodat teller/banner/badge direct synchroniseren.
+      if (data.consultation || data.consultationLimitReached) loadRoom();
     } catch (e: any) {
       setPersonaMessages(prev => [...prev, {
         id: `err-${Date.now()}`, role: 'assistant',
@@ -630,6 +670,33 @@ export function ProjectRoomPage() {
       }]);
     } finally {
       setPersonaLoading(false);
+    }
+  };
+
+  // Task #252: staff kent extra raadplegingen toe aan deze groep.
+  const submitGrant = async () => {
+    if (!grantingPersona || !projectId || !groupId || !token) return;
+    setGrantSaving(true);
+    setGrantError(null);
+    try {
+      const r = await fetch(
+        `/api/projects/${projectId}/groups/${groupId}/personas/${grantingPersona.personaId}/consultations-grant`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ extra: grantExtra, note: grantNote.trim() || null }),
+        },
+      );
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || t('room.consultations.grantFailed'));
+      setGrantingPersona(null);
+      setGrantNote('');
+      setGrantExtra(1);
+      await loadRoom();
+    } catch (e: any) {
+      setGrantError(e.message);
+    } finally {
+      setGrantSaving(false);
     }
   };
 
@@ -853,6 +920,10 @@ export function ProjectRoomPage() {
       setActiveThreadId(null);
       setRightPanelTab('logboek');
       await loadConversationLog();
+      // Task #252: thread is nu dicht → herlaad raadpleeg-status zodat
+      // hasOpenThread/used/remaining vers zijn vóór een eventueel nieuw gesprek
+      // (anders zou de bevestiging bij een nieuwe raadpleging overgeslagen worden).
+      loadRoom();
       setInfo(t('room.conversationClosed'));
       setTimeout(() => setInfo(null), 5000);
     } catch (e: any) {
@@ -1026,6 +1097,28 @@ export function ProjectRoomPage() {
                   </span>
                 );
               })()}
+              {(() => {
+                // Task #252: resterende raadplegingen naast de dropdown.
+                const consult = consultations.find(c => c.personaId === activePersonaId);
+                if (!consult || consult.limit === null) return null;
+                const cls = consult.blocked
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : (consult.remaining ?? 0) <= 1
+                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : 'bg-gray-50 text-gray-600 border-gray-200';
+                return (
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[10px] font-medium shrink-0 ${cls}`}
+                    title={t('room.consultations.staffUsedOf', { used: consult.used, limit: consult.limit })}
+                    data-testid={`badge-consultations-${consult.personaId}`}
+                  >
+                    <MessageCircle className="w-3 h-3" />
+                    {consult.blocked
+                      ? t('room.consultations.blockedBadge')
+                      : t('room.consultations.remaining', { remaining: Math.max(0, consult.remaining ?? 0), limit: consult.limit })}
+                  </span>
+                );
+              })()}
             </div>
             {activePersona && activePersonaId !== '__default__' && (
               <div className="flex items-center justify-between gap-2 text-xs text-gray-600">
@@ -1099,6 +1192,20 @@ export function ProjectRoomPage() {
                 </div>
               );
             })()}
+            {(() => {
+              // Task #252: raadpleeglimiet bereikt → blokkade-banner.
+              const consult = consultations.find(c => c.personaId === activePersonaId);
+              if (!consult || !consult.blocked) return null;
+              return (
+                <div
+                  className="mb-2 px-3 py-2 rounded-lg border border-red-200 bg-red-50 text-xs text-red-700 flex items-start gap-2"
+                  data-testid="banner-consultations-blocked"
+                >
+                  <MessageCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>{t('room.consultations.blockedBanner', { limit: consult.limit ?? 0 })}</span>
+                </div>
+              );
+            })()}
             <div className="flex gap-2 items-end">
               <textarea
                 ref={personaInputRef}
@@ -1114,6 +1221,7 @@ export function ProjectRoomPage() {
                 disabled={
                   !activePersona || personaLoading || isFinalized
                   || !!relationships.find(r => r.personaId === activePersonaId && r.blocked)
+                  || !!consultations.find(c => c.personaId === activePersonaId && c.blocked)
                 }
                 rows={6}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 resize-none leading-snug min-h-[150px] max-h-[300px]"
@@ -1125,6 +1233,7 @@ export function ProjectRoomPage() {
                   disabled={
                     !personaInput.trim() || personaLoading || isFinalized
                     || !!relationships.find(r => r.personaId === activePersonaId && r.blocked)
+                    || !!consultations.find(c => c.personaId === activePersonaId && c.blocked)
                   }
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-40"
                   data-testid="button-send-persona"
@@ -1620,6 +1729,62 @@ export function ProjectRoomPage() {
                 )}
               </div>
             )}
+            {isStaff && consultations.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-gray-100" data-testid="panel-consultations">
+                <div className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1">
+                  <MessageCircle className="w-3 h-3" /> {t('room.consultations.staffTitle')}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="text-gray-500">
+                      <tr>
+                        <th className="text-left py-1 pr-2">Persona</th>
+                        <th className="text-left py-1 pr-2">{t('room.consultations.colUsed')}</th>
+                        <th className="text-left py-1 pr-2">{t('room.consultations.colExtra')}</th>
+                        <th className="text-right py-1">{t('room.consultations.colActions')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {consultations.map(c => {
+                        const persona = personas.find(p => p.id === c.personaId);
+                        const name = persona?.name || c.personaId;
+                        const emoji = persona?.avatar_emoji || '🤖';
+                        return (
+                          <tr key={c.personaId} className="border-t border-gray-100 align-top" data-testid={`row-consultations-${c.personaId}`}>
+                            <td className="py-1 pr-2">
+                              <span className="mr-1">{emoji}</span>
+                              <span className="text-gray-800">{name}</span>
+                            </td>
+                            <td className="py-1 pr-2 font-mono" data-testid={`text-consultations-used-${c.personaId}`}>
+                              {c.limit === null
+                                ? `${c.used} / ${t('room.consultations.unlimited')}`
+                                : `${c.used} / ${c.limit}`}
+                              {c.blocked && <span className="ml-1 text-red-600">⛔</span>}
+                            </td>
+                            <td className="py-1 pr-2 font-mono">{c.extra > 0 ? `+${c.extra}` : '—'}</td>
+                            <td className="py-1 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setGrantingPersona({ personaId: c.personaId, personaName: name });
+                                  setGrantExtra(c.extra > 0 ? c.extra + 1 : 1);
+                                  setGrantNote('');
+                                  setGrantError(null);
+                                }}
+                                className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded hover:bg-blue-100 text-[10px]"
+                                data-testid={`button-grant-consultations-${c.personaId}`}
+                              >
+                                {t('room.consultations.grantBtn')}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             {checkpoints.length > 0 && (
               <div className="mt-3 pt-3 border-t border-gray-100">
                 <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
@@ -1720,6 +1885,108 @@ export function ProjectRoomPage() {
                   ? <Loader2 className="w-4 h-4 animate-spin" />
                   : <ShieldAlert className="w-4 h-4" />}
                 {adjustSaving ? t('room.relationship.saving') : t('room.relationship.save')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task #252 — Extra raadplegingen toekennen modal (staff) */}
+      {grantingPersona && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="modal-grant-consultations">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">
+              {t('room.consultations.grantTitle', { name: grantingPersona.personaName })}
+            </h2>
+            <p className="text-sm text-gray-600 mb-4">{t('room.consultations.grantSub')}</p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  {t('room.consultations.grantExtraLabel')}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  step={1}
+                  value={grantExtra}
+                  onChange={e => setGrantExtra(Math.max(0, parseInt(e.target.value || '0', 10)))}
+                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                  data-testid="input-grant-extra"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  {t('room.consultations.grantNoteLabel')}
+                </label>
+                <textarea
+                  value={grantNote}
+                  onChange={e => setGrantNote(e.target.value)}
+                  rows={3}
+                  placeholder={t('room.consultations.grantNotePlaceholder')}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  data-testid="input-grant-note"
+                />
+              </div>
+              {grantError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-xs" data-testid="text-grant-error">
+                  {grantError}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2 justify-end mt-5">
+              <button
+                onClick={() => { setGrantingPersona(null); setGrantError(null); }}
+                disabled={grantSaving}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                data-testid="button-cancel-grant"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={submitGrant}
+                disabled={grantSaving}
+                className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
+                data-testid="button-confirm-grant"
+              >
+                {grantSaving
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <MessageCircle className="w-4 h-4" />}
+                {grantSaving ? t('room.consultations.grantSaving') : t('room.consultations.grantSave')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task #252 — Bevestiging: nieuwe raadpleging starten */}
+      {confirmConsult && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="modal-confirm-consultation">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">{t('room.consultations.confirmTitle')}</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              {(confirmConsult.remaining ?? 0) <= 1
+                ? t('room.consultations.confirmBodyLast', { limit: confirmConsult.limit ?? 0 })
+                : t('room.consultations.confirmBody', {
+                    remaining: Math.max(0, (confirmConsult.remaining ?? 0) - 1),
+                    limit: confirmConsult.limit ?? 0,
+                  })}
+            </p>
+            <div className="flex gap-2 justify-end mt-5">
+              <button
+                onClick={() => setConfirmConsult(null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+                data-testid="button-cancel-consultation"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={() => { setConfirmConsult(null); doSendPersona(personaInput.trim()); }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
+                data-testid="button-confirm-consultation"
+              >
+                <Send className="w-4 h-4" />
+                {t('room.consultations.confirmStart')}
               </button>
             </div>
           </div>

@@ -65,6 +65,16 @@ import {
   cueJsonInstruction as relCueJsonInstruction,
   hasCueTable as relHasCueTable,
 } from './personaRelationship.js';
+import {
+  computeEffectiveLimit as conComputeEffectiveLimit,
+  computeRemaining as conComputeRemaining,
+  isConsultationBlocked as conIsBlocked,
+  normalizeAutoCloseHours as conNormalizeAutoCloseHours,
+  normalizeMaxConsultations as conNormalizeMax,
+  normalizeExtraGrant as conNormalizeExtra,
+  isThreadStale as conIsThreadStale,
+  consultationLimitMessage as conLimitMessage,
+} from './consultationLimit.js';
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
 // uitvoeren, zoals bytea-inserts van binaire bestanden.
@@ -8133,11 +8143,70 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
       }));
     }
 
+    // Task #252: raadpleeglimiet per project-persona voor deze groep. Lui
+    // worden stille open threads eerst afgerond (op basis van auto_close_hours).
+    let consultations = [];
+    if (group) {
+      const lang = req.query.lang === 'en' ? 'en' : 'nl';
+      const projectPersonas = personas.filter(p => p._source === 'project');
+      // Lui auto-close per persona met een ingesteld venster.
+      for (const p of projectPersonas) {
+        if (conNormalizeAutoCloseHours(p.auto_close_hours) === null) continue;
+        try {
+          await autoCloseStaleThreads({
+            groupId: group.id, personaId: p.id,
+            autoCloseHours: p.auto_close_hours,
+            closedBy: auth.user.id, lang,
+          });
+        } catch (e) {
+          console.warn('[room] auto-close mislukte:', e.message);
+        }
+      }
+      // Verbruik (threads, open + gesloten) per persona tellen.
+      const { data: allThreads } = await supabaseAdmin
+        .from('group_persona_threads')
+        .select('persona_id, closed_at')
+        .eq('group_id', group.id);
+      const usedByPersona = new Map();
+      const openByPersona = new Set();
+      (allThreads || []).forEach(t => {
+        usedByPersona.set(t.persona_id, (usedByPersona.get(t.persona_id) || 0) + 1);
+        if (!t.closed_at) openByPersona.add(t.persona_id);
+      });
+      // Extra toekenningen per persona (defensief tegen ontbrekende tabel).
+      const extraByPersona = new Map();
+      const { data: grants, error: grantErr } = await supabaseAdmin
+        .from('project_persona_consultation_grants')
+        .select('persona_id, extra_consultations')
+        .eq('project_id', projectId).eq('group_id', group.id);
+      if (!grantErr) {
+        (grants || []).forEach(g => extraByPersona.set(g.persona_id, conNormalizeExtra(g.extra_consultations)));
+      }
+      consultations = projectPersonas.map(p => {
+        const used = usedByPersona.get(p.id) || 0;
+        const extra = extraByPersona.get(p.id) || 0;
+        const limit = conComputeEffectiveLimit(p.max_consultations, extra);
+        return {
+          personaId: p.id,
+          used,
+          extra,
+          baseLimit: conNormalizeMax(p.max_consultations),
+          limit,
+          remaining: conComputeRemaining(used, limit),
+          // "blocked" = er kan geen NIEUWE raadpleging gestart worden.
+          blocked: conIsBlocked(used, limit),
+          hasOpenThread: openByPersona.has(p.id),
+          autoCloseHours: conNormalizeAutoCloseHours(p.auto_close_hours),
+        };
+      });
+    }
+
     return res.json({
       project, group, members, personas, checkpoints,
       projectDocuments: projectDocs || [],
       evaluators,
       hasEvaluator: evaluatorCount > 0,
+      consultations,
     });
   } catch (err) {
     console.error('[projects/:id/room]', err);
@@ -8233,19 +8302,71 @@ app.post('/api/projects/persona-chat', async (req, res) => {
 
     // Thread ophalen of aanmaken (alleen voor echte persona's met uuid).
     let threadId = null;
+    let consultation = null;
     if (persona.id !== '__default__') {
+      // Task #252: lui stille open thread eerst afronden (op basis van
+      // auto_close_hours). Zo telt voortzetten na het venster als een nieuwe
+      // raadpleging en wordt de limiet correct gehandhaafd.
+      try {
+        await autoCloseStaleThreads({
+          groupId, personaId: persona.id,
+          autoCloseHours: persona.auto_close_hours,
+          closedBy: auth.user.id, lang,
+        });
+      } catch (e) {
+        console.warn('[persona-chat] auto-close mislukte:', e.message);
+      }
+
       const { data: existingThread } = await supabaseAdmin
         .from('group_persona_threads')
         .select('id').eq('group_id', groupId).eq('persona_id', persona.id).is('closed_at', null).maybeSingle();
       if (existingThread) {
         threadId = existingThread.id;
       } else {
+        // Nieuwe raadpleging → limiet handhaven. Effectieve limiet =
+        // persona.max_consultations + per-groep toegekende extra. null = onbeperkt.
+        let used = 0;
+        let extra = 0;
+        try {
+          // group_persona_threads is een kerntabel die altijd bestaat; een
+          // telfout is dus transient. Fail CLOSED zodat de limiet niet stil
+          // wordt omzeild bij een tijdelijke DB-fout.
+          used = await countConsultations(groupId, persona.id);
+        } catch (e) {
+          console.error('[persona-chat] raadpleging tellen mislukte:', e.message);
+          return res.status(503).json({
+            error: 'Raadpleeglimiet kon niet worden gecontroleerd. Probeer het zo opnieuw.',
+          });
+        }
+        try {
+          // Extra grants verhogen de limiet alléén; bij twijfel 0 = strenger =
+          // veilig (en ontbrekende tabel levert intern al 0 op).
+          extra = await loadConsultationGrant(project.id, groupId, persona.id);
+        } catch (e) {
+          console.warn('[persona-chat] extra raadplegingen laden mislukte:', e.message);
+        }
+        const effLimit = conComputeEffectiveLimit(persona.max_consultations, extra);
+        if (conIsBlocked(used, effLimit)) {
+          return res.json({
+            reply: conLimitMessage(lang, effLimit),
+            ragSources: [],
+            threadId: null,
+            consultationLimitReached: true,
+            consultation: { used, limit: effLimit, remaining: 0 },
+          });
+        }
         const { data: newThread, error: tErr } = await supabaseAdmin
           .from('group_persona_threads')
           .insert({ group_id: groupId, persona_id: persona.id })
           .select('id').single();
         if (tErr) return res.status(500).json({ error: tErr.message });
         threadId = newThread.id;
+        const newUsed = used + 1;
+        consultation = {
+          used: newUsed,
+          limit: effLimit,
+          remaining: conComputeRemaining(newUsed, effLimit),
+        };
       }
     }
 
@@ -8401,7 +8522,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
       });
     }
 
-    return res.json({ reply, ragSources, threadId });
+    return res.json({ reply, ragSources, threadId, consultation });
   } catch (err) {
     console.error('[projects/persona-chat]', err);
     return res.status(500).json({ error: err.message });
@@ -8529,6 +8650,213 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
 // system_prompt van de persona. Stil voor studenten (niet in response),
 // zichtbaar voor staff in het Verstandhoudingen-paneel. Persona's met
 // `cue_emission_enabled=false` (alle evaluators standaard) leveren altijd 0.
+
+// --- Task #252: raadpleeglimiet-helpers (DB-toegang; pure logica zit in
+// server/consultationLimit.js). ---
+
+// Tel hoeveel raadplegingen (= threads, open + gesloten) een groep al met deze
+// persona heeft gestart. De teller wordt verbruikt bij het OPENEN van een thread.
+async function countConsultations(groupId, personaId) {
+  const { count, error } = await supabaseAdmin
+    .from('group_persona_threads')
+    .select('id', { count: 'exact', head: true })
+    .eq('group_id', groupId).eq('persona_id', personaId);
+  if (error) throw error;
+  return count || 0;
+}
+
+// Lees de per (project, groep, persona) toegekende extra raadplegingen.
+// Defensief tegen ontbrekende tabel (oude DB) → 0.
+async function loadConsultationGrant(projectId, groupId, personaId) {
+  const { data, error } = await supabaseAdmin
+    .from('project_persona_consultation_grants')
+    .select('extra_consultations')
+    .eq('project_id', projectId).eq('group_id', groupId).eq('persona_id', personaId)
+    .maybeSingle();
+  if (error) {
+    if (error.code === '42P01' || /project_persona_consultation_grants/i.test(error.message || '')) return 0;
+    throw error;
+  }
+  return conNormalizeExtra(data?.extra_consultations);
+}
+
+// Voer de afronding van één thread uit: server-side samenvatting (topics/
+// agreements), DB-update en — indien van toepassing — cue-emissie op de
+// relatie. Wordt gedeeld door het /close-endpoint én de lazy auto-close.
+async function performThreadClose({ thread, groupId, lang, closedBy }) {
+  // Persona + project ophalen voor cue-context en relatie-update.
+  let persona = null;
+  let projectIdForRel = null;
+  if (thread.persona_id) {
+    const { data: p } = await supabaseAdmin
+      .from('project_personas')
+      .select('id, project_id, system_prompt, cue_emission_enabled, persona_type')
+      .eq('id', thread.persona_id).maybeSingle();
+    persona = p || null;
+    projectIdForRel = persona?.project_id || null;
+  }
+  if (!projectIdForRel) {
+    const { data: g } = await supabaseAdmin
+      .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
+    projectIdForRel = g?.project_id || null;
+  }
+  // Cue-emissie alleen voor conversational persona's die expliciet aan
+  // staan ÉN waarvan de system_prompt een herkenbare cue-tabel bevat.
+  // Zonder cue-tabel ontbreekt de docent-rubric en zou het LLM op losse
+  // gronden kunnen oordelen — dat forceren we hier hard naar delta=0
+  // (architect-review eis: "geen cue-tabel ⇒ altijd 0"). Defensief:
+  // ontbrekende kolom (oude DB) telt als 'true'.
+  const cueTablePresent = relHasCueTable(persona?.system_prompt || '');
+  const emissionEnabled = !!persona
+    && (persona.persona_type || 'conversational') === 'conversational'
+    && (persona.cue_emission_enabled !== false)
+    && cueTablePresent;
+  if (persona
+      && (persona.persona_type || 'conversational') === 'conversational'
+      && persona.cue_emission_enabled !== false
+      && !cueTablePresent) {
+    console.warn(`[threads/close] cue-emissie uit voor persona ${persona.id}: geen cue-tabel in system_prompt → delta geforceerd op 0`);
+  }
+
+  // --- Server-side samenvatting genereren (zelfde logica als /close-preview) ---
+  const { data: msgs } = await supabaseAdmin
+    .from('group_persona_messages')
+    .select('role, content')
+    .eq('thread_id', thread.id)
+    .order('created_at', { ascending: true });
+  const allMsgs = msgs || [];
+  let topics = [];
+  let agreements = [];
+  let cue = { delta: 0, reason: '' };
+
+  if (AZURE_CHAT_READY) {
+    const conversationText = allMsgs
+      .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
+      .join('\n').slice(0, 12000);
+    const msgCount = allMsgs.filter(m => m.role === 'user').length;
+    const topicsInstruction = lang === 'en'
+      ? (msgCount <= 3 ? '2-3 short topics' : msgCount <= 8 ? '3-5 topics' : '5-8 topics')
+      : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
+    const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
+
+    const cueJson = emissionEnabled ? `\n${relCueJsonInstruction(lang)}` : '';
+    const cueSchemaSnippet = emissionEnabled
+      ? ',\n  "relationship_delta": 0,\n  "relationship_reason": ""'
+      : '';
+    const prompt = lang === 'en'
+      ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.${cueJson}\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
+      : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.${cueJson}\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
+
+    // Bouw de system-prompt: docent-cue-tabel (persona.system_prompt) + meta-blok.
+    const systemContent = emissionEnabled
+      ? `${persona.system_prompt || ''}${relCueInstructionBlock(lang)}`
+      : (persona?.system_prompt || '');
+
+    try {
+      const messages = systemContent
+        ? [{ role: 'system', content: systemContent }, { role: 'user', content: prompt }]
+        : [{ role: 'user', content: prompt }];
+      const chatResp = await fetch(OPENAI_CHAT_URL, {
+        method: 'POST',
+        headers: chatAuthHeaders(),
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages,
+          temperature: 0.2,
+          [MAX_TOKENS_PARAM]: 700,
+          response_format: { type: 'json_object' },
+        }),
+      });
+      if (chatResp.ok) {
+        const raw = ((await chatResp.json()).choices?.[0]?.message?.content || '{}').trim();
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+        topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
+        agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
+        cue = relValidateCueResponse(parsed, { emissionEnabled });
+      }
+    } catch (e) {
+      console.error('[threads/close] LLM/parse fout:', e.message);
+    }
+  }
+  // Fallback als het model geen bruikbare output geeft.
+  if (topics.length === 0) {
+    topics = allMsgs.filter(m => m.role === 'user')
+      .map(m => (m.content || '').slice(0, 100))
+      .filter(Boolean).slice(0, 3);
+  }
+
+  // --- Schrijf naar DB: alleen server gegenereerde waarden ---
+  const { error: updErr } = await supabaseAdmin
+    .from('group_persona_threads')
+    .update({
+      closed_at: new Date().toISOString(),
+      closed_by: closedBy || null,
+      topics,
+      agreements,
+    })
+    .eq('id', thread.id);
+  if (updErr) throw new Error(updErr.message);
+
+  // Cue-emissie toepassen op de relatie. Idempotent via thread_close-refId.
+  // Stil voor studenten — niet in response.
+  if (emissionEnabled && cue.delta !== 0 && projectIdForRel) {
+    try {
+      await applyRelationshipDelta({
+        projectId: projectIdForRel,
+        groupId,
+        personaId: thread.persona_id,
+        delta: cue.delta,
+        event: {
+          source: 'persona_chat_close',
+          refId: `thread_close:${thread.id}`,
+          delta: cue.delta,
+          note: cue.reason,
+        },
+      });
+    } catch (relErr) {
+      console.warn('[threads/close] relationship-update mislukte:', relErr.message);
+    }
+  }
+
+  return { topics, agreements };
+}
+
+// Lazy auto-close: rond stille open threads van (groep, persona) automatisch af
+// wanneer de laatste activiteit langer dan auto_close_hours geleden was. Geen
+// cron — wordt aangeroepen vanuit room-load en persona-chat. Best-effort:
+// fouten per thread worden gelogd, niet gegooid. Retourneert het aantal
+// afgesloten threads.
+async function autoCloseStaleThreads({ groupId, personaId, autoCloseHours, closedBy, lang }) {
+  const hours = conNormalizeAutoCloseHours(autoCloseHours);
+  if (hours === null) return 0;
+  const { data: openThreads, error } = await supabaseAdmin
+    .from('group_persona_threads')
+    .select('id, persona_id, created_at')
+    .eq('group_id', groupId).eq('persona_id', personaId).is('closed_at', null);
+  if (error || !openThreads || openThreads.length === 0) return 0;
+  const now = Date.now();
+  let closed = 0;
+  for (const th of openThreads) {
+    const { data: lastMsg } = await supabaseAdmin
+      .from('group_persona_messages')
+      .select('created_at')
+      .eq('thread_id', th.id)
+      .order('created_at', { ascending: false })
+      .limit(1).maybeSingle();
+    const lastTs = lastMsg?.created_at || th.created_at;
+    if (conIsThreadStale(lastTs, hours, now)) {
+      try {
+        await performThreadClose({ thread: th, groupId, lang, closedBy: closedBy || null });
+        closed++;
+      } catch (e) {
+        console.warn(`[auto-close] thread ${th.id} afronden mislukte:`, e.message);
+      }
+    }
+  }
+  return closed;
+}
+
 app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
@@ -8546,144 +8874,9 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
       .eq('id', threadId).eq('group_id', groupId).is('closed_at', null).maybeSingle();
     if (!thread) return res.status(404).json({ error: 'Thread niet gevonden of al afgesloten' });
 
-    // Persona + project ophalen voor cue-context en relatie-update.
-    let persona = null;
-    let projectIdForRel = null;
-    if (thread.persona_id) {
-      const { data: p } = await supabaseAdmin
-        .from('project_personas')
-        .select('id, project_id, system_prompt, cue_emission_enabled, persona_type')
-        .eq('id', thread.persona_id).maybeSingle();
-      persona = p || null;
-      projectIdForRel = persona?.project_id || null;
-    }
-    if (!projectIdForRel) {
-      const { data: g } = await supabaseAdmin
-        .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
-      projectIdForRel = g?.project_id || null;
-    }
-    // Cue-emissie alleen voor conversational persona's die expliciet aan
-    // staan ÉN waarvan de system_prompt een herkenbare cue-tabel bevat.
-    // Zonder cue-tabel ontbreekt de docent-rubric en zou het LLM op losse
-    // gronden kunnen oordelen — dat forceren we hier hard naar delta=0
-    // (architect-review eis: "geen cue-tabel ⇒ altijd 0"). Defensief:
-    // ontbrekende kolom (oude DB) telt als 'true'.
-    const cueTablePresent = relHasCueTable(persona?.system_prompt || '');
-    const emissionEnabled = !!persona
-      && (persona.persona_type || 'conversational') === 'conversational'
-      && (persona.cue_emission_enabled !== false)
-      && cueTablePresent;
-    if (persona
-        && (persona.persona_type || 'conversational') === 'conversational'
-        && persona.cue_emission_enabled !== false
-        && !cueTablePresent) {
-      console.warn(`[threads/close] cue-emissie uit voor persona ${persona.id}: geen cue-tabel in system_prompt → delta geforceerd op 0`);
-    }
-
-    // --- Server-side samenvatting genereren (zelfde logica als /close-preview) ---
-    const { data: msgs } = await supabaseAdmin
-      .from('group_persona_messages')
-      .select('role, content')
-      .eq('thread_id', threadId)
-      .order('created_at', { ascending: true });
-    const allMsgs = msgs || [];
-    let topics = [];
-    let agreements = [];
-    let cue = { delta: 0, reason: '' };
-
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (AZURE_CHAT_READY) {
-      const conversationText = allMsgs
-        .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
-        .join('\n').slice(0, 12000);
-      const msgCount = allMsgs.filter(m => m.role === 'user').length;
-      const topicsInstruction = lang === 'en'
-        ? (msgCount <= 3 ? '2-3 short topics' : msgCount <= 8 ? '3-5 topics' : '5-8 topics')
-        : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
-      const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
-
-      const cueJson = emissionEnabled ? `\n${relCueJsonInstruction(lang)}` : '';
-      const cueSchemaSnippet = emissionEnabled
-        ? (lang === 'en'
-            ? ',\n  "relationship_delta": 0,\n  "relationship_reason": ""'
-            : ',\n  "relationship_delta": 0,\n  "relationship_reason": ""')
-        : '';
-      const prompt = lang === 'en'
-        ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.${cueJson}\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
-        : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.${cueJson}\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
-
-      // Bouw de system-prompt: docent-cue-tabel (persona.system_prompt) + meta-blok.
-      const systemContent = emissionEnabled
-        ? `${persona.system_prompt || ''}${relCueInstructionBlock(lang)}`
-        : (persona?.system_prompt || '');
-
-      try {
-        const messages = systemContent
-          ? [{ role: 'system', content: systemContent }, { role: 'user', content: prompt }]
-          : [{ role: 'user', content: prompt }];
-        const chatResp = await fetch(OPENAI_CHAT_URL, {
-          method: 'POST',
-          headers: chatAuthHeaders(),
-          body: JSON.stringify({
-            model: OPENAI_MODEL,
-            messages,
-            temperature: 0.2,
-            [MAX_TOKENS_PARAM]: 700,
-            response_format: { type: 'json_object' },
-          }),
-        });
-        if (chatResp.ok) {
-          const raw = ((await chatResp.json()).choices?.[0]?.message?.content || '{}').trim();
-          let parsed;
-          try { parsed = JSON.parse(raw); } catch { parsed = {}; }
-          topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
-          agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
-          cue = relValidateCueResponse(parsed, { emissionEnabled });
-        }
-      } catch (e) {
-        console.error('[threads/close] LLM/parse fout:', e.message);
-      }
-    }
-    // Fallback als het model geen bruikbare output geeft.
-    if (topics.length === 0) {
-      topics = allMsgs.filter(m => m.role === 'user')
-        .map(m => (m.content || '').slice(0, 100))
-        .filter(Boolean).slice(0, 3);
-    }
-
-    // --- Schrijf naar DB: alleen server gegenereerde waarden ---
-    const { error: updErr } = await supabaseAdmin
-      .from('group_persona_threads')
-      .update({
-        closed_at: new Date().toISOString(),
-        closed_by: auth.user.id,
-        topics,
-        agreements,
-      })
-      .eq('id', threadId);
-    if (updErr) return res.status(500).json({ error: updErr.message });
-
-    // Cue-emissie toepassen op de relatie. Idempotent via thread_close-refId.
-    // Stil voor studenten — niet in response.
-    if (emissionEnabled && cue.delta !== 0 && projectIdForRel) {
-      try {
-        await applyRelationshipDelta({
-          projectId: projectIdForRel,
-          groupId,
-          personaId: thread.persona_id,
-          delta: cue.delta,
-          event: {
-            source: 'persona_chat_close',
-            refId: `thread_close:${threadId}`,
-            delta: cue.delta,
-            note: cue.reason,
-          },
-        });
-      } catch (relErr) {
-        console.warn('[threads/close] relationship-update mislukte:', relErr.message);
-      }
-    }
-
+    const { topics, agreements } = await performThreadClose({
+      thread, groupId, lang, closedBy: auth.user.id,
+    });
     return res.json({ ok: true, threadId, topics, agreements });
   } catch (err) {
     console.error('[threads/close]', err);
@@ -9383,11 +9576,19 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
       sort_order: i,
       persona_type: p.persona_type === 'evaluator' ? 'evaluator' : 'conversational',
       cue_emission_enabled: p.persona_type === 'evaluator' ? false : true,
+      // Task #252: raadpleeglimiet + auto-close meekopiëren uit de bibliotheek.
+      max_consultations: conNormalizeMax(p.max_consultations),
+      auto_close_hours: conNormalizeAutoCloseHours(p.auto_close_hours),
     }));
     let { error: iErr } = await supabaseAdmin.from('project_personas').insert(rows);
+    if (iErr && (iErr.code === '42703' || /max_consultations|auto_close_hours/i.test(iErr.message || ''))) {
+      // Oude DB zonder Task #252-kolommen: opnieuw zonder die velden.
+      const rowsNoCon = rows.map(({ max_consultations: _m, auto_close_hours: _a, ...rest }) => rest);
+      ({ error: iErr } = await supabaseAdmin.from('project_personas').insert(rowsNoCon));
+    }
     if (iErr && (iErr.code === '42703' || /cue_emission_enabled/i.test(iErr.message || ''))) {
       // Oude DB zonder kolom: opnieuw zonder veld.
-      const rowsNoCue = rows.map(({ cue_emission_enabled: _ignored, ...rest }) => rest);
+      const rowsNoCue = rows.map(({ cue_emission_enabled: _ignored, max_consultations: _m, auto_close_hours: _a, ...rest }) => rest);
       ({ error: iErr } = await supabaseAdmin.from('project_personas').insert(rowsNoCue));
     }
     if (iErr) return res.status(500).json({ error: iErr.message });
@@ -9478,6 +9679,9 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
       rag_enabled, rag_folder_ids } = req.body || {};
     // Task #171: cue-emissie aan/uit. Evaluators staan altijd uit.
     const cueEmissionInput = req.body?.cue_emission_enabled;
+    // Task #252: raadpleeglimiet + auto-close (null = onbeperkt / uit).
+    const maxConsultInput = conNormalizeMax(req.body?.max_consultations);
+    const autoCloseInput = conNormalizeAutoCloseHours(req.body?.auto_close_hours);
 
     // Bepaal volgorde-index achteraan.
     const { data: existing } = await supabaseAdmin
@@ -9502,6 +9706,9 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         persona_type: cp.persona_type || 'conversational',
         // Task #171: evaluators emitteren nooit cues, conversational default aan.
         cue_emission_enabled: (cp.persona_type === 'evaluator') ? false : true,
+        // Task #252: raadpleeglimiet + auto-close uit de bibliotheek.
+        max_consultations: conNormalizeMax(cp.max_consultations),
+        auto_close_hours: conNormalizeAutoCloseHours(cp.auto_close_hours),
       };
     } else {
       if (!name || !String(name).trim()) return res.status(400).json({ error: 'Naam is vereist' });
@@ -9519,13 +9726,22 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         sort_order: nextOrder,
         persona_type: personaType,
         cue_emission_enabled: cueEmission,
+        // Task #252: raadpleeglimiet + auto-close (null = onbeperkt / uit).
+        max_consultations: maxConsultInput,
+        auto_close_hours: autoCloseInput,
       };
     }
     let { data: inserted, error: iErr } = await supabaseAdmin
       .from('project_personas').insert(row).select('*').single();
+    // Defensief: oude DB zonder Task #252-kolommen — opnieuw zonder die velden.
+    if (iErr && (iErr.code === '42703' || /max_consultations|auto_close_hours/i.test(iErr.message || ''))) {
+      const { max_consultations: _m, auto_close_hours: _a, ...rowNoCon } = row;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('project_personas').insert(rowNoCon).select('*').single());
+    }
     // Defensief: oude DB zonder cue_emission_enabled-kolom — opnieuw zonder veld.
     if (iErr && (iErr.code === '42703' || /cue_emission_enabled/i.test(iErr.message || ''))) {
-      const { cue_emission_enabled: _ignored, ...rowNoCue } = row;
+      const { cue_emission_enabled: _ignored, max_consultations: _m, auto_close_hours: _a, ...rowNoCue } = row;
       ({ data: inserted, error: iErr } = await supabaseAdmin
         .from('project_personas').insert(rowNoCue).select('*').single());
     }
@@ -9574,11 +9790,19 @@ app.post('/api/projects/:projectId/personas/from-library/:coursePersonaId', asyn
       persona_type: cp.persona_type || 'conversational',
       // Task #171: evaluators emitteren nooit cues.
       cue_emission_enabled: (cp.persona_type === 'evaluator') ? false : true,
+      // Task #252: raadpleeglimiet + auto-close uit de bibliotheek.
+      max_consultations: conNormalizeMax(cp.max_consultations),
+      auto_close_hours: conNormalizeAutoCloseHours(cp.auto_close_hours),
     };
     let { data: inserted, error: iErr } = await supabaseAdmin
       .from('project_personas').insert(baseRow).select('*').single();
+    if (iErr && (iErr.code === '42703' || /max_consultations|auto_close_hours/i.test(iErr.message || ''))) {
+      const { max_consultations: _m, auto_close_hours: _a, ...rowNoCon } = baseRow;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('project_personas').insert(rowNoCon).select('*').single());
+    }
     if (iErr && (iErr.code === '42703' || /cue_emission_enabled/i.test(iErr.message || ''))) {
-      const { cue_emission_enabled: _ignored, ...rowNoCue } = baseRow;
+      const { cue_emission_enabled: _ignored, max_consultations: _m, auto_close_hours: _a, ...rowNoCue } = baseRow;
       ({ data: inserted, error: iErr } = await supabaseAdmin
         .from('project_personas').insert(rowNoCue).select('*').single());
     }
@@ -9601,7 +9825,7 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
 
-    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order', 'persona_type', 'cue_emission_enabled'];
+    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order', 'persona_type', 'cue_emission_enabled', 'max_consultations', 'auto_close_hours'];
     const patch = {};
     for (const k of allowed) if (k in (req.body || {})) patch[k] = req.body[k];
     if (patch.persona_type && !['conversational', 'evaluator'].includes(patch.persona_type)) {
@@ -9610,13 +9834,24 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
     // Evaluator-persona's emitteren nooit cues.
     if (patch.persona_type === 'evaluator') patch.cue_emission_enabled = false;
     if ('cue_emission_enabled' in patch) patch.cue_emission_enabled = !!patch.cue_emission_enabled;
+    // Task #252: normaliseer raadpleeglimiet + auto-close (null = onbeperkt / uit).
+    if ('max_consultations' in patch) patch.max_consultations = conNormalizeMax(patch.max_consultations);
+    if ('auto_close_hours' in patch) patch.auto_close_hours = conNormalizeAutoCloseHours(patch.auto_close_hours);
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Geen wijzigingen' });
     let { data, error: e } = await supabaseAdmin
       .from('project_personas').update(patch)
       .eq('id', personaId).eq('project_id', projectId).select('*').single();
+    // Defensief: Task #252-kolommen ontbreken in oude DB — verwijder en retry.
+    if (e && (e.code === '42703' || /max_consultations|auto_close_hours/i.test(e.message || ''))) {
+      const { max_consultations: _m, auto_close_hours: _a, ...patchNoCon } = patch;
+      if (Object.keys(patchNoCon).length === 0) return res.json({ persona: null });
+      ({ data, error: e } = await supabaseAdmin
+        .from('project_personas').update(patchNoCon)
+        .eq('id', personaId).eq('project_id', projectId).select('*').single());
+    }
     if (e && (e.code === '42703' || /cue_emission_enabled/i.test(e.message || ''))) {
       // Defensief: kolom ontbreekt in oude DB — verwijder veld en probeer opnieuw.
-      const { cue_emission_enabled: _ignored, ...patchNoCue } = patch;
+      const { cue_emission_enabled: _ignored, max_consultations: _m, auto_close_hours: _a, ...patchNoCue } = patch;
       if (Object.keys(patchNoCue).length === 0) return res.json({ persona: null });
       ({ data, error: e } = await supabaseAdmin
         .from('project_personas').update(patchNoCue)
@@ -10934,6 +11169,77 @@ app.post('/api/projects/:projectId/groups/:groupId/personas/:personaId/relations
     });
   } catch (err) {
     console.error('[relationship-adjust]', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/projects/:projectId/groups/:groupId/personas/:personaId/consultations-grant
+// — Task #252: staff-only toekenning van EXTRA raadplegingen voor één groep.
+// `extra` is het absolute aantal extra raadplegingen (0..1000) bovenop
+// persona.max_consultations. Idempotente upsert per (project, groep, persona).
+app.post('/api/projects/:projectId/groups/:groupId/personas/:personaId/consultations-grant', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, groupId, personaId } = req.params;
+  const extra = conNormalizeExtra(req.body?.extra);
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : null;
+  try {
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
+    if (!isStaff) return res.status(403).json({ error: 'Alleen staff van deze cursus mag raadplegingen toekennen' });
+
+    const { data: groupCheck } = await supabaseAdmin
+      .from('project_groups').select('id, project_id').eq('id', groupId).maybeSingle();
+    if (!groupCheck || groupCheck.project_id !== projectId) {
+      return res.status(404).json({ error: 'Groep niet gevonden in dit project' });
+    }
+    const { data: personaCheck } = await supabaseAdmin
+      .from('project_personas').select('id, project_id, max_consultations').eq('id', personaId).maybeSingle();
+    if (!personaCheck || personaCheck.project_id !== projectId) {
+      return res.status(404).json({ error: 'Persona niet gevonden in dit project' });
+    }
+
+    const { data: grant, error: gErr } = await supabaseAdmin
+      .from('project_persona_consultation_grants')
+      .upsert({
+        project_id: projectId, group_id: groupId, persona_id: personaId,
+        extra_consultations: extra, note,
+        granted_by: auth.user.id, updated_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,group_id,persona_id' })
+      .select('extra_consultations, note, updated_at').single();
+    if (gErr) {
+      if (gErr.code === '42P01' || /project_persona_consultation_grants/i.test(gErr.message || '')) {
+        return res.status(503).json({
+          error: 'Migratie 20260608120000_persona_consultation_limits.sql is nog niet toegepast in Supabase.',
+        });
+      }
+      return res.status(500).json({ error: gErr.message });
+    }
+
+    // Verbruik herberekenen voor directe UI-update.
+    let used = 0;
+    try { used = await countConsultations(groupId, personaId); } catch { /* best-effort */ }
+    const limit = conComputeEffectiveLimit(personaCheck.max_consultations, grant.extra_consultations);
+    return res.json({
+      consultation: {
+        personaId,
+        used,
+        extra: grant.extra_consultations,
+        baseLimit: conNormalizeMax(personaCheck.max_consultations),
+        limit,
+        remaining: conComputeRemaining(used, limit),
+        blocked: conIsBlocked(used, limit),
+        note: grant.note,
+        updated_at: grant.updated_at,
+      },
+    });
+  } catch (err) {
+    console.error('[consultations-grant]', err);
     return res.status(500).json({ error: err.message });
   }
 });
