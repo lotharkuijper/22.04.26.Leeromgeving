@@ -10,3 +10,4 @@
 - [Project RLS course scoping](project-rls-course-scope.md) — projects are one-course-only; never gate project RLS on global profiles.role='docent' (leaks cross-course); scope via course_members + pr_user_has_course_access/pr_is_course_teacher.
 - [Concept extraction replace ordering](concept-extraction-replace-ordering.md) — replace-mode must write concepts BEFORE keep-aware cleanup, fail-before-cleanup on write errors, and only re-tag RAG on already-RAG rows.
 - [Journal course attribution](journal-course-attribution.md) — learning_journal_entries.course_id is nullable/best-effort: project flows derive from projects.course_id, chat/quiz/explain get it from frontend active course via resolveJournalCourseId (never FK-rejects).
+- [Azure chat routing vs OPENAI_MODEL](azure-chat-routing.md) — Azure routes chat by deployment-in-URL, ignores body model; OPENAI_MODEL secret may differ from real deployment, so logs say gpt-5.2 but responses are gpt-5.1 (expected).

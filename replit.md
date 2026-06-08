@@ -1,8 +1,14 @@
 # LEAP-VU — Learning & Engagement AI-Platform
 
 Vite/React SPA + Express server + Supabase (PostgreSQL/auth/RLS).
-LLM: Groq `llama-3.3-70b-versatile`. Embeddings: OpenAI `text-embedding-3-small`.
+Chat/completions: Azure OpenAI (resource `leap-openai-vu`, deployment `gpt-5.1`) — alle chat-calls in `server/index.js` lopen via `OPENAI_CHAT_URL` (Azure-URL) + `chatAuthHeaders()` (`api-key`-header). Embeddings: publieke OpenAI `text-embedding-3-small` (`OPENAI_API_KEY`, Bearer) — nog niet op Azure.
 Taal: Nederlands, tweede persoon (`je`/`jij`). Superuser: `l.d.j.kuijper@vu.nl`.
+
+## Azure OpenAI (chat)
+- Config in `server/index.js` (bovenaan): `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` (secret), `AZURE_OPENAI_DEPLOYMENT` (default `gpt-5.1`), `AZURE_OPENAI_API_VERSION` (default `2024-10-21`). `AZURE_CHAT_READY` = endpoint+key aanwezig. `OPENAI_CHAT_URL` wordt uit deze config gebouwd; routing via deployment in de URL, niet via body-`model`.
+- `chatAuthHeaders()` levert de `api-key`-header voor élke chat-call. Embeddings houden hun eigen Bearer-headers (`OPENAI_EMBEDDINGS_URL` + `OPENAI_API_KEY`).
+- Chat-endpoints gaten nu op `AZURE_CHAT_READY` (503 `LLM_NOT_CONFIGURED_MSG` als Azure ontbreekt); embeddings/ingestie gaten nog op `OPENAI_API_KEY`. `OPENAI_MODEL` (secret) blijft de modelnaam in de body + stuurt `IS_REASONING_MODEL`/`MAX_TOKENS_PARAM`.
+- `GET /api/health` retourneert `azure` + `openai` booleans.
 
 ## Architectuur / Belangrijkste mappen
 - `src/` — React frontend (pagina's, contexten, services).
@@ -15,7 +21,7 @@ Taal: Nederlands, tweede persoon (`je`/`jij`). Superuser: `l.d.j.kuijper@vu.nl`.
 ## Belangrijke services
 - `src/services/quiz-mix.service.ts` — orkestreert mix-aware quizgeneratie, format-conversie ItemBank→MCQQuestion.
 - `src/services/sharestats-integration.service.ts` — GitHub-tree walker, `extype: mchoice`-filter, parse `exsection`-array.
-- `src/services/llm.service.ts` — Groq client, generateQuiz, evaluators.
+- `src/services/llm.service.ts` — roept eigen server-endpoints aan (chat/quiz/evaluatie); geen directe provider-calls. Provider-keuze zit volledig server-side.
 - `src/services/rag.service.ts` — Supabase vector-search. Gebruikt de Supabase RPC `match_document_chunks` direct.
 - `src/services/queryExpansion.ts` — TypeScript-versie van de query-uitbreiding (gedeeld met `ExplainPage` en `AdminPage` types).
 

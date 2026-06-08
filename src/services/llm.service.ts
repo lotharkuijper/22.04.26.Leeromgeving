@@ -96,8 +96,8 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
           ? 'De AI-dienst weigerde de toegang (sleutel of rechten).'
           : 'The AI service denied access (key or permissions).',
         detail: nl
-          ? 'Vraag de beheerder om te controleren of de OPENAI_API_KEY geldig is en toegang heeft tot het ingestelde model.'
-          : 'Ask the administrator to verify the OPENAI_API_KEY is valid and has access to the configured model.',
+          ? 'Vraag de beheerder om te controleren of de Azure OpenAI-sleutel geldig is en toegang heeft tot het ingestelde model.'
+          : 'Ask the administrator to verify the Azure OpenAI key is valid and has access to the configured model.',
       };
     }
     if (code === 'invalid_request_error' || (err.status >= 400 && err.status < 500)) {

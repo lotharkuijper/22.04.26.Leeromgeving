@@ -119,7 +119,26 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('[API Server] SUPABASE_SERVICE_ROLE_KEY or SUPABASE_URL missing — admin routes disabled');
 }
 
-const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+// === Azure OpenAI (chat/completions) ===
+// Alle chat-/completion-aanroepen lopen via de Azure OpenAI-resource van de VU
+// (leap-openai-vu). Routing gebeurt via de deployment in de URL; authenticatie
+// via de 'api-key'-header (niet Bearer). Embeddings blijven voorlopig op de
+// publieke OpenAI-API (text-embedding-3-small).
+const AZURE_OPENAI_ENDPOINT = (process.env.AZURE_OPENAI_ENDPOINT || '').replace(/\/+$/, '');
+const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY || '';
+const AZURE_OPENAI_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-10-21';
+const AZURE_OPENAI_DEPLOYMENT = process.env.AZURE_OPENAI_DEPLOYMENT || process.env.OPENAI_MODEL || 'gpt-5.1';
+const AZURE_CHAT_READY = Boolean(AZURE_OPENAI_ENDPOINT && AZURE_OPENAI_API_KEY);
+// Géén OpenAI-fallback voor chat: als Azure niet is geconfigureerd blijft de URL
+// leeg en falen chat-calls expliciet (de endpoints gaten bovendien op AZURE_CHAT_READY).
+const OPENAI_CHAT_URL = AZURE_CHAT_READY
+  ? `${AZURE_OPENAI_ENDPOINT}/openai/deployments/${encodeURIComponent(AZURE_OPENAI_DEPLOYMENT)}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION}`
+  : '';
+const LLM_NOT_CONFIGURED_MSG = 'Azure OpenAI is niet geconfigureerd op de server (AZURE_OPENAI_ENDPOINT en AZURE_OPENAI_API_KEY ontbreken).';
+// Auth-headers voor een chat-call. Azure verwacht de 'api-key'-header.
+function chatAuthHeaders() {
+  return { 'api-key': AZURE_OPENAI_API_KEY, 'Content-Type': 'application/json' };
+}
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 // GPT-5 en o1/o3 modellen accepteren geen 'max_tokens' meer; ze vereisen
 // 'max_completion_tokens'. We detecteren dat aan de modelnaam zodat alle
@@ -286,8 +305,8 @@ async function detectQuizAttemptsSchema() {
 
 app.post('/api/chat', async (req, res) => {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return res.status(503).json({ error: 'OPENAI_API_KEY not configured on server' });
+  if (!AZURE_CHAT_READY) {
+    return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
   }
 
   const {
@@ -399,10 +418,7 @@ app.post('/api/chat', async (req, res) => {
   const postChatCompletion = async (body) => {
     const r = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers: chatAuthHeaders(),
       body: JSON.stringify(body),
     });
     return { r, body: await r.json() };
@@ -627,11 +643,11 @@ ${chatText}
 
 Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
 
-        if (apiKey) {
+        if (AZURE_CHAT_READY) {
           try {
             const chatResp = await fetch(OPENAI_CHAT_URL, {
               method: 'POST',
-              headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+              headers: chatAuthHeaders(),
               body: JSON.stringify({
                 model: OPENAI_MODEL,
                 messages: [{ role: 'user', content: summaryPrompt }],
@@ -670,7 +686,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
             console.error('[archive] OpenAI request mislukt:', chatErr.message);
           }
         } else {
-          console.warn('[archive] OPENAI_API_KEY niet beschikbaar — samenvatting overgeslagen');
+          console.warn('[archive] Azure OpenAI niet geconfigureerd — samenvatting overgeslagen');
         }
       }
     }
@@ -1551,6 +1567,9 @@ async function embedTextsServer(texts, openaiKey, batchSize = 64) {
 // LLM-chunking van één venster dia's. Retourneert genormaliseerde secties of
 // null (caller valt dan terug op het deterministische vangnet).
 async function chunkSlideWindow(win, openaiKey, lang = 'nl') {
+  // Semantische LLM-chunking loopt via Azure-chat. Zonder Azure-config valt de
+  // caller terug op het deterministische vangnet (fallbackChunks).
+  if (!AZURE_CHAT_READY) return null;
   const minSlide = win[0].slide;
   const maxSlide = win[win.length - 1].slide;
   const deckText = win.map(slideToText).join('\n\n');
@@ -1574,7 +1593,7 @@ async function chunkSlideWindow(win, openaiKey, lang = 'nl') {
     try {
       const resp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+        headers: chatAuthHeaders(),
         body: JSON.stringify(body),
       });
       const data = await resp.json();
@@ -3941,7 +3960,7 @@ ${combinedText}`;
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         const resp = await fetch(OPENAI_CHAT_URL, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+          headers: chatAuthHeaders(),
           body: JSON.stringify({
             model: OPENAI_MODEL,
             messages: [{ role: 'user', content: extractionPrompt }],
@@ -4986,11 +5005,11 @@ ${feedbackText}
 
 Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
 
-      if (apiKey) {
+      if (AZURE_CHAT_READY) {
         try {
           const chatResp = await fetch(OPENAI_CHAT_URL, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            headers: chatAuthHeaders(),
             body: JSON.stringify({
               model: OPENAI_MODEL,
               messages: [{ role: 'user', content: summaryPrompt }],
@@ -5034,7 +5053,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
           summaryFailed = true;
         }
       } else {
-        console.warn('[explain/archive] OPENAI_API_KEY niet beschikbaar — samenvatting overgeslagen');
+        console.warn('[explain/archive] Azure OpenAI niet geconfigureerd — samenvatting overgeslagen');
         summaryFailed = true;
       }
     }
@@ -5222,9 +5241,9 @@ Write the report directly, without a greeting or closing. Be concrete, honest an
 // learning_journal_entries. Returnt {journalEntryId, summaryFailed, errorReason}.
 async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qType, maxLines, lang = 'nl', courseId = null }) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.warn('[quiz/summary] OPENAI_API_KEY niet beschikbaar — samenvatting overgeslagen');
-    return { journalEntryId: null, summaryFailed: true, errorReason: 'Geen taalmodel-toegang (OPENAI_API_KEY ontbreekt).' };
+  if (!AZURE_CHAT_READY) {
+    console.warn('[quiz/summary] Azure OpenAI niet geconfigureerd — samenvatting overgeslagen');
+    return { journalEntryId: null, summaryFailed: true, errorReason: 'Geen taalmodel-toegang (Azure OpenAI niet geconfigureerd).' };
   }
   // Token-budget evenredig aan maximale regels (≈ 50 tokens/regel marge).
   const maxTokens = Math.min(2000, Math.max(600, maxLines * 60));
@@ -5233,7 +5252,7 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
   try {
     const chatResp = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers: chatAuthHeaders(),
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: summaryPrompt }],
@@ -5466,10 +5485,10 @@ app.post('/api/projects/save-summary', async (req, res) => {
     if (row.student_id !== user.id) return res.status(403).json({ error: 'Geen toegang tot deze projectsessie' });
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
+    if (!AZURE_CHAT_READY) {
       return res.status(503).json({
         error: 'De samenvatting kon niet worden opgesteld.',
-        detail: 'Geen taalmodel-toegang (OPENAI_API_KEY ontbreekt).',
+        detail: 'Geen taalmodel-toegang (Azure OpenAI niet geconfigureerd).',
       });
     }
 
@@ -5555,7 +5574,7 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
     try {
       const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: chatAuthHeaders(),
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: summaryPrompt }],
@@ -5817,6 +5836,7 @@ app.get('/api/admin/explain-prompt/overrides', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
+    azure: AZURE_CHAT_READY,
     openai: !!process.env.OPENAI_API_KEY,
     github: !!process.env.GITHUB_TOKEN,
     supabase: !!process.env.SUPABASE_URL,
@@ -8350,10 +8370,10 @@ app.post('/api/projects/persona-chat', async (req, res) => {
     const systemContent = `${persona.system_prompt}${relationshipBlock}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}${langSuffix}`;
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+    if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
     const chatResp = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers: chatAuthHeaders(),
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages: [
@@ -8447,7 +8467,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+    if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
 
     const conversationText = allMsgs
       .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
@@ -8468,7 +8488,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
     try {
       const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: chatAuthHeaders(),
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
@@ -8572,7 +8592,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
     let cue = { delta: 0, reason: '' };
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (apiKey) {
+    if (AZURE_CHAT_READY) {
       const conversationText = allMsgs
         .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
         .join('\n').slice(0, 12000);
@@ -8603,7 +8623,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
           : [{ role: 'user', content: prompt }];
         const chatResp = await fetch(OPENAI_CHAT_URL, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          headers: chatAuthHeaders(),
           body: JSON.stringify({
             model: OPENAI_MODEL,
             messages,
@@ -8755,7 +8775,7 @@ async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
   try {
     const resp = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers: chatAuthHeaders(),
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: prompt }],
@@ -8796,7 +8816,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
       return res.status(403).json({ error: 'Geen toegang tot deze groep' });
     }
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+    if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
 
     // Gebruik berichten ná de laatste checkpoint.
     const { data: prevCps } = await supabaseAdmin
@@ -8834,7 +8854,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
         if (userText.trim()) {
           const r1 = await fetch(OPENAI_CHAT_URL, {
             method: 'POST',
-            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            headers: chatAuthHeaders(),
             body: JSON.stringify({
               model: OPENAI_MODEL,
               messages: [{ role: 'user', content: enMode
@@ -8848,7 +8868,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
         if (asstText.trim()) {
           const r2 = await fetch(OPENAI_CHAT_URL, {
             method: 'POST',
-            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            headers: chatAuthHeaders(),
             body: JSON.stringify({
               model: OPENAI_MODEL,
               messages: [{ role: 'user', content: enMode
@@ -8941,7 +8961,7 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
     const checkpointCourseId = await courseIdForProject(group.project_id);
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+    if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
 
     const rubric = Array.isArray(project?.rubric_criteria) ? project.rubric_criteria : [];
     const rubricText = rubric.length > 0
@@ -8993,7 +9013,7 @@ Geef je antwoord ALLEEN als geldige JSON met deze structuur:
 Geen tekst buiten de JSON.`;
       const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: chatAuthHeaders(),
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
@@ -9028,7 +9048,7 @@ Reflectie:
 ${reflection}`;
       const chatResp = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: chatAuthHeaders(),
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
@@ -9245,14 +9265,14 @@ ${reflection}`;
           ).join('\n\n').slice(0, 12000);
 
           let summaryText = '';
-          if (apiKey2) {
+          if (AZURE_CHAT_READY) {
             try {
               const sumPrompt = lang === 'en'
                 ? `Summarise the following conversation with "${personaName}" in EXACTLY 4 short lines. Address the student as "you". Line 1: core question. Line 2: key insight. Line 3: open point or misconception. Line 4: next step. No bullet points, no heading, only four sentences on separate lines.\n\nConversation:\n${transcript}`
                 : `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
               const sr = await fetch(OPENAI_CHAT_URL, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${apiKey2}`, 'Content-Type': 'application/json' },
+                headers: chatAuthHeaders(),
                 body: JSON.stringify({
                   model: OPENAI_MODEL,
                   messages: [{ role: 'user', content: sumPrompt }],
@@ -10528,7 +10548,7 @@ ${documentText}
 Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+    if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
 
     // Roep de LLM aan in JSON-mode. Bij ongeldig JSON-antwoord doen we één
     // retry met een striktere herinnering; daarna geven we netjes op.
@@ -10539,7 +10559,7 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
       ];
       const r = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: chatAuthHeaders(),
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages,
@@ -11365,7 +11385,7 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
     const evalCourseId = await courseIdForProject(group.project_id);
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet beschikbaar' });
+    if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
 
     const results = [];
     for (const evalPersona of evaluators) {
@@ -11445,7 +11465,7 @@ Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exact
 
       const gr = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: chatAuthHeaders(),
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
@@ -11659,7 +11679,12 @@ if (fs.existsSync(path.join(distPath, 'index.html'))) {
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[API Server] Running on port ${PORT}`);
-    console.log(`[API Server] OpenAI model: ${OPENAI_MODEL}`);
+    console.log(`[API Server] Chat-model: ${OPENAI_MODEL}`);
+    if (AZURE_CHAT_READY) {
+      console.log(`[API Server] Chat-provider: Azure OpenAI (deployment=${AZURE_OPENAI_DEPLOYMENT}, api-version=${AZURE_OPENAI_API_VERSION})`);
+    } else {
+      console.warn('[API Server] Azure OpenAI NIET geconfigureerd (AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY) — chat-endpoints geven 503 tot dit is ingesteld.');
+    }
     detectConceptsCourseIdColumn();
     detectQuizAttemptsSchema();
     detectQuizSourcesSchema();
