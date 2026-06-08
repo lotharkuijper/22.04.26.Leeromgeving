@@ -694,17 +694,17 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
     const summaryCreated = generateSummary && journalEntryId !== null;
     const summaryFailed = generateSummary && journalEntryId === null;
 
-    const { error: archiveError } = await supabaseAdmin
+    const { error: deleteError } = await supabaseAdmin
       .from('conversations')
-      .update({ status: 'archived' })
+      .delete()
       .eq('id', conversationId)
       .eq('user_id', user.id);
 
-    if (archiveError) {
-      return res.status(500).json({ error: `Archiveren mislukt: ${archiveError.message}` });
+    if (deleteError) {
+      return res.status(500).json({ error: `Verwijderen mislukt: ${deleteError.message}` });
     }
 
-    console.log(`[archive] Gesprek ${conversationId} gearchiveerd (summaryCreated: ${summaryCreated})`);
+    console.log(`[archive] Gesprek ${conversationId} definitief verwijderd (summaryCreated: ${summaryCreated})`);
     return res.json({ success: true, journalEntryId, summaryCreated, summaryFailed });
   } catch (err) {
     console.error('[archive] Onverwachte fout:', err);
