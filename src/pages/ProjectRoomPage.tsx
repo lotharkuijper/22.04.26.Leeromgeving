@@ -105,22 +105,40 @@ interface ProjectMaterialDoc {
   is_visible_to_students: boolean;
   created_at: string;
 }
+interface EvaluatorRubric {
+  id: string;
+  filename: string;
+  byte_size: number | null;
+  visible_to_students?: boolean;
+}
 interface EvaluatorPersona {
   id: string;
   name: string;
   avatar_emoji: string | null;
+  rubrics?: EvaluatorRubric[];
 }
 type ReviewVerdict = 'accepted' | 'conditional' | 'rejected';
+type BadgeTier = 'platina' | 'goud' | 'zilver' | 'brons';
 interface DocumentReview {
   id: string;
   document_id: string;
   persona_id: string;
   group_id: string;
   verdict: ReviewVerdict;
+  grade?: number | null;
   reasoning: string;
+  feed_forward?: string | null;
   relationship_delta: number;
   requested_by: string | null;
   created_at: string;
+  badge?: BadgeTier | null;
+}
+interface ReviewBadge {
+  review_id: string;
+  user_id: string;
+  grade: number | null;
+  badge: BadgeTier;
+  award_mode: string;
 }
 type RelationshipBucket = 'cold' | 'strained' | 'neutral' | 'positive' | 'warm';
 interface RelationshipHistoryEvent {
@@ -205,6 +223,7 @@ export function ProjectRoomPage() {
   const [hasEvaluator, setHasEvaluator] = useState(false);
   const [evaluators, setEvaluators] = useState<EvaluatorPersona[]>([]);
   const [reviewsByDoc, setReviewsByDoc] = useState<Record<string, DocumentReview[]>>({});
+  const [badgesByDoc, setBadgesByDoc] = useState<Record<string, ReviewBadge[]>>({});
   const [reviewingKey, setReviewingKey] = useState<string | null>(null);
   const [expandedReviewId, setExpandedReviewId] = useState<string | null>(null);
   // Task #167 — Persona-relaties
@@ -543,6 +562,7 @@ export function ProjectRoomPage() {
       const data = await r.json().catch(() => ({}));
       if (r.ok) {
         setReviewsByDoc(prev => ({ ...prev, [docId]: data.reviews || [] }));
+        setBadgesByDoc(prev => ({ ...prev, [docId]: data.badges || [] }));
       } else if (r.status !== 503) {
         // 503 = migratie nog niet toegepast: stil leeg laten, geen fout-pop-up.
         console.warn('[reviews load]', data.error);
@@ -581,6 +601,21 @@ export function ProjectRoomPage() {
           ...prev,
           [docId]: [data.review, ...(prev[docId] || []).filter((x: DocumentReview) => x.id !== data.review.id)],
         }));
+        // Task #253: badge-rijen voor de huidige student meteen lokaal bijwerken.
+        const recipients: string[] = data.review.badge_recipients || [];
+        if (data.review.badge && profile?.id && recipients.includes(profile.id)) {
+          const newBadge: ReviewBadge = {
+            review_id: data.review.id,
+            user_id: profile.id,
+            grade: data.review.grade ?? null,
+            badge: data.review.badge,
+            award_mode: data.review.award_mode || 'individual',
+          };
+          setBadgesByDoc(prev => ({
+            ...prev,
+            [docId]: [newBadge, ...(prev[docId] || []).filter(b => b.review_id !== data.review.id || b.user_id !== profile.id)],
+          }));
+        }
         setExpandedReviewId(data.review.id);
       }
       setInfo(t('room.review.success', { name: persona.name }));
@@ -609,6 +644,31 @@ export function ProjectRoomPage() {
       const a = document.createElement('a');
       a.href = url;
       a.download = d.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) {
+      setError(e.message || t('room.downloadFailed'));
+    }
+  };
+
+  // Task #253: download van een (voor studenten zichtbaar gemaakte) rubric.
+  const downloadRubric = async (personaId: string, rubric: EvaluatorRubric) => {
+    if (!projectId || !token) return;
+    try {
+      const r = await fetch(`/api/projects/${projectId}/personas/${personaId}/documents/${rubric.id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || t('room.downloadFailed'));
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = rubric.filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -1534,11 +1594,22 @@ export function ProjectRoomPage() {
                             const isBinary = /\.(omv|omt|sav|jasp|rdata|rds|sps|do|dta)$/i.test(d.filename || '');
                             if (isBinary || evaluators.length === 0) return null;
                             const docReviews = reviewsByDoc[d.id] || [];
+                            const docBadges = badgesByDoc[d.id] || [];
                             const verdictMeta: Record<ReviewVerdict, { Icon: any; cls: string; label: string }> = {
                               accepted:    { Icon: CheckCircle2, cls: 'bg-green-50 text-green-700 border-green-200',  label: t('room.review.verdictAccepted') },
                               conditional: { Icon: AlertTriangle, cls: 'bg-amber-50 text-amber-700 border-amber-200', label: t('room.review.verdictConditional') },
                               rejected:    { Icon: XCircle,       cls: 'bg-red-50 text-red-700 border-red-200',       label: t('room.review.verdictRejected') },
                             };
+                            const badgeMeta: Record<BadgeTier, { emoji: string; cls: string; label: string }> = {
+                              platina: { emoji: '💎', cls: 'bg-cyan-50 text-cyan-700 border-cyan-200',     label: t('room.review.badge.platina') },
+                              goud:    { emoji: '🥇', cls: 'bg-yellow-50 text-yellow-700 border-yellow-200', label: t('room.review.badge.goud') },
+                              zilver:  { emoji: '🥈', cls: 'bg-gray-50 text-gray-600 border-gray-200',      label: t('room.review.badge.zilver') },
+                              brons:   { emoji: '🥉', cls: 'bg-orange-50 text-orange-700 border-orange-200', label: t('room.review.badge.brons') },
+                            };
+                            const fmtGrade = (g: number | null | undefined) =>
+                              (g === null || g === undefined || !Number.isFinite(Number(g)))
+                                ? null
+                                : Number(g).toFixed(1).replace('.', t('common.locale') === 'nl-NL' ? ',' : '.');
                             return (
                               <div className="basis-full mt-1 pl-4" data-testid={`reviews-${d.id}`}>
                                 <div className="flex flex-wrap items-center gap-1.5">
@@ -1553,6 +1624,10 @@ export function ProjectRoomPage() {
                                   {evaluators.map(ev => {
                                     const review = docReviews.find(r => r.persona_id === ev.id) || null;
                                     const meta = review ? verdictMeta[review.verdict] : null;
+                                    const reviewBadge = review
+                                      ? (docBadges.find(b => b.review_id === review.id) || (review.badge ? { badge: review.badge } as ReviewBadge : null))
+                                      : null;
+                                    const gradeStr = review ? fmtGrade(review.grade) : null;
                                     const isReviewing = reviewingKey === `${d.id}:${ev.id}`;
                                     // Zowel staff als groepsleden mogen een oordeel aanvragen
                                     // (server doet de definitieve autz-check via canRequestDocumentReview).
@@ -1564,12 +1639,18 @@ export function ProjectRoomPage() {
                                             type="button"
                                             onClick={() => setExpandedReviewId(prev => prev === review.id ? null : review.id)}
                                             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] hover:opacity-80 ${meta.cls}`}
-                                            title={`${ev.avatar_emoji || '🤖'} ${ev.name} — ${meta.label}`}
+                                            title={`${ev.avatar_emoji || '🤖'} ${ev.name} — ${meta.label}${gradeStr ? ` — ${gradeStr}` : ''}`}
                                             data-testid={`badge-review-${d.id}-${ev.id}`}
                                           >
                                             <span>{ev.avatar_emoji || '🤖'}</span>
                                             <meta.Icon className="w-2.5 h-2.5" />
                                             <span className="hidden sm:inline">{ev.name}</span>
+                                            {gradeStr && (
+                                              <span className="font-semibold tabular-nums" data-testid={`grade-${d.id}-${ev.id}`}>{gradeStr}</span>
+                                            )}
+                                            {reviewBadge?.badge && (
+                                              <span title={badgeMeta[reviewBadge.badge].label} data-testid={`badge-tier-${d.id}-${ev.id}`}>{badgeMeta[reviewBadge.badge].emoji}</span>
+                                            )}
                                           </button>
                                         ) : (
                                           <span
@@ -1599,7 +1680,10 @@ export function ProjectRoomPage() {
                                     );
                                   })}
                                 </div>
-                                {docReviews.map(review => expandedReviewId === review.id && (
+                                {docReviews.map(review => expandedReviewId === review.id && (() => {
+                                  const detailGrade = fmtGrade(review.grade);
+                                  const detailBadge = docBadges.find(b => b.review_id === review.id) || (review.badge ? { badge: review.badge } as ReviewBadge : null);
+                                  return (
                                   <div
                                     key={review.id}
                                     className="mt-1 ml-1 p-2 bg-white border border-gray-200 rounded text-[11px] text-gray-700"
@@ -1610,9 +1694,31 @@ export function ProjectRoomPage() {
                                         day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
                                       })}
                                     </div>
+                                    {(detailGrade || detailBadge?.badge) && (
+                                      <div className="flex items-center gap-2 mb-1.5">
+                                        {detailGrade && (
+                                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 text-gray-800 font-semibold text-[11px]" data-testid={`review-detail-grade-${review.id}`}>
+                                            {t('room.review.gradeLabel')}: {detailGrade}
+                                          </span>
+                                        )}
+                                        {detailBadge?.badge && (
+                                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] ${badgeMeta[detailBadge.badge].cls}`} data-testid={`review-detail-badge-${review.id}`}>
+                                            {badgeMeta[detailBadge.badge].emoji} {badgeMeta[detailBadge.badge].label}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                    <div className="font-medium text-gray-600 mb-0.5">{t('room.review.feedbackLabel')}</div>
                                     <div className="whitespace-pre-wrap">{review.reasoning}</div>
+                                    {review.feed_forward && (
+                                      <>
+                                        <div className="font-medium text-gray-600 mt-1.5 mb-0.5">{t('room.review.feedForwardLabel')}</div>
+                                        <div className="whitespace-pre-wrap" data-testid={`review-detail-feedforward-${review.id}`}>{review.feed_forward}</div>
+                                      </>
+                                    )}
                                   </div>
-                                ))}
+                                  );
+                                })())}
                               </div>
                             );
                           })()}
@@ -1631,6 +1737,34 @@ export function ProjectRoomPage() {
                   {project.rubric_criteria.map((c, i) => (
                     <li key={i}>{typeof c === 'string' ? c : (c.title || c.name || JSON.stringify(c))}</li>
                   ))}
+                </ul>
+              </div>
+            )}
+            {evaluators.some(ev => (ev.rubrics || []).length > 0) && (
+              <div className="mt-3 pt-3 border-t border-gray-100" data-testid="panel-evaluator-rubrics">
+                <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-1">
+                  <FileText className="w-3 h-3" /> {t('room.review.rubricsTitle')}
+                </div>
+                <ul className="space-y-1">
+                  {evaluators.flatMap(ev => (ev.rubrics || []).map(rubric => (
+                    <li key={rubric.id} className="flex items-center gap-2 text-xs text-gray-600" data-testid={`evaluator-rubric-${rubric.id}`}>
+                      <span>{ev.avatar_emoji || '🧑‍⚖️'}</span>
+                      <button
+                        type="button"
+                        onClick={() => downloadRubric(ev.id, rubric)}
+                        className="flex items-center gap-1 text-blue-600 hover:underline truncate"
+                        data-testid={`button-download-rubric-${rubric.id}`}
+                      >
+                        <Download className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{rubric.filename}</span>
+                      </button>
+                      {isStaff && rubric.visible_to_students === false && (
+                        <span className="text-[10px] text-amber-600 inline-flex items-center gap-0.5">
+                          <EyeOff className="w-2.5 h-2.5" /> {t('room.hidden')}
+                        </span>
+                      )}
+                    </li>
+                  )))}
                 </ul>
               </div>
             )}

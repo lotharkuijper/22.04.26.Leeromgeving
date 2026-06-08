@@ -3,9 +3,36 @@
 
 export const VERDICTS = ['accepted', 'conditional', 'rejected'];
 
-// Normaliseer/valideer wat de LLM teruggeeft. Verwacht {verdict, reasoning,
-// relationship_delta?}. Geeft `{ ok, value, error }`. Ondersteunt JSON-string
-// als input voor convenience.
+// Task #253: badge-drempels op basis van het cijfer (0–10). De bovengrens telt
+// voor de hogere badge: 6,0 = brons, 7,0 = zilver, 8,0 = goud, 9,0 = platina.
+// Onder 6,0 → geen badge (null).
+export const BADGE_TIERS = [
+  { min: 9, badge: 'platina' },
+  { min: 8, badge: 'goud' },
+  { min: 7, badge: 'zilver' },
+  { min: 6, badge: 'brons' },
+];
+
+// Deterministische badge-bepaling uit een cijfer. Geen LLM-afhankelijkheid.
+// Retourneert 'platina' | 'goud' | 'zilver' | 'brons' of null (< 6 / ongeldig).
+export function badgeForGrade(grade) {
+  const g = Number(grade);
+  if (!Number.isFinite(g)) return null;
+  for (const tier of BADGE_TIERS) {
+    if (g >= tier.min) return tier.badge;
+  }
+  return null;
+}
+
+// Normaliseer de toekenningsmodus van een beoordelaar-persona. Alles behalve
+// 'group' valt terug op 'individual' (veilige standaard).
+export function normalizeBadgeAwardMode(mode) {
+  return mode === 'group' ? 'group' : 'individual';
+}
+
+// Normaliseer/valideer wat de LLM teruggeeft. Verwacht {verdict, grade,
+// reasoning, feed_forward?, relationship_delta?}. Geeft `{ ok, value, error }`.
+// Ondersteunt JSON-string als input voor convenience.
 export function validateReviewResponse(raw) {
   let obj = raw;
   if (typeof obj === 'string') {
@@ -23,6 +50,17 @@ export function validateReviewResponse(raw) {
   if (reasoning.length === 0) {
     return { ok: false, error: 'reasoning mag niet leeg zijn' };
   }
+  // Cijfer is verplicht en moet numeriek zijn. Clamp naar 0..10, afgerond op
+  // één decimaal zodat de badge-drempels stabiel blijven.
+  let grade = Number(obj.grade);
+  if (!Number.isFinite(grade)) {
+    return { ok: false, error: 'grade ontbreekt of is niet numeriek (verwacht 0–10)' };
+  }
+  if (grade < 0) grade = 0;
+  if (grade > 10) grade = 10;
+  grade = Math.round(grade * 10) / 10;
+  // Feed-forward is optioneel; lege string als hij ontbreekt.
+  const feedForward = typeof obj.feed_forward === 'string' ? obj.feed_forward.trim() : '';
   // Clamp delta naar -5..+5. Default 0. Niet-numeriek → 0.
   let delta = Number(obj.relationship_delta);
   if (!Number.isFinite(delta)) delta = 0;
@@ -31,7 +69,7 @@ export function validateReviewResponse(raw) {
   if (delta < -5) delta = -5;
   return {
     ok: true,
-    value: { verdict, reasoning, relationship_delta: delta },
+    value: { verdict, grade, reasoning, feed_forward: feedForward, relationship_delta: delta },
   };
 }
 

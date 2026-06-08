@@ -59,6 +59,7 @@ interface ProjectPersona {
   cue_emission_enabled?: boolean;
   max_consultations?: number | null;
   auto_close_hours?: number | null;
+  badge_award_mode?: string;
 }
 
 interface ProjectDoc {
@@ -77,6 +78,7 @@ interface RubricDoc {
   filename: string;
   byte_size: number | null;
   is_hidden_rubric?: boolean;
+  visible_to_students?: boolean;
   created_at: string;
 }
 
@@ -490,13 +492,23 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
   // bestaande endpoint. We gebruiken supabase rechtstreeks om alle rijen te
   // lezen als staff (RLS staat staff toe).
   const loadRubricDocs = useCallback(async (personaId: string) => {
-    const { data } = await supabase
+    let { data, error } = await supabase
       .from('project_persona_documents')
-      .select('id, filename, byte_size, is_hidden_rubric, created_at')
+      .select('id, filename, byte_size, is_hidden_rubric, visible_to_students, created_at')
       .eq('project_id', project.id)
       .eq('persona_id', personaId)
       .eq('is_hidden_rubric', true)
       .order('created_at', { ascending: false });
+    // Defensief: oude DB zonder visible_to_students-kolom.
+    if (error && (/visible_to_students/i.test(error.message || '') || (error as any).code === '42703')) {
+      ({ data } = await supabase
+        .from('project_persona_documents')
+        .select('id, filename, byte_size, is_hidden_rubric, created_at')
+        .eq('project_id', project.id)
+        .eq('persona_id', personaId)
+        .eq('is_hidden_rubric', true)
+        .order('created_at', { ascending: false }));
+    }
     setRubricDocsMap(prev => ({ ...prev, [personaId]: (data as any) || [] }));
   }, [project.id]);
 
@@ -562,6 +574,9 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
             : (editingPersona.cue_emission_enabled ?? true),
           max_consultations: editingPersona.max_consultations ?? null,
           auto_close_hours: editingPersona.auto_close_hours ?? null,
+          badge_award_mode: (editingPersona.persona_type || 'conversational') === 'evaluator'
+            ? (editingPersona.badge_award_mode === 'group' ? 'group' : 'individual')
+            : 'individual',
         }),
       });
       const d = await r.json();
@@ -689,6 +704,30 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
       return;
     }
     await loadRubricDocs(personaId);
+  };
+
+  const toggleRubricVisibility = async (personaId: string, doc: RubricDoc) => {
+    const next = !doc.visible_to_students;
+    setRubricDocsMap(prev => ({
+      ...prev,
+      [personaId]: (prev[personaId] || []).map(d => d.id === doc.id ? { ...d, visible_to_students: next } : d),
+    }));
+    const r = await fetch(
+      `/api/projects/${project.id}/personas/${personaId}/documents/${doc.id}/visibility`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibleToStudents: next }),
+      }
+    );
+    if (!r.ok) {
+      setRubricDocsMap(prev => ({
+        ...prev,
+        [personaId]: (prev[personaId] || []).map(d => d.id === doc.id ? { ...d, visible_to_students: !next } : d),
+      }));
+      const d = await r.json().catch(() => ({}));
+      onError(d.error || t('admin.projects.docs.visibilityFailed'));
+    }
   };
 
   return (
@@ -939,6 +978,14 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                             <li key={r.id} className="flex items-center gap-2 text-xs" data-testid={`rubric-doc-${r.id}`}>
                               <FileText className="w-3 h-3 text-purple-600" />
                               <span className="flex-1 truncate">{r.filename}</span>
+                              <button
+                                onClick={() => toggleRubricVisibility(p.id, r)}
+                                className={`p-0.5 rounded flex items-center gap-1 ${r.visible_to_students ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                                title={r.visible_to_students ? t('admin.projects.personas.rubric.visibleOn') : t('admin.projects.personas.rubric.visibleOff')}
+                                data-testid={`button-rubric-visibility-${r.id}`}
+                              >
+                                {r.visible_to_students ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                              </button>
                               <button onClick={() => deleteRubric(p.id, r)} className="p-0.5 text-red-500 hover:bg-red-50 rounded">
                                 <Trash2 className="w-3 h-3" />
                               </button>
@@ -988,6 +1035,21 @@ function ProjectDetailPanel({ project, token, onBack, onError, onInfo }: {
                   <p className="text-[11px] text-purple-700 mt-1">{t('admin.projects.personas.evaluatorHint')}</p>
                 )}
               </div>
+              {editingPersona.persona_type === 'evaluator' && (
+                <div>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.badgeAwardModeLabel')}</label>
+                  <select
+                    value={editingPersona.badge_award_mode === 'group' ? 'group' : 'individual'}
+                    onChange={e => setEditingPersona({ ...editingPersona, badge_award_mode: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                    data-testid="select-pp-badge-award-mode"
+                  >
+                    <option value="individual">{t('admin.projects.personas.badgeAwardModeIndividual')}</option>
+                    <option value="group">{t('admin.projects.personas.badgeAwardModeGroup')}</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500 mt-1">{t('admin.projects.personas.badgeAwardModeHint')}</p>
+                </div>
+              )}
               <div>
                 <label className="text-xs font-medium text-gray-700">{t('admin.projects.personas.fieldPrompt')}</label>
                 <textarea value={editingPersona.system_prompt || ''} onChange={e => setEditingPersona({ ...editingPersona, system_prompt: e.target.value })} rows={8} className="w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono" data-testid="textarea-pp-prompt" />

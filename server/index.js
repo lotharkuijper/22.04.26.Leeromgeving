@@ -30,7 +30,7 @@ import {
   checkLastTeacherProtection,
   parseForceFlag,
 } from './memberRoleAuth.js';
-import { validateReviewResponse, canRequestDocumentReview } from './documentReview.js';
+import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normalizeBadgeAwardMode } from './documentReview.js';
 import {
   processPptxCore as processPptxCoreImpl,
   processPlainRagDocument as processPlainRagDocumentImpl,
@@ -5980,7 +5980,9 @@ Aanspraakvorm: spreek de groep aan met "jullie". Wees concreet, vermijd derde-pe
 Antwoord ALTIJD met geldig JSON, zonder extra tekst eromheen, volgens dit schema:
 {
   "verdict": "accepted" | "conditional" | "rejected",
-  "reasoning": "2-4 zinnen onderbouwing in het Nederlands, in tweede persoon",
+  "grade": getal tussen 0 en 10 (één decimaal toegestaan, bijv. 7.5),
+  "reasoning": "2-4 zinnen feedback in het Nederlands, in tweede persoon: wat is er goed en wat schiet tekort",
+  "feed_forward": "1-3 concrete vervolgstappen in het Nederlands, in tweede persoon: wat moeten jullie hierna doen om beter te scoren",
   "relationship_delta": geheel getal tussen -5 en +5
 }
 
@@ -5988,6 +5990,11 @@ Betekenis verdict:
 - "accepted" = je vindt het document inhoudelijk voldoende.
 - "conditional" = bruikbaar mits jullie de genoemde punten aanpakken.
 - "rejected" = nog niet op niveau; geef duidelijk aan wat eerst anders moet.
+
+Betekenis grade: een cijfer van 0 t/m 10 voor de kwaliteit van het document, gebaseerd op de (verborgen) rubric(s) hierboven. Wees streng maar eerlijk; een 6 is voldoende, een 8+ is uitstekend.
+
+Betekenis reasoning (feedback): waar staan jullie nu — benoem zowel sterke punten als tekortkomingen.
+Betekenis feed_forward (feed-forward): wat is de volgende stap — concrete, uitvoerbare verbeteracties.
 
 Betekenis relationship_delta: hoeveel verschuift jouw verstandhouding met deze groep door dit document?
 +5 = sterk positief, 0 = neutraal, -5 = sterk negatief. Wees terughoudend; gebruik extremen alleen bij duidelijke aanleiding.
@@ -8138,8 +8145,43 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
         .eq('project_id', projectId)
         .eq('persona_type', 'evaluator')
         .order('sort_order');
+      const evIds = (evRows || []).map(p => p.id);
+      // Task #253: voor studenten zichtbaar gemaakte rubrics per evaluator.
+      // Staff ziet ook alle rubrics (incl. niet-zichtbare) met hun status.
+      const rubricsByPersona = new Map();
+      if (evIds.length > 0) {
+        let rq = supabaseAdmin
+          .from('project_persona_documents')
+          .select('id, persona_id, filename, byte_size, is_hidden_rubric, visible_to_students, created_at')
+          .eq('project_id', projectId).in('persona_id', evIds)
+          .eq('is_hidden_rubric', true);
+        if (!isStaff) rq = rq.eq('visible_to_students', true);
+        let { data: rubricRows, error: rErr } = await rq.order('created_at', { ascending: false });
+        // Defensief: oude DB zonder visible_to_students-kolom.
+        if (rErr && (rErr.code === '42703' || /visible_to_students/i.test(rErr.message || ''))) {
+          if (isStaff) {
+            ({ data: rubricRows } = await supabaseAdmin
+              .from('project_persona_documents')
+              .select('id, persona_id, filename, byte_size, is_hidden_rubric, created_at')
+              .eq('project_id', projectId).in('persona_id', evIds)
+              .eq('is_hidden_rubric', true)
+              .order('created_at', { ascending: false }));
+          } else {
+            rubricRows = [];
+          }
+        }
+        (rubricRows || []).forEach(d => {
+          const list = rubricsByPersona.get(d.persona_id) || [];
+          list.push({
+            id: d.id, filename: d.filename, byte_size: d.byte_size,
+            visible_to_students: d.visible_to_students === true,
+          });
+          rubricsByPersona.set(d.persona_id, list);
+        });
+      }
       evaluators = (evRows || []).map(p => ({
         id: p.id, name: p.name, avatar_emoji: p.avatar_emoji,
+        rubrics: rubricsByPersona.get(p.id) || [],
       }));
     }
 
@@ -9579,6 +9621,8 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
       // Task #252: raadpleeglimiet + auto-close meekopiëren uit de bibliotheek.
       max_consultations: conNormalizeMax(p.max_consultations),
       auto_close_hours: conNormalizeAutoCloseHours(p.auto_close_hours),
+      // Task #253: badge-toekenningsmodus meekopiëren uit de bibliotheek.
+      badge_award_mode: normalizeBadgeAwardMode(p.badge_award_mode),
     }));
     let { error: iErr } = await supabaseAdmin.from('project_personas').insert(rows);
     if (iErr && (iErr.code === '42703' || /max_consultations|auto_close_hours/i.test(iErr.message || ''))) {
@@ -9590,6 +9634,12 @@ app.post('/api/projects/copy-personas-from-library', async (req, res) => {
       // Oude DB zonder kolom: opnieuw zonder veld.
       const rowsNoCue = rows.map(({ cue_emission_enabled: _ignored, max_consultations: _m, auto_close_hours: _a, ...rest }) => rest);
       ({ error: iErr } = await supabaseAdmin.from('project_personas').insert(rowsNoCue));
+    }
+    if (iErr && (iErr.code === '42703' || /badge_award_mode/i.test(iErr.message || ''))) {
+      // Oude DB zonder Task #253-kolom: opnieuw zonder veld. Cumulatief: ook de
+      // eventueel ontbrekende Task #252-kolommen weglaten zodat één retry volstaat.
+      const rowsNoBadge = rows.map(({ badge_award_mode: _b, cue_emission_enabled: _c, max_consultations: _m, auto_close_hours: _a, ...rest }) => rest);
+      ({ error: iErr } = await supabaseAdmin.from('project_personas').insert(rowsNoBadge));
     }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.json({ copied: rows.length });
@@ -9709,6 +9759,8 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         // Task #252: raadpleeglimiet + auto-close uit de bibliotheek.
         max_consultations: conNormalizeMax(cp.max_consultations),
         auto_close_hours: conNormalizeAutoCloseHours(cp.auto_close_hours),
+        // Task #253: badge-toekenningsmodus uit de bibliotheek.
+        badge_award_mode: normalizeBadgeAwardMode(cp.badge_award_mode),
       };
     } else {
       if (!name || !String(name).trim()) return res.status(400).json({ error: 'Naam is vereist' });
@@ -9729,6 +9781,8 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
         // Task #252: raadpleeglimiet + auto-close (null = onbeperkt / uit).
         max_consultations: maxConsultInput,
         auto_close_hours: autoCloseInput,
+        // Task #253: badge-toekenningsmodus (individual | group).
+        badge_award_mode: normalizeBadgeAwardMode(req.body?.badge_award_mode),
       };
     }
     let { data: inserted, error: iErr } = await supabaseAdmin
@@ -9744,6 +9798,13 @@ app.post('/api/projects/:projectId/personas', async (req, res) => {
       const { cue_emission_enabled: _ignored, max_consultations: _m, auto_close_hours: _a, ...rowNoCue } = row;
       ({ data: inserted, error: iErr } = await supabaseAdmin
         .from('project_personas').insert(rowNoCue).select('*').single());
+    }
+    // Defensief: oude DB zonder Task #253 badge_award_mode-kolom. Cumulatief: ook
+    // de eventueel ontbrekende Task #252-kolommen weglaten zodat één retry volstaat.
+    if (iErr && (iErr.code === '42703' || /badge_award_mode/i.test(iErr.message || ''))) {
+      const { badge_award_mode: _b, cue_emission_enabled: _c, max_consultations: _m, auto_close_hours: _a, ...rowNoBadge } = row;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('project_personas').insert(rowNoBadge).select('*').single());
     }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.json({ persona: inserted });
@@ -9793,6 +9854,8 @@ app.post('/api/projects/:projectId/personas/from-library/:coursePersonaId', asyn
       // Task #252: raadpleeglimiet + auto-close uit de bibliotheek.
       max_consultations: conNormalizeMax(cp.max_consultations),
       auto_close_hours: conNormalizeAutoCloseHours(cp.auto_close_hours),
+      // Task #253: badge-toekenningsmodus uit de bibliotheek.
+      badge_award_mode: normalizeBadgeAwardMode(cp.badge_award_mode),
     };
     let { data: inserted, error: iErr } = await supabaseAdmin
       .from('project_personas').insert(baseRow).select('*').single();
@@ -9805,6 +9868,11 @@ app.post('/api/projects/:projectId/personas/from-library/:coursePersonaId', asyn
       const { cue_emission_enabled: _ignored, max_consultations: _m, auto_close_hours: _a, ...rowNoCue } = baseRow;
       ({ data: inserted, error: iErr } = await supabaseAdmin
         .from('project_personas').insert(rowNoCue).select('*').single());
+    }
+    if (iErr && (iErr.code === '42703' || /badge_award_mode/i.test(iErr.message || ''))) {
+      const { badge_award_mode: _b, cue_emission_enabled: _c, max_consultations: _m, auto_close_hours: _a, ...rowNoBadge } = baseRow;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('project_personas').insert(rowNoBadge).select('*').single());
     }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.status(201).json({ persona: inserted });
@@ -9825,7 +9893,7 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
     const access = await requireProjectStaff(projectId, auth.user, profile);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
 
-    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order', 'persona_type', 'cue_emission_enabled', 'max_consultations', 'auto_close_hours'];
+    const allowed = ['name', 'avatar_emoji', 'system_prompt', 'rag_enabled', 'rag_folder_ids', 'sort_order', 'persona_type', 'cue_emission_enabled', 'max_consultations', 'auto_close_hours', 'badge_award_mode'];
     const patch = {};
     for (const k of allowed) if (k in (req.body || {})) patch[k] = req.body[k];
     if (patch.persona_type && !['conversational', 'evaluator'].includes(patch.persona_type)) {
@@ -9837,6 +9905,8 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
     // Task #252: normaliseer raadpleeglimiet + auto-close (null = onbeperkt / uit).
     if ('max_consultations' in patch) patch.max_consultations = conNormalizeMax(patch.max_consultations);
     if ('auto_close_hours' in patch) patch.auto_close_hours = conNormalizeAutoCloseHours(patch.auto_close_hours);
+    // Task #253: normaliseer badge-toekenningsmodus.
+    if ('badge_award_mode' in patch) patch.badge_award_mode = normalizeBadgeAwardMode(patch.badge_award_mode);
     if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Geen wijzigingen' });
     let { data, error: e } = await supabaseAdmin
       .from('project_personas').update(patch)
@@ -9855,6 +9925,15 @@ app.patch('/api/projects/:projectId/personas/:personaId', async (req, res) => {
       if (Object.keys(patchNoCue).length === 0) return res.json({ persona: null });
       ({ data, error: e } = await supabaseAdmin
         .from('project_personas').update(patchNoCue)
+        .eq('id', personaId).eq('project_id', projectId).select('*').single());
+    }
+    if (e && (e.code === '42703' || /badge_award_mode/i.test(e.message || ''))) {
+      // Defensief: Task #253-kolom ontbreekt in oude DB — verwijder en retry.
+      // Cumulatief: ook de eventueel ontbrekende Task #252-kolommen weglaten.
+      const { badge_award_mode: _b, cue_emission_enabled: _c, max_consultations: _m, auto_close_hours: _a, ...patchNoBadge } = patch;
+      if (Object.keys(patchNoBadge).length === 0) return res.json({ persona: null });
+      ({ data, error: e } = await supabaseAdmin
+        .from('project_personas').update(patchNoBadge)
         .eq('id', personaId).eq('project_id', projectId).select('*').single());
     }
     if (e) return res.status(500).json({ error: e.message });
@@ -9907,12 +9986,26 @@ app.get('/api/projects/:projectId/personas/:personaId/documents', async (req, re
       return res.status(403).json({ error: 'Geen toegang tot deze groep of dit project' });
     }
     const isStaffViewer = staffAccess.ok;
-    let q = supabaseAdmin
-      .from('project_persona_documents')
-      .select('id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric')
-      .eq('project_id', projectId).eq('persona_id', personaId).eq('group_id', groupId);
-    if (!isStaffViewer) q = q.eq('is_hidden_rubric', false);
-    const { data, error: e } = await q.order('created_at', { ascending: false });
+    const cols = 'id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric, visible_to_students';
+    const buildQuery = (selectCols, withVisibleCol) => {
+      let q = supabaseAdmin
+        .from('project_persona_documents')
+        .select(selectCols)
+        .eq('project_id', projectId).eq('persona_id', personaId).eq('group_id', groupId);
+      // Studenten zien geen verborgen rubrics, behalve die de docent expliciet
+      // zichtbaar heeft gemaakt (visible_to_students=true).
+      if (!isStaffViewer) {
+        q = withVisibleCol
+          ? q.or('is_hidden_rubric.eq.false,visible_to_students.eq.true')
+          : q.eq('is_hidden_rubric', false);
+      }
+      return q.order('created_at', { ascending: false });
+    };
+    let { data, error: e } = await buildQuery(cols, true);
+    // Defensief: oude DB zonder visible_to_students-kolom.
+    if (e && (e.code === '42703' || /visible_to_students/i.test(e.message || ''))) {
+      ({ data, error: e } = await buildQuery('id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric', false));
+    }
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ documents: data || [] });
   } catch (err) {
@@ -10016,14 +10109,29 @@ app.post('/api/projects/:projectId/personas/:personaId/documents',
       }
       isHiddenRubric = true;
     }
-    const { data, error: e } = await supabaseAdmin
-      .from('project_persona_documents').insert({
-        project_id: projectId, persona_id: personaId, group_id: groupId,
-        filename: String(filename).slice(0, 200),
-        content_text: text, byte_size: req.file.size || Buffer.byteLength(text, 'utf8'),
-        uploaded_by: auth.user.id,
-        is_hidden_rubric: isHiddenRubric,
-      }).select('id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric').single();
+    // Task #253: docent kan een rubric zichtbaar maken voor studenten. Alleen
+    // van toepassing op verborgen rubrics (evaluator-input); reguliere uploads
+    // van studenten blijven false.
+    const visibleToStudents = isHiddenRubric
+      && (req.body?.visibleToStudents === '1' || req.body?.visibleToStudents === 'true');
+    const insertRow = {
+      project_id: projectId, persona_id: personaId, group_id: groupId,
+      filename: String(filename).slice(0, 200),
+      content_text: text, byte_size: req.file.size || Buffer.byteLength(text, 'utf8'),
+      uploaded_by: auth.user.id,
+      is_hidden_rubric: isHiddenRubric,
+      visible_to_students: visibleToStudents,
+    };
+    const insertCols = 'id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric, visible_to_students';
+    let { data, error: e } = await supabaseAdmin
+      .from('project_persona_documents').insert(insertRow).select(insertCols).single();
+    // Defensief: oude DB zonder visible_to_students-kolom.
+    if (e && (e.code === '42703' || /visible_to_students/i.test(e.message || ''))) {
+      const { visible_to_students: _v, ...rowNoVis } = insertRow;
+      ({ data, error: e } = await supabaseAdmin
+        .from('project_persona_documents').insert(rowNoVis)
+        .select('id, filename, byte_size, uploaded_by, created_at, is_hidden_rubric').single());
+    }
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ document: data });
   } catch (err) {
@@ -10064,6 +10172,94 @@ app.delete('/api/projects/:projectId/personas/:personaId/documents/:docId', asyn
       .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId);
     if (e) return res.status(500).json({ error: e.message });
     return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/projects/:projectId/personas/:personaId/documents/:docId/visibility
+// Task #253: alleen staff mag de zichtbaarheid van een verborgen rubric voor
+// studenten in-/uitschakelen. Werkt alleen op is_hidden_rubric=true rijen.
+app.patch('/api/projects/:projectId/personas/:personaId/documents/:docId/visibility', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId, docId } = req.params;
+  const visibleToStudents = req.body?.visibleToStudents;
+  if (typeof visibleToStudents !== 'boolean') {
+    return res.status(400).json({ error: 'visibleToStudents moet een boolean zijn' });
+  }
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const staffAccess = await requireProjectStaff(projectId, auth.user, profile);
+    if (!staffAccess.ok) {
+      return res.status(403).json({ error: 'Alleen een docent van deze cursus mag de zichtbaarheid wijzigen' });
+    }
+    const { data: doc } = await supabaseAdmin
+      .from('project_persona_documents').select('id, is_hidden_rubric')
+      .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    if (doc.is_hidden_rubric !== true) {
+      return res.status(400).json({ error: 'Zichtbaarheid kan alleen op een rubric worden ingesteld' });
+    }
+    const { data: updated, error: e } = await supabaseAdmin
+      .from('project_persona_documents')
+      .update({ visible_to_students: visibleToStudents })
+      .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId)
+      .select('id, visible_to_students').single();
+    if (e) {
+      if (e.code === '42703' || /visible_to_students/i.test(e.message || '')) {
+        return res.status(503).json({
+          error: 'Migratie 20260608130000_evaluator_grading_badges.sql is nog niet toegepast in Supabase.',
+        });
+      }
+      return res.status(500).json({ error: e.message });
+    }
+    return res.json({ document: updated });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/projects/:projectId/personas/:personaId/documents/:docId/download
+// Task #253: download van een rubric. Staff altijd; studenten alleen als de
+// rubric op visible_to_students=true staat.
+app.get('/api/projects/:projectId/personas/:personaId/documents/:docId/download', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { projectId, personaId, docId } = req.params;
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const { data: project } = await supabaseAdmin
+      .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
+    if (!project) return res.status(404).json({ error: 'Project niet gevonden' });
+    const isStaff = await isStaffForCourse(auth.user, profile, project.course_id);
+    if (!isStaff && !(await userHasProjectAccess(auth.user, profile, project))) {
+      return res.status(403).json({ error: 'Geen toegang tot dit project' });
+    }
+    let { data: doc, error: e } = await supabaseAdmin
+      .from('project_persona_documents')
+      .select('id, filename, content_text, is_hidden_rubric, visible_to_students')
+      .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId).maybeSingle();
+    // Defensief: oude DB zonder visible_to_students-kolom.
+    if (e && (e.code === '42703' || /visible_to_students/i.test(e.message || ''))) {
+      ({ data: doc, error: e } = await supabaseAdmin
+        .from('project_persona_documents')
+        .select('id, filename, content_text, is_hidden_rubric')
+        .eq('id', docId).eq('project_id', projectId).eq('persona_id', personaId).maybeSingle());
+    }
+    if (e) return res.status(500).json({ error: e.message });
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    if (!isStaff && doc.visible_to_students !== true) {
+      return res.status(403).json({ error: 'Deze rubric is niet zichtbaar voor studenten' });
+    }
+    const filename = doc.filename || 'rubric';
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.send(doc.content_text || '');
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -10629,6 +10825,20 @@ const VERDICT_LABELS_NL = {
   rejected: 'Afgewezen',
 };
 
+// Task #253: badge-labels + emoji voor journal-spiegeling (server-side weergave).
+const BADGE_LABELS_NL = {
+  platina: 'Platina',
+  goud: 'Goud',
+  zilver: 'Zilver',
+  brons: 'Brons',
+};
+const BADGE_EMOJI = {
+  platina: '💎',
+  goud: '🥇',
+  zilver: '🥈',
+  brons: '🥉',
+};
+
 app.get('/api/projects/:projectId/documents/:docId/reviews', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
@@ -10663,11 +10873,19 @@ app.get('/api/projects/:projectId/documents/:docId/reviews', async (req, res) =>
     if (!isStaff && !memberOfGroup) {
       return res.status(403).json({ error: 'Geen toegang tot deze groep' });
     }
-    const { data, error: e } = await supabaseAdmin
+    let { data, error: e } = await supabaseAdmin
       .from('project_document_reviews')
-      .select('id, document_id, persona_id, group_id, verdict, reasoning, relationship_delta, requested_by, created_at')
+      .select('id, document_id, persona_id, group_id, verdict, grade, reasoning, feed_forward, relationship_delta, requested_by, created_at')
       .eq('document_id', docId).eq('group_id', groupId)
       .order('created_at', { ascending: false });
+    // Defensief: oude DB zonder grade/feed_forward-kolommen.
+    if (e && (e.code === '42703' || /grade|feed_forward/i.test(e.message || ''))) {
+      ({ data, error: e } = await supabaseAdmin
+        .from('project_document_reviews')
+        .select('id, document_id, persona_id, group_id, verdict, reasoning, relationship_delta, requested_by, created_at')
+        .eq('document_id', docId).eq('group_id', groupId)
+        .order('created_at', { ascending: false }));
+    }
     if (e) {
       // Tabel bestaat nog niet → defensief leeg antwoord met duidelijke uitleg.
       if (e.code === '42P01' || /project_document_reviews/i.test(e.message || '')) {
@@ -10678,7 +10896,21 @@ app.get('/api/projects/:projectId/documents/:docId/reviews', async (req, res) =>
       }
       return res.status(500).json({ error: e.message });
     }
-    return res.json({ reviews: data || [] });
+    const reviews = data || [];
+    // Task #253: badges per review voor deze groep ophalen. Studenten zien
+    // alleen hun eigen badges; staff ziet ze allemaal.
+    let badges = [];
+    if (reviews.length > 0) {
+      const reviewIds = reviews.map(r => r.id);
+      let bq = supabaseAdmin
+        .from('project_review_badges')
+        .select('review_id, user_id, grade, badge, award_mode')
+        .in('review_id', reviewIds);
+      if (!isStaff) bq = bq.eq('user_id', auth.user.id);
+      const { data: bData, error: bErr } = await bq;
+      if (!bErr) badges = bData || [];
+    }
+    return res.json({ reviews, badges });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -10716,9 +10948,15 @@ app.post('/api/projects/:projectId/documents/:docId/reviews', async (req, res) =
     }
 
     // Persona moet evaluator zijn én bij dit project horen.
-    const { data: persona } = await supabaseAdmin
-      .from('project_personas').select('id, project_id, name, avatar_emoji, system_prompt, persona_type')
+    let { data: persona } = await supabaseAdmin
+      .from('project_personas').select('id, project_id, name, avatar_emoji, system_prompt, persona_type, badge_award_mode')
       .eq('id', personaId).maybeSingle();
+    // Defensief: oude DB zonder badge_award_mode-kolom.
+    if (!persona) {
+      ({ data: persona } = await supabaseAdmin
+        .from('project_personas').select('id, project_id, name, avatar_emoji, system_prompt, persona_type')
+        .eq('id', personaId).maybeSingle());
+    }
     if (!persona || persona.project_id !== projectId) {
       return res.status(404).json({ error: 'Persona niet gevonden in dit project' });
     }
@@ -10830,21 +11068,35 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
       });
     }
 
-    // Persisteer review.
-    const { data: inserted, error: insErr } = await supabaseAdmin
-      .from('project_document_reviews')
-      .insert({
-        document_id: docId,
-        persona_id: persona.id,
-        group_id: groupId,
-        verdict: validation.value.verdict,
-        reasoning: validation.value.reasoning,
-        relationship_delta: validation.value.relationship_delta,
-        requested_by: auth.user.id,
-        raw_llm_response: { content: rawResponse },
-      })
-      .select('id, document_id, persona_id, group_id, verdict, reasoning, relationship_delta, requested_by, created_at')
-      .single();
+    // Task #253: bepaal de badge deterministisch uit het cijfer.
+    const grade = validation.value.grade;
+    const feedForward = validation.value.feed_forward || '';
+    const badge = badgeForGrade(grade);
+    const awardMode = normalizeBadgeAwardMode(persona.badge_award_mode);
+
+    // Persisteer review. Cijfer + feed-forward worden meegeschreven; bij een
+    // oude DB zonder die kolommen valt de insert terug op het oude schema.
+    const reviewRow = {
+      document_id: docId,
+      persona_id: persona.id,
+      group_id: groupId,
+      verdict: validation.value.verdict,
+      grade,
+      reasoning: validation.value.reasoning,
+      feed_forward: feedForward,
+      relationship_delta: validation.value.relationship_delta,
+      requested_by: auth.user.id,
+      raw_llm_response: { content: rawResponse },
+    };
+    const reviewCols = 'id, document_id, persona_id, group_id, verdict, grade, reasoning, feed_forward, relationship_delta, requested_by, created_at';
+    let { data: inserted, error: insErr } = await supabaseAdmin
+      .from('project_document_reviews').insert(reviewRow).select(reviewCols).single();
+    if (insErr && (insErr.code === '42703' || /grade|feed_forward/i.test(insErr.message || ''))) {
+      const { grade: _g, feed_forward: _f, ...rowNoGrade } = reviewRow;
+      ({ data: inserted, error: insErr } = await supabaseAdmin
+        .from('project_document_reviews').insert(rowNoGrade)
+        .select('id, document_id, persona_id, group_id, verdict, reasoning, relationship_delta, requested_by, created_at').single());
+    }
     if (insErr) {
       if (insErr.code === '42P01') {
         return res.status(503).json({
@@ -10854,22 +11106,65 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
       return res.status(500).json({ error: insErr.message });
     }
 
-    // Spiegel in journal per groepslid (idempotent op source_ref).
-    const sourceRef = `document_review:${docId}:${persona.id}:${inserted.id}`;
-    const verdictLabel = VERDICT_LABELS_NL[validation.value.verdict] || validation.value.verdict;
-    const titleLabel = `${persona.avatar_emoji || '🧑‍⚖️'} Oordeel ${verdictLabel} — ${persona.name} over "${doc.filename}"`;
-    const journalContent = `${verdictLabel}: ${validation.value.reasoning}`;
     const { data: groupMembers } = await supabaseAdmin
       .from('project_group_members').select('user_id').eq('group_id', groupId);
     const docReviewCourseId = await courseIdForProject(projectId);
-    const rows = (groupMembers || []).map(m => ({
-      user_id: m.user_id,
-      title: titleLabel,
-      content: journalContent,
-      activity_type: 'project_reflection',
-      source_ref: sourceRef,
-      course_id: docReviewCourseId,
-    }));
+
+    // Task #253: ken badge-rijen toe. group → elk groepslid; individual → alleen
+    // de indienende student (mits groepslid). Idempotent via unique(review_id,user_id).
+    let badgeRecipients = [];
+    if (badge) {
+      const memberIds = (groupMembers || []).map(m => m.user_id);
+      if (awardMode === 'group') {
+        badgeRecipients = memberIds;
+      } else if (memberIds.includes(auth.user.id)) {
+        badgeRecipients = [auth.user.id];
+      }
+      if (badgeRecipients.length > 0) {
+        const badgeRows = badgeRecipients.map(uid => ({
+          review_id: inserted.id,
+          persona_id: persona.id,
+          group_id: groupId,
+          user_id: uid,
+          grade,
+          badge,
+          award_mode: awardMode,
+        }));
+        const { error: bErr } = await supabaseAdmin.from('project_review_badges').insert(badgeRows);
+        if (bErr && bErr.code !== '23505' && bErr.code !== '42P01') {
+          console.warn('[document_review] badge-toekenning mislukte:', bErr.message);
+        }
+      }
+    }
+
+    // Spiegel in journal per groepslid (idempotent op source_ref). Het cijfer,
+    // de feedback én feed-forward gaan mee; de badge alleen voor de ontvangers.
+    const sourceRef = `document_review:${docId}:${persona.id}:${inserted.id}`;
+    const verdictLabel = VERDICT_LABELS_NL[validation.value.verdict] || validation.value.verdict;
+    const gradeStr = Number.isFinite(Number(grade)) ? Number(grade).toFixed(1).replace('.', ',') : null;
+    const badgeLabelNl = badge ? (BADGE_LABELS_NL[badge] || badge) : null;
+    const titleBase = gradeStr
+      ? `${persona.avatar_emoji || '🧑‍⚖️'} Cijfer ${gradeStr} (${verdictLabel}) — ${persona.name} over "${doc.filename}"`
+      : `${persona.avatar_emoji || '🧑‍⚖️'} Oordeel ${verdictLabel} — ${persona.name} over "${doc.filename}"`;
+    const contentParts = [];
+    if (gradeStr) contentParts.push(`Cijfer: ${gradeStr}`);
+    contentParts.push(`Feedback: ${validation.value.reasoning}`);
+    if (feedForward) contentParts.push(`Feed-forward: ${feedForward}`);
+    const journalContentBase = contentParts.join('\n\n');
+    const badgeRecipientSet = new Set(badgeRecipients);
+    const rows = (groupMembers || []).map(m => {
+      const hasBadge = badge && badgeRecipientSet.has(m.user_id);
+      return {
+        user_id: m.user_id,
+        title: hasBadge ? `${BADGE_EMOJI[badge] || '🏅'} ${titleBase}` : titleBase,
+        content: hasBadge
+          ? `${journalContentBase}\n\nBadge: ${BADGE_EMOJI[badge] || '🏅'} ${badgeLabelNl}`
+          : journalContentBase,
+        activity_type: 'project_reflection',
+        source_ref: sourceRef,
+        course_id: docReviewCourseId,
+      };
+    });
     if (rows.length > 0) {
       const { error: jErr } = await supabaseAdmin.from('learning_journal_entries').insert(rows);
       if (jErr) {
@@ -10907,7 +11202,9 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
       console.warn('[document_review] relationship-update mislukte:', relErr.message);
     }
 
-    return res.json({ review: inserted });
+    return res.json({
+      review: { ...inserted, badge: badge || null, award_mode: awardMode, badge_recipients: badgeRecipients },
+    });
   } catch (err) {
     console.error('[document_review]', err);
     return res.status(500).json({ error: err.message });
@@ -11863,19 +12160,27 @@ app.post('/api/projects/:projectId/personas/:personaId/copy-to-library', async (
       .eq('course_id', project.course_id).eq('name', pp.name).maybeSingle();
     if (existing) return res.json({ persona: existing, alreadyExists: true });
 
-    const { data: inserted, error: iErr } = await supabaseAdmin
-      .from('course_personas').insert({
-        course_id: project.course_id,
-        name: pp.name,
-        avatar_emoji: pp.avatar_emoji,
-        system_prompt: pp.system_prompt,
-        rag_enabled: pp.rag_enabled,
-        rag_folder_ids: pp.rag_folder_ids,
-        visible_from_phase: pp.visible_from_phase,
-        is_default: false,
-        persona_type: pp.persona_type || 'conversational',
-        created_by: auth.user.id,
-      }).select('*').single();
+    const libRow = {
+      course_id: project.course_id,
+      name: pp.name,
+      avatar_emoji: pp.avatar_emoji,
+      system_prompt: pp.system_prompt,
+      rag_enabled: pp.rag_enabled,
+      rag_folder_ids: pp.rag_folder_ids,
+      visible_from_phase: pp.visible_from_phase,
+      is_default: false,
+      persona_type: pp.persona_type || 'conversational',
+      // Task #253: badge-toekenningsmodus mee terug naar de bibliotheek.
+      badge_award_mode: normalizeBadgeAwardMode(pp.badge_award_mode),
+      created_by: auth.user.id,
+    };
+    let { data: inserted, error: iErr } = await supabaseAdmin
+      .from('course_personas').insert(libRow).select('*').single();
+    if (iErr && (iErr.code === '42703' || /badge_award_mode/i.test(iErr.message || ''))) {
+      const { badge_award_mode: _b, ...rowNoBadge } = libRow;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('course_personas').insert(rowNoBadge).select('*').single());
+    }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.json({ persona: inserted });
   } catch (err) {
@@ -11900,20 +12205,28 @@ app.post('/api/admin/course-personas', async (req, res) => {
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
     if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen bibliotheek-persona\'s aanmaken' });
-    const { course_id, name, avatar_emoji, system_prompt, rag_enabled, rag_folder_ids, persona_type } = req.body || {};
+    const { course_id, name, avatar_emoji, system_prompt, rag_enabled, rag_folder_ids, persona_type, badge_award_mode } = req.body || {};
     if (!course_id || !name?.trim()) return res.status(400).json({ error: 'course_id en name zijn verplicht' });
-    const { data: inserted, error: iErr } = await supabaseAdmin
-      .from('course_personas').insert({
-        course_id,
-        name: String(name).trim(),
-        avatar_emoji: avatar_emoji || '🤖',
-        system_prompt: system_prompt || '',
-        rag_enabled: rag_enabled !== false,
-        rag_folder_ids: Array.isArray(rag_folder_ids) ? rag_folder_ids : [],
-        is_default: false,
-        persona_type: persona_type === 'evaluator' ? 'evaluator' : 'conversational',
-        created_by: auth.user.id,
-      }).select('*').single();
+    const libRow = {
+      course_id,
+      name: String(name).trim(),
+      avatar_emoji: avatar_emoji || '🤖',
+      system_prompt: system_prompt || '',
+      rag_enabled: rag_enabled !== false,
+      rag_folder_ids: Array.isArray(rag_folder_ids) ? rag_folder_ids : [],
+      is_default: false,
+      persona_type: persona_type === 'evaluator' ? 'evaluator' : 'conversational',
+      // Task #253: badge-toekenningsmodus (individual | group).
+      badge_award_mode: normalizeBadgeAwardMode(badge_award_mode),
+      created_by: auth.user.id,
+    };
+    let { data: inserted, error: iErr } = await supabaseAdmin
+      .from('course_personas').insert(libRow).select('*').single();
+    if (iErr && (iErr.code === '42703' || /badge_award_mode/i.test(iErr.message || ''))) {
+      const { badge_award_mode: _b, ...rowNoBadge } = libRow;
+      ({ data: inserted, error: iErr } = await supabaseAdmin
+        .from('course_personas').insert(rowNoBadge).select('*').single());
+    }
     if (iErr) return res.status(500).json({ error: iErr.message });
     return res.status(201).json({ persona: inserted });
   } catch (err) {
@@ -11931,7 +12244,7 @@ app.patch('/api/admin/course-personas/:personaId', async (req, res) => {
       .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
     const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
     if (!isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen bibliotheek-persona\'s bewerken' });
-    const { name, avatar_emoji, system_prompt, rag_enabled, rag_folder_ids, persona_type } = req.body || {};
+    const { name, avatar_emoji, system_prompt, rag_enabled, rag_folder_ids, persona_type, badge_award_mode } = req.body || {};
     const patch = {};
     if (name !== undefined) patch.name = String(name).trim();
     if (avatar_emoji !== undefined) patch.avatar_emoji = avatar_emoji;
@@ -11939,8 +12252,15 @@ app.patch('/api/admin/course-personas/:personaId', async (req, res) => {
     if (rag_enabled !== undefined) patch.rag_enabled = rag_enabled;
     if (rag_folder_ids !== undefined) patch.rag_folder_ids = Array.isArray(rag_folder_ids) ? rag_folder_ids : [];
     if (persona_type !== undefined) patch.persona_type = persona_type === 'evaluator' ? 'evaluator' : 'conversational';
-    const { data: updated, error: uErr } = await supabaseAdmin
+    if (badge_award_mode !== undefined) patch.badge_award_mode = normalizeBadgeAwardMode(badge_award_mode);
+    let { data: updated, error: uErr } = await supabaseAdmin
       .from('course_personas').update(patch).eq('id', personaId).select('*').maybeSingle();
+    if (uErr && (uErr.code === '42703' || /badge_award_mode/i.test(uErr.message || ''))) {
+      const { badge_award_mode: _b, ...patchNoBadge } = patch;
+      if (Object.keys(patchNoBadge).length === 0) return res.json({ persona: null });
+      ({ data: updated, error: uErr } = await supabaseAdmin
+        .from('course_personas').update(patchNoBadge).eq('id', personaId).select('*').maybeSingle());
+    }
     if (uErr) return res.status(500).json({ error: uErr.message });
     if (!updated) return res.status(404).json({ error: 'Persona niet gevonden' });
     return res.json({ persona: updated });
