@@ -5,6 +5,13 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import { mergeMappingsWithBulkSelection } from '../lib/quizMappingsMerge';
+import {
+  DEFAULT_MIX,
+  normalizeMixPreview,
+  loadConceptsForCourse,
+  deriveMixState,
+  type SourceMix,
+} from './quizSourcesLogic';
 
 interface Concept {
   id: string;
@@ -81,12 +88,6 @@ interface RagSource {
   folder_id: string | null;
 }
 
-interface SourceMix {
-  pct_rag: number;
-  pct_itembank: number;
-  pct_llm: number;
-}
-
 interface QuizPrompt {
   id?: string;
   name: string;
@@ -123,7 +124,7 @@ export function QuizSourcesAdminPanel() {
   const [folders, setFolders] = useState<FolderRow[]>([]);
   const [sections, setSections] = useState<ItembankSection[]>([]);
 
-  const [mix, setMix] = useState<SourceMix>({ pct_rag: 50, pct_itembank: 0, pct_llm: 50 });
+  const [mix, setMix] = useState<SourceMix>({ ...DEFAULT_MIX });
   // Onderscheid een opgeslagen mix van de hardcoded standaard. `false` = er is
   // (nog) geen rij voor deze cursus, dus de getoonde 50:0:50 is slechts een
   // standaard en niet wat de docent ooit heeft bewaard.
@@ -192,45 +193,18 @@ export function QuizSourcesAdminPanel() {
     setLoading(true);
     // Reset cursus-specifieke staat zodat waarden van een vorige cursus (of een
     // mislukte load) niet blijven hangen tijdens het wisselen.
-    setMix({ pct_rag: 50, pct_itembank: 0, pct_llm: 50 });
+    setMix({ ...DEFAULT_MIX });
     setMixConfigured(false);
     try {
-      // Concepten van de cursus. Schema-bewust: sommige Supabase-instances
-      // hebben de `concepts.course_id`-migratie wél (dan staat de koppeling in
-      // de kolom), andere niet (dan loopt de koppeling via de `key_points`-
-      // marker `course_id:<uuid>`). We proberen daarom eerst mét `course_id` en
-      // vallen bij een ontbrekende kolom (PostgREST 400) terug op de variant
-      // zónder, zodat er nooit nul begrippen laden. Het filter hieronder dekt
-      // beide modi.
-      let conceptRows: any[] | null = null;
-      let hasCourseIdCol = true;
-      {
-        const withCol = await supabase
-          .from('concepts')
-          .select('id, name, category, course_id, key_points, definition')
-          .order('name');
-        if (withCol.error) {
-          hasCourseIdCol = false;
-          const fallback = await supabase
-            .from('concepts')
-            .select('id, name, category, key_points, definition')
-            .order('name');
-          if (fallback.error) {
-            showMsg('error', t('admin.quizSources.conceptsLoadFailed', { error: fallback.error.message }));
-          }
-          conceptRows = fallback.data || [];
-        } else {
-          conceptRows = withCol.data || [];
-        }
+      // Concepten van de cursus. Schema-bewust: zie `loadConceptsForCourse` —
+      // probeert eerst mét `course_id`-kolom en valt bij een ontbrekende kolom
+      // (PostgREST 400) terug op de variant zónder, zodat er nooit nul begrippen
+      // laden.
+      const conceptResult = await loadConceptsForCourse(supabase as any, courseId);
+      if (conceptResult.error) {
+        showMsg('error', t('admin.quizSources.conceptsLoadFailed', { error: conceptResult.error.message }));
       }
-      const courseMarker = `course_id:${courseId}`;
-      const filtered = (conceptRows || []).filter((c: any) => {
-        if (hasCourseIdCol && c.course_id === courseId) return true;
-        if ((c.key_points || []).includes(courseMarker)) return true;
-        if (!c.course_id && !(c.key_points || []).some((kp: string) => kp.startsWith('course_id:'))) return true;
-        return false;
-      });
-      setConcepts(filtered);
+      setConcepts(conceptResult.concepts as Concept[]);
 
       // Folders voor RAG-koppeling
       const { data: folderRows } = await supabase
@@ -258,10 +232,12 @@ export function QuizSourcesAdminPanel() {
         const mixRes = await fetch(`/api/quiz-sources-mix/${courseId}`, { headers });
         if (mixRes.ok) {
           const mixData = await mixRes.json();
-          setSchemaReady(mixData.schema_ready !== false);
-          if (mixData.mix) setMix(mixData.mix);
-          // `updated_at` is alleen aanwezig als er echt een opgeslagen rij is.
-          setMixConfigured(!!mixData.updated_at);
+          // `updated_at` is alleen aanwezig als er echt een opgeslagen rij is —
+          // dit drijft de saved-vs-default badge. Zie `deriveMixState`.
+          const derived = deriveMixState(mixData);
+          setSchemaReady(derived.schemaReady);
+          setMix(derived.mix);
+          setMixConfigured(derived.mixConfigured);
         } else {
           const errData = await mixRes.json().catch(() => null);
           showMsg('error', t('admin.quizSources.mixLoadFailed', { error: errData?.error || String(mixRes.status) }));
@@ -623,18 +599,8 @@ export function QuizSourcesAdminPanel() {
   const mixSum = mix.pct_rag + mix.pct_itembank + mix.pct_llm;
   // Spiegelt server-`normalizeMix`: zo ziet de docent vóór het opslaan welke
   // percentages er straks echt worden bewaard (de getypte waarden veranderen
-  // dus niet "vanzelf" na de klik).
-  const normalizedMix = (() => {
-    const r0 = Math.max(0, Math.min(100, mix.pct_rag || 0));
-    const i0 = Math.max(0, Math.min(100, mix.pct_itembank || 0));
-    const l0 = Math.max(0, Math.min(100, mix.pct_llm || 0));
-    const sum = r0 + i0 + l0;
-    if (sum === 0) return { pct_rag: 50, pct_itembank: 0, pct_llm: 50 };
-    if (sum === 100) return { pct_rag: r0, pct_itembank: i0, pct_llm: l0 };
-    const r = Math.round((r0 * 100) / sum);
-    const i = Math.round((i0 * 100) / sum);
-    return { pct_rag: r, pct_itembank: i, pct_llm: 100 - r - i };
-  })();
+  // dus niet "vanzelf" na de klik). Zie `normalizeMixPreview`.
+  const normalizedMix = normalizeMixPreview(mix);
 
   return (
     <div className="space-y-5" data-testid="panel-quiz-sources">

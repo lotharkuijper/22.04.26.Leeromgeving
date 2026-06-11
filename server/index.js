@@ -37,6 +37,7 @@ import {
   processPlainRagDocument as processPlainRagDocumentImpl,
 } from './ragProcessing.js';
 import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
+import { normalizeMix } from './quizSourcesMix.js';
 import {
   discoverPages as discoverWebPages,
   fetchPage as fetchWebPage,
@@ -7012,20 +7013,8 @@ app.put('/api/admin/concept-rag-sources/:courseId', async (req, res) => {
 });
 
 // ---- Endpoints: bronnen-mix per cursus --------------------------------------
-function normalizeMix(mix) {
-  let r = Math.max(0, Math.min(100, parseInt(mix?.pct_rag, 10) || 0));
-  let i = Math.max(0, Math.min(100, parseInt(mix?.pct_itembank, 10) || 0));
-  let l = Math.max(0, Math.min(100, parseInt(mix?.pct_llm, 10) || 0));
-  const sum = r + i + l;
-  if (sum === 0) return { pct_rag: 50, pct_itembank: 0, pct_llm: 50 };
-  if (sum !== 100) {
-    // Schaal naar 100 met afronding; corrigeer rest op de grootste.
-    r = Math.round((r * 100) / sum);
-    i = Math.round((i * 100) / sum);
-    l = 100 - r - i;
-  }
-  return { pct_rag: r, pct_itembank: i, pct_llm: l };
-}
+// `normalizeMix` is verhuisd naar ./quizSourcesMix.js zodat client (preview) en
+// server (persist) dezelfde regels delen en het los unit-testbaar is.
 
 app.get('/api/quiz-sources-mix/:courseId', async (req, res) => {
   // Lezen mag iedereen die toegang tot de cursus heeft (student of docent in
