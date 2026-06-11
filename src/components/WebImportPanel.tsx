@@ -5,6 +5,7 @@ import {
   importWebPages,
   type DiscoveredPage,
   type WebImportResult,
+  type WebImportProgress,
 } from '../services/web-import.service';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
@@ -32,6 +33,7 @@ export function WebImportPanel() {
   const [pages, setPages] = useState<DiscoveredPage[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<WebImportResult | null>(null);
+  const [progress, setProgress] = useState<WebImportProgress | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   const handleDiscover = async () => {
@@ -97,9 +99,10 @@ export function WebImportPanel() {
     }
     setImporting(true);
     setResult(null);
+    setProgress(null);
     setNotice({ kind: 'info', message: t('admin.imports.web.noticeImportStarted', { count: String(chosen.length) }) });
     try {
-      const res = await importWebPages(activeCourseId, baseUrl, chosen);
+      const res = await importWebPages(activeCourseId, baseUrl, chosen, setProgress);
       setResult(res);
       setNotice({
         kind: 'success',
@@ -119,6 +122,7 @@ export function WebImportPanel() {
       });
     }
     setImporting(false);
+    setProgress(null);
   };
 
   const renderNoticeIcon = (kind: NoticeKind, className: string) => {
@@ -236,6 +240,35 @@ export function WebImportPanel() {
               </label>
             ))}
           </div>
+
+          {importing && progress && (
+            <div
+              className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2"
+              role="status"
+              aria-live="polite"
+              data-testid="web-import-progress"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-blue-900">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                  <span>{t('admin.imports.web.progressTitle')}</span>
+                </div>
+                <span className="text-sm font-semibold text-blue-900 whitespace-nowrap" data-testid="text-web-progress-count">
+                  {t('admin.imports.web.progressCount', { current: String(progress.current), total: String(progress.total) })}
+                </span>
+              </div>
+              <div className="h-2 w-full bg-blue-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-300"
+                  style={{ width: `${Math.round((progress.current / Math.max(progress.total, 1)) * 100)}%` }}
+                  data-testid="bar-web-progress"
+                />
+              </div>
+              <p className="text-xs text-blue-800 truncate" title={progress.url} data-testid="text-web-progress-current">
+                {t('admin.imports.web.progressCurrent', { url: progress.title || progress.url })}
+              </p>
+            </div>
+          )}
 
           <button
             onClick={handleImport}

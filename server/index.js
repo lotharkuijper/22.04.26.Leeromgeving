@@ -2163,7 +2163,24 @@ app.post('/api/admin/import-web/import', async (req, res) => {
     let totalChunks = 0;
     const results = [];
 
-    for (const target of targets) {
+    // Vanaf hier streamen we de voortgang als NDJSON (één JSON-object per regel)
+    // zodat de client live kan tonen welke pagina nu verwerkt wordt. Alle
+    // validatie hierboven gebruikt nog gewone status-codes; vanaf nu is de
+    // status altijd 200 en worden fouten als event gemeld.
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    });
+    const emit = (event) => {
+      res.write(JSON.stringify(event) + '\n');
+      if (typeof res.flush === 'function') res.flush();
+    };
+    emit({ type: 'start', total: targets.length });
+
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      emit({ type: 'progress', index: i + 1, total: targets.length, url: target.url, title: target.title || '' });
       try {
         const resp = await fetchWebPage(target.url, fetch, { scope, lookup: resolveHostAddresses });
         if (!resp.ok) {
@@ -2258,9 +2275,16 @@ app.post('/api/admin/import-web/import', async (req, res) => {
       }
     }
 
-    return res.json({ imported, skipped, errors, outOfScope, totalChunks, folderId, courseName: course.name, results });
+    emit({ type: 'done', imported, skipped, errors, outOfScope, totalChunks, folderId, courseName: course.name, results });
+    return res.end();
   } catch (err) {
     console.error('[import-web/import] fout:', err);
+    // Als het streamen al begonnen is kunnen we de status niet meer wijzigen;
+    // meld de fout dan als event en sluit de stream netjes af.
+    if (res.headersSent) {
+      try { res.write(JSON.stringify({ type: 'error', error: err.message || 'Web-import mislukt.' }) + '\n'); } catch {}
+      return res.end();
+    }
     return res.status(500).json({ error: err.message || 'Web-import mislukt.' });
   }
 });

@@ -63,11 +63,23 @@ export async function discoverWebPages(url: string): Promise<DiscoverResult> {
   return res.json();
 }
 
+// Live voortgang tijdens de import: welke pagina (1-based) van hoeveel, en de
+// URL/titel die nu verwerkt wordt.
+export interface WebImportProgress {
+  current: number;
+  total: number;
+  url: string;
+  title: string;
+}
+
 // Importeer de geselecteerde pagina's als RAG-bronnen in de gekozen cursus.
+// De server streamt de voortgang als NDJSON; `onProgress` wordt per pagina
+// aangeroepen voordat die verwerkt wordt. Het eindresultaat wordt geretourneerd.
 export async function importWebPages(
   courseId: string,
   baseUrl: string,
   pages: DiscoveredPage[],
+  onProgress?: (p: WebImportProgress) => void,
 ): Promise<WebImportResult> {
   const res = await fetch('/api/admin/import-web/import', {
     method: 'POST',
@@ -75,5 +87,47 @@ export async function importWebPages(
     body: JSON.stringify({ courseId, baseUrl, pages }),
   });
   if (!res.ok) throw new Error(await parseError(res));
-  return res.json();
+  if (!res.body) throw new Error('Geen stream-antwoord van de server.');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let done: WebImportResult | null = null;
+  let streamError: string | null = null;
+
+  const handleLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let event: any;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      return;
+    }
+    if (event.type === 'progress') {
+      onProgress?.({ current: event.index, total: event.total, url: event.url, title: event.title || '' });
+    } else if (event.type === 'done') {
+      const { type, ...rest } = event;
+      done = rest as WebImportResult;
+    } else if (event.type === 'error') {
+      streamError = event.error || 'Web-import mislukt.';
+    }
+  };
+
+  for (;;) {
+    const { value, done: streamDone } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      handleLine(buffer.slice(0, idx));
+      buffer = buffer.slice(idx + 1);
+    }
+    if (streamDone) break;
+  }
+  buffer += decoder.decode();
+  if (buffer) handleLine(buffer);
+
+  if (streamError) throw new Error(streamError);
+  if (!done) throw new Error('Onvolledig antwoord van de server.');
+  return done;
 }
