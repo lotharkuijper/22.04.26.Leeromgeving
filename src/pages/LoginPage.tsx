@@ -3,6 +3,25 @@ import { useAuth } from '../contexts/AuthContext';
 import { Mail, Lock, LogIn, KeyRound } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../i18n';
+import type { TranslationKey } from '../i18n/translations';
+
+// Mapt een ruwe auth-foutmelding naar een i18n-sleutel met een nette,
+// gebruikersvriendelijke melding. Geeft `null` terug als er geen specifieke
+// vertaling is, zodat de aanroeper de ruwe melding kan tonen.
+// Belangrijk: 'User already registered' (uit signUp bij een verborgen bestaand
+// account) moet hier op 'login.err.alreadyRegistered' uitkomen.
+export function mapAuthErrorToKey(message: string): TranslationKey | null {
+  if (message.includes('Invalid login credentials')) {
+    return 'login.err.invalidCredentials';
+  }
+  if (message.includes('User already registered')) {
+    return 'login.err.alreadyRegistered';
+  }
+  if (message.includes('Email not confirmed')) {
+    return 'login.err.emailNotConfirmed';
+  }
+  return null;
+}
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -66,16 +85,8 @@ export function LoginPage() {
     } catch (err: any) {
       console.error('Auth error:', err);
       const errorMessage = err.message || t('login.err.generic');
-
-      if (errorMessage.includes('Invalid login credentials')) {
-        setError(t('login.err.invalidCredentials'));
-      } else if (errorMessage.includes('User already registered')) {
-        setError(t('login.err.alreadyRegistered'));
-      } else if (errorMessage.includes('Email not confirmed')) {
-        setError(t('login.err.emailNotConfirmed'));
-      } else {
-        setError(errorMessage);
-      }
+      const mappedKey = mapAuthErrorToKey(errorMessage);
+      setError(mappedKey ? t(mappedKey) : errorMessage);
     } finally {
       setLoading(false);
     }

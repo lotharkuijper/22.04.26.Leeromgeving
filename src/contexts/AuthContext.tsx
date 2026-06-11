@@ -26,13 +26,80 @@ const SUPERUSER_EMAIL = 'l.d.j.kuijper@vu.nl';
 
 // Vangnet: voorkom dat een hangende Supabase-aanroep (netwerk/lock) de UI
 // eindeloos in 'laden' laat staan. Na `ms` ms wordt de race afgewezen.
-function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     Promise.resolve(promise),
     new Promise<T>((_, reject) =>
       setTimeout(() => reject(new Error(`[AUTH] ${label} duurde te lang (>${ms}ms)`)), ms),
     ),
   ]);
+}
+
+// Pure auth-interacties, los van React-state zodat ze testbaar zijn.
+// Belangrijk gedrag dat ze beschermen:
+//  - signIn wacht alleen op de sessie, NOOIT op de profiel-ophaling (die draait
+//    op de achtergrond via onAuthStateChange). Zo blijft de inlogknop nooit
+//    eindeloos 'laden' als het profiel traag is.
+//  - withTimeout zorgt dat een hangende Supabase-aanroep een fout oplevert
+//    i.p.v. eindeloos te blijven hangen.
+export async function signInWithSupabase(email: string, password: string): Promise<void> {
+  // Vangnet-time-out zodat de inlogknop nooit eindeloos blijft 'laden'.
+  const { error } = await withTimeout(
+    supabase.auth.signInWithPassword({ email, password }),
+    15000,
+    'signIn',
+  );
+
+  if (error) throw error;
+
+  // Geen await op fetchProfile: navigatie wordt door de `user`-state gedreven
+  // (App-router stuurt door zodra `user` is gezet). Het profiel laadt op de
+  // achtergrond via de onAuthStateChange-listener. Zo kan een trage of
+  // mislukte profiel-ophaling de login nooit laten vastlopen.
+}
+
+export async function signUpWithSupabase(
+  email: string,
+  password: string,
+  fullName: string,
+): Promise<void> {
+  const { data, error } = await withTimeout(
+    supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+        },
+      },
+    }),
+    15000,
+    'signUp',
+  );
+
+  if (error) {
+    console.error('[AUTH] SignUp error:', error);
+    throw new Error(error.message || 'Registratie mislukt');
+  }
+
+  // Supabase verbergt bestaande accounts: bij een al geregistreerd e-mailadres
+  // (met e-mailbevestiging aan) komt er GEEN error terug, maar een 'lege' user
+  // zonder identities en zonder sessie. Detecteer dat en geef een duidelijke
+  // melding i.p.v. een stille 'success'. ('User already registered' wordt in
+  // LoginPage gemapt naar de nette melding "Account bestaat al".)
+  const identities = data.user?.identities;
+  if (data.user && Array.isArray(identities) && identities.length === 0) {
+    throw new Error('User already registered');
+  }
+
+  if (!data.user) {
+    throw new Error('Geen gebruiker aangemaakt');
+  }
+
+  console.log('[AUTH] User registered, profile created by trigger');
+
+  // Geen await op fetchProfile: idem aan signIn — listener handelt profiel +
+  // navigatie af zonder deadlock-risico.
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -278,62 +345,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     clearAuthCache();
-
-    // Vangnet-time-out zodat de inlogknop nooit eindeloos blijft 'laden'.
-    const { error } = await withTimeout(
-      supabase.auth.signInWithPassword({ email, password }),
-      15000,
-      'signIn',
-    );
-
-    if (error) throw error;
-
-    // Geen await op fetchProfile: navigatie wordt door de `user`-state gedreven
-    // (App-router stuurt door zodra `user` is gezet). Het profiel laadt op de
-    // achtergrond via de onAuthStateChange-listener. Zo kan een trage of
-    // mislukte profiel-ophaling de login nooit laten vastlopen.
+    await signInWithSupabase(email, password);
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
     clearAuthCache();
-
-    const { data, error } = await withTimeout(
-      supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: fullName,
-          },
-        },
-      }),
-      15000,
-      'signUp',
-    );
-
-    if (error) {
-      console.error('[AUTH] SignUp error:', error);
-      throw new Error(error.message || 'Registratie mislukt');
-    }
-
-    // Supabase verbergt bestaande accounts: bij een al geregistreerd e-mailadres
-    // (met e-mailbevestiging aan) komt er GEEN error terug, maar een 'lege' user
-    // zonder identities en zonder sessie. Detecteer dat en geef een duidelijke
-    // melding i.p.v. een stille 'success'. ('User already registered' wordt in
-    // LoginPage gemapt naar de nette melding "Account bestaat al".)
-    const identities = data.user?.identities;
-    if (data.user && Array.isArray(identities) && identities.length === 0) {
-      throw new Error('User already registered');
-    }
-
-    if (!data.user) {
-      throw new Error('Geen gebruiker aangemaakt');
-    }
-
-    console.log('[AUTH] User registered, profile created by trigger');
-
-    // Geen await op fetchProfile: idem aan signIn — listener handelt profiel +
-    // navigatie af zonder deadlock-risico.
+    await signUpWithSupabase(email, password, fullName);
   };
 
   const signOut = async () => {
