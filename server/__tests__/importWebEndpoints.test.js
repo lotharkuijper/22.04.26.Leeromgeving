@@ -151,6 +151,7 @@ let server;
 const savedEnv = {};
 const ENV_KEYS = [
   'NODE_ENV', 'OPENAI_API_KEY', 'OPENAI_MODEL',
+  'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT',
   'VITE_PUBLIC_SUPABASE_URL', 'VITE_PUBLIC_SUPABASE_ANON_KEY',
   'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_DB_URL',
 ];
@@ -160,6 +161,9 @@ beforeAll(async () => {
   process.env.NODE_ENV = 'test';
   process.env.OPENAI_API_KEY = 'test-openai-key';
   process.env.OPENAI_MODEL = 'gpt-4o-mini';
+  process.env.AZURE_OPENAI_ENDPOINT = 'https://test.openai.azure.com';
+  process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
+  process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT = 'text-embedding-3-small';
   process.env.VITE_PUBLIC_SUPABASE_URL = 'http://stub.supabase.local';
   process.env.VITE_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
@@ -221,7 +225,23 @@ function post(path, body, { auth = true } = {}) {
     const req = http.request({ host: '127.0.0.1', port, path, method: 'POST', headers }, (res) => {
       let raw = '';
       res.on('data', (c) => (raw += c));
-      res.on('end', () => resolve({ status: res.statusCode, body: raw ? JSON.parse(raw) : null }));
+      res.on('end', () => {
+        // De import-route streamt NDJSON (één JSON-event per regel); andere routes
+        // geven één JSON-object. Probeer eerst het geheel te parsen, val anders
+        // terug op het laatste geldige NDJSON-event (meestal het 'done'-event).
+        const text = raw.trim();
+        let body = null;
+        if (text) {
+          try {
+            body = JSON.parse(text);
+          } catch {
+            for (const line of text.split('\n').map((s) => s.trim()).filter(Boolean)) {
+              try { body = JSON.parse(line); } catch { /* sla niet-JSON regels over */ }
+            }
+          }
+        }
+        resolve({ status: res.statusCode, body });
+      });
     });
     req.on('error', reject);
     req.write(data);
@@ -251,7 +271,7 @@ function redirectResponse(location, status = 302) {
 // worden deterministisch teruggegeven (één vector per input-chunk).
 function mockFetch(pages) {
   const fetchMock = vi.fn(async (url, opts) => {
-    if (url === 'https://api.openai.com/v1/embeddings') {
+    if (String(url).includes('/embeddings')) {
       const inputs = JSON.parse(opts.body).input;
       return {
         ok: true,

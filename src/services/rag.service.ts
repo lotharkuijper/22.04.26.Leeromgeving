@@ -349,8 +349,8 @@ export async function checkRAGAvailability(): Promise<{
     try {
       const healthRes = await fetch('/api/health');
       if (healthRes.ok) {
-        const health = await healthRes.json() as { openai?: boolean };
-        embeddingsConfigured = !!health.openai;
+        const health = await healthRes.json() as { openai?: boolean; azureEmbeddings?: boolean };
+        embeddingsConfigured = !!health.azureEmbeddings;
       }
     } catch {
       embeddingsConfigured = false;

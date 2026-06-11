@@ -69,7 +69,7 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
         title: nl
           ? 'De chatbot is niet (volledig) geconfigureerd.'
           : 'The chatbot is not (fully) configured.',
-        detail: err.rawMessage || (nl ? 'Controleer of de OPENAI_API_KEY beschikbaar is.' : 'Check whether the OPENAI_API_KEY is available.'),
+        detail: err.rawMessage || (nl ? 'Controleer of de VU Azure OpenAI-configuratie (chat én embeddings) compleet is.' : 'Check whether the VU Azure OpenAI configuration (chat and embeddings) is complete.'),
       };
     }
     if (code === 'upstream_unavailable') {

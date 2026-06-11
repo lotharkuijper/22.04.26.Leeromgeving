@@ -132,8 +132,8 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 // === Azure OpenAI (chat/completions) ===
 // Alle chat-/completion-aanroepen lopen via de Azure OpenAI-resource van de VU
 // (leap-openai-vu). Routing gebeurt via de deployment in de URL; authenticatie
-// via de 'api-key'-header (niet Bearer). Embeddings blijven voorlopig op de
-// publieke OpenAI-API (text-embedding-3-small).
+// via de 'api-key'-header (niet Bearer). Embeddings lopen óók via Azure — zie de
+// embedding-config hieronder (text-embedding-3-small, géén publieke OpenAI).
 const AZURE_OPENAI_ENDPOINT = (process.env.AZURE_OPENAI_ENDPOINT || '').replace(/\/+$/, '');
 const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY || '';
 const AZURE_OPENAI_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-10-21';
@@ -179,7 +179,25 @@ function chatModelParams({ temperature, maxTokens, reasoningEffort } = {}) {
   }
   return params;
 }
-const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
+// === Azure OpenAI (embeddings) ===
+// Embeddings (RAG-ingestie, RAG-zoekvragen, concept-extractie) lopen óók via de
+// Azure OpenAI-resource van de VU (text-embedding-3-small). Net als bij chat:
+// routing via de deployment-naam in de URL, authenticatie via de 'api-key'-header.
+// Géén terugval naar de publieke OpenAI-API: zonder embedding-deployment
+// (AZURE_OPENAI_EMBEDDING_DEPLOYMENT) is AZURE_EMBEDDINGS_READY=false en falen
+// alle embedding-calls expliciet met een 503.
+const AZURE_OPENAI_EMBEDDING_DEPLOYMENT = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || '';
+const AZURE_OPENAI_EMBEDDING_API_VERSION = process.env.AZURE_OPENAI_EMBEDDING_API_VERSION || AZURE_OPENAI_API_VERSION;
+const AZURE_EMBEDDINGS_READY = Boolean(AZURE_OPENAI_ENDPOINT && AZURE_OPENAI_API_KEY && AZURE_OPENAI_EMBEDDING_DEPLOYMENT);
+const OPENAI_EMBEDDINGS_URL = AZURE_EMBEDDINGS_READY
+  ? `${AZURE_OPENAI_ENDPOINT}/openai/deployments/${encodeURIComponent(AZURE_OPENAI_EMBEDDING_DEPLOYMENT)}/embeddings?api-version=${AZURE_OPENAI_EMBEDDING_API_VERSION}`
+  : '';
+const EMBEDDINGS_NOT_CONFIGURED_MSG = 'Azure OpenAI embeddings zijn niet geconfigureerd op de server (AZURE_OPENAI_EMBEDDING_DEPLOYMENT ontbreekt). Embeddings/RAG lopen uitsluitend via VU-Azure; er is geen terugval naar de publieke OpenAI.';
+// Auth-headers voor een embedding-call. Azure verwacht de 'api-key'-header.
+function embeddingAuthHeaders() {
+  return { 'api-key': AZURE_OPENAI_API_KEY, 'Content-Type': 'application/json' };
+}
+console.log(`[API Server] Azure embeddings ${AZURE_EMBEDDINGS_READY ? 'gereed' : 'NIET geconfigureerd'} — deployment=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT || '(leeg)'}, api-version=${AZURE_OPENAI_EMBEDDING_API_VERSION}`);
 
 const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
 
@@ -207,8 +225,7 @@ const RAG_EXTRACTION_DEFAULTS = {
 //   []                → expliciet geen toegang (geen resultaten)
 //   [id, id, ...]     → alleen chunks uit deze folders
 async function searchChunksServerSide(queryText, threshold, matchCount, allowedFolderIds, expansion, lang = 'nl') {
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey || !supabaseAdmin) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery: queryText };
+  if (!AZURE_EMBEDDINGS_READY || !supabaseAdmin) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery: queryText };
 
   // Expliciet lege toegestane mappen → geen toegang
   if (Array.isArray(allowedFolderIds) && allowedFolderIds.length === 0) {
@@ -225,7 +242,7 @@ async function searchChunksServerSide(queryText, threshold, matchCount, allowedF
   try {
     const embRes = await fetch(OPENAI_EMBEDDINGS_URL, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      headers: embeddingAuthHeaders(),
       body: JSON.stringify({ model: 'text-embedding-3-small', input: [embedQuery] }),
     });
     if (!embRes.ok) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
@@ -765,10 +782,8 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
 });
 
 app.post('/api/embeddings', async (req, res) => {
-  const openaiKey = process.env.OPENAI_API_KEY;
-
-  if (!openaiKey) {
-    return res.status(503).json({ error: 'OPENAI_API_KEY not configured on server' });
+  if (!AZURE_EMBEDDINGS_READY) {
+    return res.status(503).json({ error: EMBEDDINGS_NOT_CONFIGURED_MSG });
   }
 
   const { texts } = req.body;
@@ -779,10 +794,7 @@ app.post('/api/embeddings', async (req, res) => {
   try {
     const response = await fetch(OPENAI_EMBEDDINGS_URL, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openaiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers: embeddingAuthHeaders(),
       body: JSON.stringify({
         model: 'text-embedding-3-small',
         input: texts,
@@ -791,20 +803,20 @@ app.post('/api/embeddings', async (req, res) => {
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      console.error('[/api/embeddings] OpenAI error response:', response.status, JSON.stringify(errData));
-      return res.status(response.status).json({ error: errData.error?.message || errData.error || `OpenAI error ${response.status}` });
+      console.error('[/api/embeddings] Azure embeddings error response:', response.status, JSON.stringify(errData));
+      return res.status(response.status).json({ error: errData.error?.message || errData.error || `Azure embeddings error ${response.status}` });
     }
 
     const data = await response.json();
     if (!data.data || !Array.isArray(data.data)) {
-      console.error('[/api/embeddings] Unexpected OpenAI response shape:', JSON.stringify(data));
-      return res.status(500).json({ error: 'Unexpected response from OpenAI embeddings API' });
+      console.error('[/api/embeddings] Unexpected Azure response shape:', JSON.stringify(data));
+      return res.status(500).json({ error: 'Unexpected response from Azure embeddings API' });
     }
     const embeddings = data.data.map((item) => item.embedding);
-    console.log(`[/api/embeddings] Generated ${embeddings.length} embeddings via OpenAI (dim=${embeddings[0]?.length})`);
-    return res.json({ embeddings, provider: 'openai' });
+    console.log(`[/api/embeddings] Generated ${embeddings.length} embeddings via Azure (dim=${embeddings[0]?.length})`);
+    return res.json({ embeddings, provider: 'azure' });
   } catch (err) {
-    console.error('[/api/embeddings] OpenAI request failed:', err.message);
+    console.error('[/api/embeddings] Azure embeddings request failed:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -1598,18 +1610,19 @@ app.delete('/api/admin/documents/:documentId', async (req, res) => {
 });
 
 // Embed een lijst teksten via OpenAI (text-embedding-3-small), gebatcht.
-async function embedTextsServer(texts, openaiKey, batchSize = 64) {
+async function embedTextsServer(texts, _openaiKey, batchSize = 64) {
+  if (!AZURE_EMBEDDINGS_READY) throw new Error(EMBEDDINGS_NOT_CONFIGURED_MSG);
   const out = [];
   for (let i = 0; i < texts.length; i += batchSize) {
     const batch = texts.slice(i, i + batchSize);
     const resp = await fetch(OPENAI_EMBEDDINGS_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      headers: embeddingAuthHeaders(),
       body: JSON.stringify({ model: 'text-embedding-3-small', input: batch }),
     });
     const data = await resp.json();
     if (!resp.ok || !Array.isArray(data?.data)) {
-      throw new Error(data?.error?.message || data?.error || `OpenAI embeddings error ${resp.status}`);
+      throw new Error(data?.error?.message || data?.error || `Azure embeddings error ${resp.status}`);
     }
     for (const row of data.data) out.push(row.embedding);
   }
@@ -1786,8 +1799,7 @@ function processPlainRagDocument(doc, openaiKey) {
 // gebruikt door de admin-folder-upload-route zodat elk geüpload RAG-bestand
 // automatisch chunks + embeddings krijgt en niet op 'pending' blijft hangen.
 async function processRagDocumentById(documentId, lang = 'nl') {
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey) throw new Error('OPENAI_API_KEY niet geconfigureerd');
+  if (!AZURE_EMBEDDINGS_READY) throw new Error(EMBEDDINGS_NOT_CONFIGURED_MSG);
   const { data: doc } = await supabaseAdmin
     .from('documents')
     .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
@@ -1795,8 +1807,8 @@ async function processRagDocumentById(documentId, lang = 'nl') {
     .maybeSingle();
   if (!doc) throw new Error('Document niet gevonden');
   const ext = (doc.file_type || '').toLowerCase().replace(/^\./, '');
-  if (ext === 'pptx') return processPptxCore(doc, openaiKey, lang);
-  return processPlainRagDocument(doc, openaiKey);
+  if (ext === 'pptx') return processPptxCore(doc, null, lang);
+  return processPlainRagDocument(doc, null);
 }
 
 // POST /api/admin/process-pptx — server-side PowerPoint-extractie + semantische
@@ -1804,8 +1816,7 @@ async function processRagDocumentById(documentId, lang = 'nl') {
 // een cursus die aan de map van het document gekoppeld is.
 app.post('/api/admin/process-pptx', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet geconfigureerd' });
+  if (!AZURE_EMBEDDINGS_READY) return res.status(503).json({ error: EMBEDDINGS_NOT_CONFIGURED_MSG });
 
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
@@ -1846,7 +1857,7 @@ app.post('/api/admin/process-pptx', async (req, res) => {
     }
 
     // Statusovergangen + extractie/chunking/embeddings in de gedeelde kern.
-    const result = await processPptxCore(doc, openaiKey, lang);
+    const result = await processPptxCore(doc, null, lang);
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error('[process-pptx] Fout:', err);
@@ -2147,8 +2158,7 @@ app.post('/api/admin/import-web/import', async (req, res) => {
     return res.status(403).json({ error: 'Je bent geen docent van deze cursus.' });
   }
 
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey) return res.status(503).json({ error: 'OPENAI_API_KEY niet geconfigureerd.' });
+  if (!AZURE_EMBEDDINGS_READY) return res.status(503).json({ error: EMBEDDINGS_NOT_CONFIGURED_MSG });
 
   try {
     const { data: course } = await supabaseAdmin
@@ -2234,7 +2244,7 @@ app.post('/api/admin/import-web/import', async (req, res) => {
           results.push({ url: target.url, status: 'skipped', message: 'Geen chunks' });
           continue;
         }
-        const embeddings = await embedTextsServer(chunks, openaiKey);
+        const embeddings = await embedTextsServer(chunks, null);
 
         // Idempotent: bestaande web-bron voor dezelfde URL in deze map hergebruiken.
         const { data: existingDoc } = await supabaseAdmin
@@ -3787,9 +3797,8 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
   }
 
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey) {
-    return res.status(503).json({ error: 'OPENAI_API_KEY not configured on server' });
+  if (!AZURE_EMBEDDINGS_READY) {
+    return res.status(503).json({ error: EMBEDDINGS_NOT_CONFIGURED_MSG });
   }
 
   const authHeader = req.headers['authorization'];
@@ -5932,6 +5941,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     azure: AZURE_CHAT_READY,
+    azureEmbeddings: AZURE_EMBEDDINGS_READY,
     openai: !!process.env.OPENAI_API_KEY,
     github: !!process.env.GITHUB_TOKEN,
     supabase: !!process.env.SUPABASE_URL,
@@ -7467,16 +7477,15 @@ function cosineSimilarity(a, b) {
 }
 
 async function fetchOpenAIEmbeddings(texts) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('OPENAI_API_KEY niet geconfigureerd');
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
+  if (!AZURE_EMBEDDINGS_READY) throw new Error(EMBEDDINGS_NOT_CONFIGURED_MSG);
+  const response = await fetch(OPENAI_EMBEDDINGS_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers: embeddingAuthHeaders(),
     body: JSON.stringify({ model: 'text-embedding-3-small', input: texts }),
   });
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`OpenAI embeddings error: ${err}`);
+    throw new Error(`Azure embeddings error: ${err}`);
   }
   const data = await response.json();
   return (data.data || []).map(d => d.embedding);
@@ -12374,6 +12383,11 @@ if (process.env.NODE_ENV !== 'test') {
       console.log(`[API Server] Chat-provider: Azure OpenAI (deployment=${AZURE_OPENAI_DEPLOYMENT}, api-version=${AZURE_OPENAI_API_VERSION})`);
     } else {
       console.warn('[API Server] Azure OpenAI NIET geconfigureerd (AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY) — chat-endpoints geven 503 tot dit is ingesteld.');
+    }
+    if (AZURE_EMBEDDINGS_READY) {
+      console.log(`[API Server] Embedding-provider: Azure OpenAI (deployment=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT}, api-version=${AZURE_OPENAI_EMBEDDING_API_VERSION})`);
+    } else {
+      console.warn('[API Server] Azure-embeddings NIET geconfigureerd (AZURE_OPENAI_EMBEDDING_DEPLOYMENT ontbreekt) — RAG/ingestie/concept-extractie geven 503 tot dit is ingesteld. Géén terugval naar publieke OpenAI.');
     }
     detectConceptsCourseIdColumn();
     detectQuizAttemptsSchema();
