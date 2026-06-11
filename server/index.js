@@ -448,11 +448,22 @@ app.post('/api/chat', async (req, res) => {
       headers: chatAuthHeaders(),
       body: JSON.stringify(body),
     });
-    return { r, body: await r.json() };
+    // Lees eerst als tekst en parse defensief: bij een storing aan de
+    // providerkant (HTML-foutpagina, gateway-timeout, lege body) is de body
+    // geen geldige JSON en zou r.json() een exception gooien. Dan zetten we
+    // body op null zodat de aanroeper dit als "dienst onbereikbaar" afhandelt.
+    const rawText = await r.text();
+    let parsed = null;
+    try {
+      parsed = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      parsed = null;
+    }
+    return { r, body: parsed, rawText };
   };
 
   try {
-    let { r: response, body: data } = await postChatCompletion(chatBody);
+    let { r: response, body: data, rawText } = await postChatCompletion(chatBody);
 
     // Reasoning-modellen weigeren een aangepaste temperature/top_p met een 400.
     // Probeer dan één keer opnieuw zonder die sampling-parameters, zodat het
@@ -461,7 +472,21 @@ app.post('/api/chat', async (req, res) => {
     if (!response.ok && response.status === 400 && isUnsupportedSamplingParamError(data)) {
       const { temperature: _t, top_p: _tp, ...retryBody } = chatBody;
       console.warn(`[/api/chat] Model ${OPENAI_MODEL} accepteert geen aangepaste temperature/top_p — opnieuw zonder die parameters.`);
-      ({ r: response, body: data } = await postChatCompletion(retryBody));
+      ({ r: response, body: data, rawText } = await postChatCompletion(retryBody));
+    }
+
+    // Niet-JSON of lege upstream-respons (HTML-foutpagina, gateway-timeout,
+    // lege body): vertaal naar een herkenbare, herhaalbare melding i.p.v. een
+    // generieke 500 die niet te onderscheiden is van een echte bug.
+    if (data == null) {
+      const snippet = (rawText || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+      console.error(`[/api/chat] OpenAI gaf geen geldige JSON terug status=${response.status} body=${snippet || '(leeg)'}`);
+      return res.status(502).json({
+        error: {
+          message: 'De AI-dienst is tijdelijk niet bereikbaar.',
+          code: 'upstream_unavailable',
+        },
+      });
     }
 
     if (!response.ok) {

@@ -59,12 +59,15 @@ beforeEach(() => {
 });
 
 // Bouwt een fetch-Response-achtig object zoals server/index.js het verwacht
-// (alleen .ok/.status/.json() worden gebruikt).
+// (.ok/.status + .text(): de handler leest de body defensief als tekst en
+// parst die zelf, zodat niet-JSON/lege upstream-responsen netjes worden
+// afgevangen i.p.v. een exception te gooien).
 function makeResp(status, jsonBody) {
   return {
     ok: status >= 200 && status < 300,
     status,
     json: async () => jsonBody,
+    text: async () => JSON.stringify(jsonBody),
   };
 }
 

@@ -72,6 +72,16 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
         detail: err.rawMessage || (nl ? 'Controleer of de OPENAI_API_KEY beschikbaar is.' : 'Check whether the OPENAI_API_KEY is available.'),
       };
     }
+    if (code === 'upstream_unavailable') {
+      return {
+        title: nl
+          ? 'De AI-dienst is tijdelijk niet bereikbaar.'
+          : 'The AI service is temporarily unavailable.',
+        detail: nl
+          ? 'De dienst gaf een ongeldig of leeg antwoord terug. Wacht een halve minuut en probeer het opnieuw.'
+          : 'The service returned an invalid or empty response. Wait half a minute and try again.',
+      };
+    }
     if (code === 'empty_response' || code === 'length' || raw.includes('lege reactie') || raw.includes('te weinig tokenruimte')) {
       return {
         title: nl
