@@ -36,3 +36,50 @@ export function isEmptyOrTruncatedCompletion(data) {
   if (choice.finish_reason === 'length') return true;
   return false;
 }
+
+// Gedeelde helper voor álle chat-completion-aanroepen (quiz, beoordeling,
+// project-evaluatie, samenvattingen, …). Doet de POST en, wanneer het model een
+// aangepaste temperature/top_p weigert met een 400, probeert het verzoek één
+// keer opnieuw zonder die sampling-parameters. response_format, token-limieten
+// en alle overige velden blijven ongemoeid. De auth-headers worden door de
+// aanroeper meegegeven (Azure 'api-key' of OpenAI 'Authorization: Bearer'),
+// zodat dezelfde helper voor zowel Azure als publieke OpenAI werkt.
+//
+// Geeft een Response-achtig object terug ({ ok, status, json(), text() }) zodat
+// bestaande aanroepers — die `.ok`, `.status`, `await resp.json()` of
+// `await resp.text()` gebruiken — vrijwel ongewijzigd kunnen blijven. De body
+// wordt intern al gelezen; json()/text() leveren de gecachte waarde.
+export async function postChatCompletionWithRetry({ url, headers, body, fetchImpl = fetch }) {
+  const doFetch = async (b) => {
+    const r = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(headers || {}) },
+      body: JSON.stringify(b),
+    });
+    const rawText = await r.text();
+    let parsed = null;
+    try {
+      parsed = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      parsed = null;
+    }
+    return { r, rawText, parsed };
+  };
+
+  let { r, rawText, parsed } = await doFetch(body);
+
+  if (!r.ok && r.status === 400 && isUnsupportedSamplingParamError(parsed)) {
+    const { temperature: _t, top_p: _tp, ...retryBody } = body;
+    console.warn(
+      `[openai] Model ${body && body.model} accepteert geen aangepaste temperature/top_p — opnieuw zonder die parameters.`,
+    );
+    ({ r, rawText, parsed } = await doFetch(retryBody));
+  }
+
+  return {
+    ok: r.ok,
+    status: r.status,
+    json: async () => parsed,
+    text: async () => rawText,
+  };
+}

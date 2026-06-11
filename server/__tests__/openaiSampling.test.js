@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion } from '../openaiSampling.js';
+import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from '../openaiSampling.js';
+
+// Bouwt een nep-fetch dat de opgegeven antwoorden (in volgorde) teruggeeft en
+// elke aanroep + verstuurde body registreert.
+function makeFetchStub(responses) {
+  const calls = [];
+  const queue = [...responses];
+  const fetchImpl = async (url, opts) => {
+    calls.push({ url, body: JSON.parse(opts.body), headers: opts.headers });
+    const next = queue.shift();
+    const rawText = typeof next.body === 'string' ? next.body : JSON.stringify(next.body);
+    return {
+      ok: next.ok,
+      status: next.status,
+      text: async () => rawText,
+    };
+  };
+  return { fetchImpl, calls };
+}
 
 describe('isUnsupportedSamplingParamError', () => {
   it('returns false for empty/ok responses', () => {
@@ -68,5 +86,79 @@ describe('isEmptyOrTruncatedCompletion', () => {
 
   it('returns false for a complete response', () => {
     expect(isEmptyOrTruncatedCompletion({ choices: [{ message: { content: 'volledige feedback' }, finish_reason: 'stop' }] })).toBe(false);
+  });
+});
+
+describe('postChatCompletionWithRetry', () => {
+  const url = 'https://api.openai.com/v1/chat/completions';
+  const headers = { 'api-key': 'k' };
+  const body = {
+    model: 'o3-mini',
+    messages: [{ role: 'user', content: 'hoi' }],
+    temperature: 0.3,
+    top_p: 0.9,
+    max_completion_tokens: 100,
+    response_format: { type: 'json_object' },
+  };
+
+  it('retries once without temperature/top_p when the model rejects them', async () => {
+    const { fetchImpl, calls } = makeFetchStub([
+      { ok: false, status: 400, body: { error: { param: 'temperature', message: 'Unsupported value' } } },
+      { ok: true, status: 200, body: { choices: [{ message: { content: '{"ok":true}' } }] } },
+    ]);
+
+    const resp = await postChatCompletionWithRetry({ url, headers, body, fetchImpl });
+
+    expect(calls).toHaveLength(2);
+    // Eerste poging stuurt de sampling-parameters mee.
+    expect(calls[0].body.temperature).toBe(0.3);
+    expect(calls[0].body.top_p).toBe(0.9);
+    // Retry laat temperature/top_p weg maar behoudt response_format en token-limiet.
+    expect(calls[1].body).not.toHaveProperty('temperature');
+    expect(calls[1].body).not.toHaveProperty('top_p');
+    expect(calls[1].body.response_format).toEqual({ type: 'json_object' });
+    expect(calls[1].body.max_completion_tokens).toBe(100);
+    // Het uiteindelijke (geslaagde) antwoord wordt teruggegeven.
+    expect(resp.ok).toBe(true);
+    expect(resp.status).toBe(200);
+    expect((await resp.json()).choices[0].message.content).toBe('{"ok":true}');
+  });
+
+  it('does not retry on a successful first response', async () => {
+    const { fetchImpl, calls } = makeFetchStub([
+      { ok: true, status: 200, body: { choices: [{ message: { content: 'hallo' } }] } },
+    ]);
+
+    const resp = await postChatCompletionWithRetry({ url, headers, body, fetchImpl });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body.temperature).toBe(0.3);
+    expect(resp.ok).toBe(true);
+  });
+
+  it('does not retry on an unrelated 400 error', async () => {
+    const { fetchImpl, calls } = makeFetchStub([
+      { ok: false, status: 400, body: { error: { code: 'context_length_exceeded', message: 'too long' } } },
+    ]);
+
+    const resp = await postChatCompletionWithRetry({ url, headers, body, fetchImpl });
+
+    expect(calls).toHaveLength(1);
+    expect(resp.ok).toBe(false);
+    expect(resp.status).toBe(400);
+    expect((await resp.json()).error.code).toBe('context_length_exceeded');
+  });
+
+  it('exposes the raw text body even when it is not JSON', async () => {
+    const { fetchImpl } = makeFetchStub([
+      { ok: false, status: 500, body: 'Internal Server Error' },
+    ]);
+
+    const resp = await postChatCompletionWithRetry({ url, headers, body, fetchImpl });
+
+    expect(resp.ok).toBe(false);
+    expect(resp.status).toBe(500);
+    expect(await resp.text()).toBe('Internal Server Error');
+    expect(await resp.json()).toBeNull();
   });
 });

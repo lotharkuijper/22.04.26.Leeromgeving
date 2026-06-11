@@ -49,7 +49,7 @@ import {
   WEB_IMPORT_LIMITS,
 } from './webImport.js';
 import { promises as dnsPromises } from 'node:dns';
-import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion } from './openaiSampling.js';
+import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from './openaiSampling.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
@@ -198,6 +198,15 @@ function embeddingAuthHeaders() {
   return { 'api-key': AZURE_OPENAI_API_KEY, 'Content-Type': 'application/json' };
 }
 console.log(`[API Server] Azure embeddings ${AZURE_EMBEDDINGS_READY ? 'gereed' : 'NIET geconfigureerd'} — deployment=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT || '(leeg)'}, api-version=${AZURE_OPENAI_EMBEDDING_API_VERSION}`);
+
+// Thin wrapper rond postChatCompletionWithRetry: alle "satelliet" chat-completion-
+// aanroepen (quiz, beoordeling, project-evaluatie, samenvattingen) lopen hierdoor,
+// zodat ze (1) de Azure-auth-headers + Azure-URL gebruiken en (2) bij een 400 op
+// temperature/top_p één keer opnieuw proberen zonder die params. De body bevat
+// model/messages plus de via chatModelParams() opgebouwde sampling-parameters.
+function openaiChatCompletion(body) {
+  return postChatCompletionWithRetry({ url: OPENAI_CHAT_URL, headers: chatAuthHeaders(), body });
+}
 
 const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
 
@@ -715,14 +724,10 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
 
         if (AZURE_CHAT_READY) {
           try {
-            const chatResp = await fetch(OPENAI_CHAT_URL, {
-              method: 'POST',
-              headers: chatAuthHeaders(),
-              body: JSON.stringify({
-                model: OPENAI_MODEL,
-                messages: [{ role: 'user', content: summaryPrompt }],
-                ...chatModelParams({ temperature: 0.5, maxTokens: 600 }),
-              }),
+            const chatResp = await openaiChatCompletion({
+              model: OPENAI_MODEL,
+              messages: [{ role: 'user', content: summaryPrompt }],
+              ...chatModelParams({ temperature: 0.5, maxTokens: 600 }),
             });
 
             if (chatResp.ok) {
@@ -1655,11 +1660,7 @@ async function chunkSlideWindow(win, openaiKey, lang = 'nl') {
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const resp = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify(body),
-      });
+      const resp = await openaiChatCompletion(body);
       const data = await resp.json();
       if (!resp.ok) {
         console.warn(`[process-pptx] LLM-chunk venster ${minSlide}-${maxSlide} status=${resp.status}`);
@@ -4066,14 +4067,10 @@ ${combinedText}`;
     // verliest de cursus géén begrippen meer als de extractie crasht.
     async function callOpenAI(maxRetries = 1) {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const resp = await fetch(OPENAI_CHAT_URL, {
-          method: 'POST',
-          headers: chatAuthHeaders(),
-          body: JSON.stringify({
-            model: OPENAI_MODEL,
-            messages: [{ role: 'user', content: extractionPrompt }],
-            ...chatModelParams({ temperature: 0.2, maxTokens: 8192 }),
-          }),
+        const resp = await openaiChatCompletion({
+          model: OPENAI_MODEL,
+          messages: [{ role: 'user', content: extractionPrompt }],
+          ...chatModelParams({ temperature: 0.2, maxTokens: 8192 }),
         });
         if (resp.ok) return { resp, errData: null };
         const errData = await resp.json().catch(() => ({}));
@@ -5114,14 +5111,10 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
 
       if (AZURE_CHAT_READY) {
         try {
-          const chatResp = await fetch(OPENAI_CHAT_URL, {
-            method: 'POST',
-            headers: chatAuthHeaders(),
-            body: JSON.stringify({
-              model: OPENAI_MODEL,
-              messages: [{ role: 'user', content: summaryPrompt }],
-              ...chatModelParams({ temperature: 0.5, maxTokens: 600 }),
-            }),
+          const chatResp = await openaiChatCompletion({
+            model: OPENAI_MODEL,
+            messages: [{ role: 'user', content: summaryPrompt }],
+            ...chatModelParams({ temperature: 0.5, maxTokens: 600 }),
           });
 
           if (chatResp.ok) {
@@ -5356,14 +5349,10 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
 
   let summaryContent;
   try {
-    const chatResp = await fetch(OPENAI_CHAT_URL, {
-      method: 'POST',
-      headers: chatAuthHeaders(),
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [{ role: 'user', content: summaryPrompt }],
-        ...chatModelParams({ temperature: 0.5, maxTokens: maxTokens }),
-      }),
+    const chatResp = await openaiChatCompletion({
+      model: OPENAI_MODEL,
+      messages: [{ role: 'user', content: summaryPrompt }],
+      ...chatModelParams({ temperature: 0.5, maxTokens: maxTokens }),
     });
 
     if (!chatResp.ok) {
@@ -5677,14 +5666,10 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
 
     let summaryContent;
     try {
-      const chatResp = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify({
-          model: OPENAI_MODEL,
-          messages: [{ role: 'user', content: summaryPrompt }],
-          ...chatModelParams({ temperature: 0.5, maxTokens: 1000 }),
-        }),
+      const chatResp = await openaiChatCompletion({
+        model: OPENAI_MODEL,
+        messages: [{ role: 'user', content: summaryPrompt }],
+        ...chatModelParams({ temperature: 0.5, maxTokens: 1000 }),
       });
       if (!chatResp.ok) {
         const txt = await chatResp.text();
@@ -8616,18 +8601,14 @@ app.post('/api/projects/persona-chat', async (req, res) => {
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
-    const chatResp = await fetch(OPENAI_CHAT_URL, {
-      method: 'POST',
-      headers: chatAuthHeaders(),
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [
-          { role: 'system', content: systemContent },
-          ...history.map(h => ({ role: h.role, content: h.content })),
-          { role: 'user', content: message },
-        ],
-        ...chatModelParams({ temperature: 0.7, maxTokens: 700 }),
-      }),
+    const chatResp = await openaiChatCompletion({
+      model: OPENAI_MODEL,
+      messages: [
+        { role: 'system', content: systemContent },
+        ...history.map(h => ({ role: h.role, content: h.content })),
+        { role: 'user', content: message },
+      ],
+      ...chatModelParams({ temperature: 0.7, maxTokens: 700 }),
     });
     if (!chatResp.ok) {
       const txt = await chatResp.text();
@@ -8730,15 +8711,11 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
     let topics = [];
     let agreements = [];
     try {
-      const chatResp = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify({
-          model: OPENAI_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          ...chatModelParams({ temperature: 0.2, maxTokens: 600 }),
-          response_format: { type: 'json_object' },
-        }),
+      const chatResp = await openaiChatCompletion({
+        model: OPENAI_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        ...chatModelParams({ temperature: 0.2, maxTokens: 600 }),
+        response_format: { type: 'json_object' },
       });
       if (chatResp.ok) {
         const raw = ((await chatResp.json()).choices?.[0]?.message?.content || '{}').trim();
@@ -8900,15 +8877,11 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
       const messages = systemContent
         ? [{ role: 'system', content: systemContent }, { role: 'user', content: prompt }]
         : [{ role: 'user', content: prompt }];
-      const chatResp = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify({
-          model: OPENAI_MODEL,
-          messages,
-          ...chatModelParams({ temperature: 0.2, maxTokens: 700 }),
-          response_format: { type: 'json_object' },
-        }),
+      const chatResp = await openaiChatCompletion({
+        model: OPENAI_MODEL,
+        messages,
+        ...chatModelParams({ temperature: 0.2, maxTokens: 700 }),
+        response_format: { type: 'json_object' },
       });
       if (chatResp.ok) {
         const raw = ((await chatResp.json()).choices?.[0]?.message?.content || '{}').trim();
@@ -9160,15 +9133,11 @@ async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
     : `Je analyseert gesprekken die een groep studenten heeft gevoerd met verschillende AI-personas in een onderzoeksproject.\n\nGesprekssamenvatting per persona:\n${convText}\n\nGeef je antwoord UITSLUITEND als geldige JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 punten waarover meerdere personas het eens zijn of vergelijkbare informatie gaven.\n- "spanningspunten": 1-3 punten waarover personas duidelijk anders denken of tegenstrijdige informatie gaven. Laat de array leeg als er geen zijn.\n- "suggesties": 2-3 concrete volgende stappen die de groep kan zetten op basis van de gesprekken.\n\nSchrijf in het Nederlands, bondig en concreet. Geen markdown buiten de JSON.`;
 
   try {
-    const resp = await fetch(OPENAI_CHAT_URL, {
-      method: 'POST',
-      headers: chatAuthHeaders(),
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        ...chatModelParams({ temperature: 0.3, maxTokens: 800 }),
-        response_format: { type: 'json_object' },
-      }),
+    const resp = await openaiChatCompletion({
+      model: OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      ...chatModelParams({ temperature: 0.3, maxTokens: 800 }),
+      response_format: { type: 'json_object' },
     });
     if (resp.ok) {
       const raw = ((await resp.json()).choices?.[0]?.message?.content || '{}').trim();
@@ -9238,30 +9207,22 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
       let personaSummary = '';
       try {
         if (userText.trim()) {
-          const r1 = await fetch(OPENAI_CHAT_URL, {
-            method: 'POST',
-            headers: chatAuthHeaders(),
-            body: JSON.stringify({
-              model: OPENAI_MODEL,
-              messages: [{ role: 'user', content: enMode
-                ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
-                : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
-              ...chatModelParams({ temperature: 0.3, maxTokens: 300 }),
-            }),
+          const r1 = await openaiChatCompletion({
+            model: OPENAI_MODEL,
+            messages: [{ role: 'user', content: enMode
+              ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
+              : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
+            ...chatModelParams({ temperature: 0.3, maxTokens: 300 }),
           });
           if (r1.ok) studentSummary = ((await r1.json()).choices?.[0]?.message?.content || '').trim();
         }
         if (asstText.trim()) {
-          const r2 = await fetch(OPENAI_CHAT_URL, {
-            method: 'POST',
-            headers: chatAuthHeaders(),
-            body: JSON.stringify({
-              model: OPENAI_MODEL,
-              messages: [{ role: 'user', content: enMode
-                ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
-                : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
-              ...chatModelParams({ temperature: 0.3, maxTokens: 600 }),
-            }),
+          const r2 = await openaiChatCompletion({
+            model: OPENAI_MODEL,
+            messages: [{ role: 'user', content: enMode
+              ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
+              : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
+            ...chatModelParams({ temperature: 0.3, maxTokens: 600 }),
           });
           if (r2.ok) personaSummary = ((await r2.json()).choices?.[0]?.message?.content || '').trim();
         }
@@ -9397,15 +9358,11 @@ Geef je antwoord ALLEEN als geldige JSON met deze structuur:
 }
 
 Geen tekst buiten de JSON.`;
-      const chatResp = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify({
-          model: OPENAI_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          ...chatModelParams({ temperature: 0.4, maxTokens: 1500 }),
-          response_format: { type: 'json_object' },
-        }),
+      const chatResp = await openaiChatCompletion({
+        model: OPENAI_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        ...chatModelParams({ temperature: 0.4, maxTokens: 1500 }),
+        response_format: { type: 'json_object' },
       });
       if (!chatResp.ok) {
         const txt = await chatResp.text();
@@ -9432,14 +9389,10 @@ ${reflection}`
 Project: ${project?.title || '(naamloos)'}
 Reflectie:
 ${reflection}`;
-      const chatResp = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify({
-          model: OPENAI_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          ...chatModelParams({ temperature: 0.5, maxTokens: 700 }),
-        }),
+      const chatResp = await openaiChatCompletion({
+        model: OPENAI_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        ...chatModelParams({ temperature: 0.5, maxTokens: 700 }),
       });
       if (!chatResp.ok) {
         const txt = await chatResp.text();
@@ -9621,7 +9574,6 @@ ${reflection}`;
         }
       } else {
         // Pad B: genereer 4-regels-samenvatting per thread (bestaande logica).
-        const apiKey2 = process.env.OPENAI_API_KEY;
         const { data: prevCps } = await supabaseAdmin
           .from('group_checkpoints')
           .select('created_at')
@@ -9656,14 +9608,10 @@ ${reflection}`;
               const sumPrompt = lang === 'en'
                 ? `Summarise the following conversation with "${personaName}" in EXACTLY 4 short lines. Address the student as "you". Line 1: core question. Line 2: key insight. Line 3: open point or misconception. Line 4: next step. No bullet points, no heading, only four sentences on separate lines.\n\nConversation:\n${transcript}`
                 : `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
-              const sr = await fetch(OPENAI_CHAT_URL, {
-                method: 'POST',
-                headers: chatAuthHeaders(),
-                body: JSON.stringify({
-                  model: OPENAI_MODEL,
-                  messages: [{ role: 'user', content: sumPrompt }],
-                  ...chatModelParams({ temperature: 0.3, maxTokens: 350 }),
-                }),
+              const sr = await openaiChatCompletion({
+                model: OPENAI_MODEL,
+                messages: [{ role: 'user', content: sumPrompt }],
+                ...chatModelParams({ temperature: 0.3, maxTokens: 350 }),
               });
               if (sr.ok) summaryText = ((await sr.json()).choices?.[0]?.message?.content || '').trim();
             } catch { /* val terug */ }
@@ -11181,15 +11129,11 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
         { role: 'system', content: systemTemplate },
         { role: 'user', content: userBlock + (extraReminder ? `\n\n${extraReminder}` : '') },
       ];
-      const r = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify({
-          model: OPENAI_MODEL,
-          messages,
-          response_format: { type: 'json_object' },
-          ...chatModelParams({ temperature: 0.2, maxTokens: 800 }),
-        }),
+      const r = await openaiChatCompletion({
+        model: OPENAI_MODEL,
+        messages,
+        response_format: { type: 'json_object' },
+        ...chatModelParams({ temperature: 0.2, maxTokens: 800 }),
       });
       if (!r.ok) {
         const txt = await r.text();
@@ -12139,14 +12083,10 @@ Schrijf je beoordeling als markdown met per criterium:
 
 Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exacte rubric-tekst letterlijk en spoiler de criteria niet.`}`;
 
-      const gr = await fetch(OPENAI_CHAT_URL, {
-        method: 'POST',
-        headers: chatAuthHeaders(),
-        body: JSON.stringify({
-          model: OPENAI_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          ...chatModelParams({ temperature: 0.4, maxTokens: 1800 }),
-        }),
+      const gr = await openaiChatCompletion({
+        model: OPENAI_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        ...chatModelParams({ temperature: 0.4, maxTokens: 1800 }),
       });
       if (!gr.ok) {
         const txt = await gr.text();
