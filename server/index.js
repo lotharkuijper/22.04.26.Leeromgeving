@@ -8766,7 +8766,7 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
   if (thread.persona_id) {
     const { data: p } = await supabaseAdmin
       .from('project_personas')
-      .select('id, project_id, system_prompt, cue_emission_enabled, persona_type')
+      .select('id, name, project_id, system_prompt, cue_emission_enabled, persona_type')
       .eq('id', thread.persona_id).maybeSingle();
     persona = p || null;
     projectIdForRel = persona?.project_id || null;
@@ -8894,7 +8894,7 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
     }
   }
 
-  return { topics, agreements };
+  return { topics, agreements, cue, emissionEnabled, personaName: persona?.name || null };
 }
 
 // Lazy auto-close: rond stille open threads van (groep, persona) automatisch af
@@ -8949,10 +8949,29 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
       .eq('id', threadId).eq('group_id', groupId).is('closed_at', null).maybeSingle();
     if (!thread) return res.status(404).json({ error: 'Thread niet gevonden of al afgesloten' });
 
-    const { topics, agreements } = await performThreadClose({
+    const { topics, agreements, cue, emissionEnabled, personaName } = await performThreadClose({
       thread, groupId, lang, closedBy: auth.user.id,
     });
-    return res.json({ ok: true, threadId, topics, agreements });
+
+    // Task #172: cue-uitslag retourneren aan staff zodat ze direct feedback
+    // krijgen. Studenten zien dit veld NIET.
+    const { data: profForStaff } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const { data: grpRowForStaff } = await supabaseAdmin
+      .from('project_groups').select('projects(course_id)').eq('id', groupId).maybeSingle();
+    const courseIdForStaff = grpRowForStaff?.projects?.course_id || null;
+    const isStaffRequester = await isStaffForCourse(auth.user, profForStaff, courseIdForStaff);
+
+    const response = { ok: true, threadId, topics, agreements };
+    if (isStaffRequester) {
+      response.cue = {
+        delta: cue.delta,
+        reason: cue.reason,
+        emissionEnabled,
+        personaName,
+      };
+    }
+    return res.json(response);
   } catch (err) {
     console.error('[threads/close]', err);
     return res.status(500).json({ error: err.message });
@@ -8990,9 +9009,37 @@ app.get('/api/projects/groups/:groupId/conversation-log', async (req, res) => {
       .from('project_personas').select('id, name, avatar_emoji').in('id', personaIds);
     const personaMap = Object.fromEntries((personas || []).map(p => [p.id, p]));
 
+    // Task #172: voor staff koppelen we per thread de cue (delta + reden)
+    // uit project_persona_relationships.history (source=persona_chat_close,
+    // refId=thread_close:<threadId>). Studenten krijgen dit veld NIET.
+    let cueByThread = new Map();
+    if (isStaffUser) {
+      const projectIdForRel = grpRow?.project_id || null;
+      if (projectIdForRel) {
+        const { data: rels } = await supabaseAdmin
+          .from('project_persona_relationships')
+          .select('persona_id, history')
+          .eq('project_id', projectIdForRel)
+          .eq('group_id', groupId)
+          .in('persona_id', personaIds);
+        for (const r of rels || []) {
+          for (const ev of Array.isArray(r.history) ? r.history : []) {
+            if (ev && ev.source === 'persona_chat_close' && typeof ev.refId === 'string'
+                && ev.refId.startsWith('thread_close:')) {
+              const tid = ev.refId.slice('thread_close:'.length);
+              cueByThread.set(tid, {
+                delta: typeof ev.delta === 'number' ? ev.delta : 0,
+                reason: typeof ev.note === 'string' ? ev.note : '',
+              });
+            }
+          }
+        }
+      }
+    }
+
     const conversations = threads.map(t => {
       const p = personaMap[t.persona_id] || {};
-      return {
+      const out = {
         threadId: t.id,
         personaId: t.persona_id,
         personaName: p.name || 'Gesprek',
@@ -9001,6 +9048,10 @@ app.get('/api/projects/groups/:groupId/conversation-log', async (req, res) => {
         topics: t.topics || [],
         agreements: t.agreements || [],
       };
+      if (isStaffUser && cueByThread.has(t.id)) {
+        out.cue = cueByThread.get(t.id);
+      }
+      return out;
     });
     return res.json({ conversations });
   } catch (err) {

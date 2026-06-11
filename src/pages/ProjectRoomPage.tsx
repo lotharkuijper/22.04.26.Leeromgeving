@@ -181,6 +181,7 @@ interface ClosedConversation {
   closedAt: string;
   topics: string[];
   agreements: string[];
+  cue?: { delta: number; reason: string };
 }
 
 const QUICK_REACTIONS = ['👍', '❤️', '🤔', '✅'];
@@ -984,8 +985,25 @@ export function ProjectRoomPage() {
       // hasOpenThread/used/remaining vers zijn vóór een eventueel nieuw gesprek
       // (anders zou de bevestiging bij een nieuwe raadpleging overgeslagen worden).
       loadRoom();
-      setInfo(t('room.conversationClosed'));
-      setTimeout(() => setInfo(null), 5000);
+      // Task #172: staff krijgt direct de cue-uitslag te zien; studenten
+      // krijgen alleen de bestaande "afgesloten"-melding.
+      if (isStaff && d.cue && d.cue.emissionEnabled) {
+        const sign = d.cue.delta > 0 ? '+' : '';
+        const name = d.cue.personaName || t('room.cue.unknownPersona');
+        if (d.cue.delta !== 0) {
+          setInfo(t('room.cue.staffToast', {
+            name,
+            delta: `${sign}${d.cue.delta}`,
+            reason: d.cue.reason || t('room.cue.noReason'),
+          }));
+        } else {
+          setInfo(t('room.cue.staffToastNeutral', { name }));
+        }
+        setTimeout(() => setInfo(null), 8000);
+      } else {
+        setInfo(t('room.conversationClosed'));
+        setTimeout(() => setInfo(null), 5000);
+      }
     } catch (e: any) {
       setCloseModalError(e.message);
     } finally {
@@ -1466,7 +1484,8 @@ export function ProjectRoomPage() {
                                 itemOpen ? next.delete(conv.threadId) : next.add(conv.threadId);
                                 return next;
                               });
-                              const hasContent = conv.topics.length > 0 || conv.agreements.length > 0;
+                              const showCue = isStaff && conv.cue;
+                              const hasContent = conv.topics.length > 0 || conv.agreements.length > 0 || showCue;
                               return (
                                 <div key={conv.threadId} className="border border-gray-100 rounded-lg overflow-hidden" data-testid={`logboek-entry-${conv.threadId}`}>
                                   <button
@@ -1491,6 +1510,21 @@ export function ProjectRoomPage() {
 
                                   {itemOpen && hasContent && (
                                     <div className="px-3 pb-3 pt-1 border-t border-gray-100">
+                                      {showCue && conv.cue && (
+                                        <div className="mb-2 px-2 py-1.5 rounded bg-amber-50 border border-amber-200" data-testid={`logboek-cue-${conv.threadId}`}>
+                                          <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-0.5">
+                                            {t('room.cue.staffLabel')}
+                                          </p>
+                                          <p className="text-xs text-amber-900">
+                                            <span className="font-semibold">
+                                              {conv.cue.delta > 0 ? '+' : ''}{conv.cue.delta}
+                                            </span>
+                                            {conv.cue.reason && (
+                                              <span className="text-amber-800"> — {conv.cue.reason}</span>
+                                            )}
+                                          </p>
+                                        </div>
+                                      )}
                                       {conv.topics.length > 0 && (
                                         <div className="mb-2">
                                           <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">{t('room.discussed')}</p>
