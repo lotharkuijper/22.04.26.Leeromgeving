@@ -31,6 +31,7 @@ import {
   parseForceFlag,
 } from './memberRoleAuth.js';
 import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normalizeBadgeAwardMode } from './documentReview.js';
+import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
 import {
   processPptxCore as processPptxCoreImpl,
   processPlainRagDocument as processPlainRagDocumentImpl,
@@ -2539,28 +2540,18 @@ app.get('/api/admin/courses/:id/members', async (req, res) => {
     .order('joined_at', { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
 
-  const userIds = [...new Set((rows || []).map((row) => row.user_id).filter(Boolean))];
-  const profileMap = new Map();
+  const userIds = collectMemberUserIds(rows);
+  let profs = [];
   if (userIds.length > 0) {
-    const { data: profs, error: profErr } = await supabaseAdmin
+    const { data: profData, error: profErr } = await supabaseAdmin
       .from('profiles')
       .select('id, email, full_name, role')
       .in('id', userIds);
     if (profErr) return res.status(500).json({ error: profErr.message });
-    for (const p of profs || []) profileMap.set(p.id, p);
+    profs = profData || [];
   }
 
-  const members = (rows || []).map((row) => {
-    const p = profileMap.get(row.user_id);
-    return {
-      user_id: row.user_id,
-      member_role: row.member_role || 'student',
-      joined_at: row.joined_at,
-      email: p?.email || null,
-      full_name: p?.full_name || null,
-      global_role: p?.role || 'student',
-    };
-  });
+  const members = mergeCourseMembers(rows, profs);
   return res.json({ members });
 });
 
