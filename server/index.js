@@ -52,11 +52,8 @@ import { registerCourseInfoRoutes } from './courseInfo.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
 import {
-  applyDelta as applyRelDelta,
   scoreToLabel as relScoreToLabel,
   scoreToBucket as relScoreToBucket,
-  appendHistory as relAppendHistory,
-  hasHistoryRef as relHasHistoryRef,
   isBlocked as relIsBlocked,
   blockedMessage as relBlockedMessage,
   buildRelationshipPromptBlock as relBuildPromptBlock,
@@ -75,6 +72,7 @@ import {
   isThreadStale as conIsThreadStale,
   consultationLimitMessage as conLimitMessage,
 } from './consultationLimit.js';
+import { applyRelationshipDeltaImpl } from './threadClose.js';
 
 // Directe Postgres-verbinding voor operaties die PostgREST niet kan
 // uitvoeren, zoals bytea-inserts van binaire bestanden.
@@ -11268,85 +11266,8 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
 // op hetzelfde moment) niet verloren. Retourneert de bijgewerkte rij of null
 // als de tabel nog niet bestaat. Bij conflict-loss op de WHERE-clausule
 // (idempotente hit) wordt 1× herlezen.
-async function applyRelationshipDelta({ projectId, groupId, personaId, delta, event }) {
-  if (!supabaseAdmin) return null;
-  const evt = { ts: new Date().toISOString(), ...(event || {}) };
-  const deltaInt = Number.isFinite(Number(delta)) ? Math.round(Number(delta)) : 0;
-  const source = event?.source || '';
-  const refId = event?.refId || '';
-
-  // Snel-pad zonder pgPool (test/CI of geen Postgres-pool): val terug op de
-  // oude select+update/insert-flow met best-effort idempotentie.
-  if (!pgPool) {
-    const { data: existing, error: selErr } = await supabaseAdmin
-      .from('project_persona_relationships')
-      .select('id, score, history')
-      .eq('project_id', projectId).eq('group_id', groupId).eq('persona_id', personaId)
-      .maybeSingle();
-    if (selErr) {
-      if (selErr.code === '42P01' || /project_persona_relationships/i.test(selErr.message || '')) return null;
-      throw selErr;
-    }
-    const curScore = existing?.score ?? 0;
-    const curHistory = Array.isArray(existing?.history) ? existing.history : [];
-    if (refId && relHasHistoryRef(curHistory, source, refId)) return existing || null;
-    const newScore = applyRelDelta(curScore, deltaInt);
-    const newHistory = relAppendHistory(curHistory, evt);
-    if (existing) {
-      const { data: updated, error: upErr } = await supabaseAdmin
-        .from('project_persona_relationships')
-        .update({ score: newScore, history: newHistory, updated_at: new Date().toISOString() })
-        .eq('id', existing.id).select('id, score, history, updated_at').single();
-      if (upErr) throw upErr;
-      return updated;
-    }
-    const { data: inserted, error: insErr } = await supabaseAdmin
-      .from('project_persona_relationships')
-      .insert({ project_id: projectId, group_id: groupId, persona_id: personaId, score: newScore, history: newHistory })
-      .select('id, score, history, updated_at').single();
-    if (insErr) throw insErr;
-    return inserted;
-  }
-
-  // Atomic upsert via pgPool. De WHERE-clausule op DO UPDATE voorkomt dubbele
-  // verwerking als hetzelfde (source, refId) al in history staat. Bij eerste
-  // insert is er per definitie nog geen history → geen dup-risico.
-  try {
-    const sql = `
-      INSERT INTO project_persona_relationships
-        (project_id, group_id, persona_id, score, history, updated_at)
-      VALUES (
-        $1, $2, $3,
-        GREATEST(LEAST($4::int, 10), -10),
-        jsonb_build_array($5::jsonb),
-        now()
-      )
-      ON CONFLICT (project_id, group_id, persona_id) DO UPDATE
-      SET score = GREATEST(LEAST(project_persona_relationships.score + $4::int, 10), -10),
-          history = project_persona_relationships.history || jsonb_build_array($5::jsonb),
-          updated_at = now()
-      WHERE COALESCE($7::text, '') = ''
-         OR NOT (project_persona_relationships.history @> jsonb_build_array(
-              jsonb_build_object('source', $6::text, 'refId', $7::text)
-            ))
-      RETURNING id, score, history, updated_at`;
-    const res = await pgPool.query(sql, [
-      projectId, groupId, personaId,
-      deltaInt, JSON.stringify(evt),
-      source, refId,
-    ]);
-    if (res.rowCount > 0) return res.rows[0];
-    // Idempotente hit via WHERE — re-read huidige staat (1 retry).
-    const reread = await pgPool.query(
-      `SELECT id, score, history, updated_at FROM project_persona_relationships
-       WHERE project_id=$1 AND group_id=$2 AND persona_id=$3`,
-      [projectId, groupId, personaId]
-    );
-    return reread.rows[0] || null;
-  } catch (e) {
-    if (e.code === '42P01' || /project_persona_relationships/i.test(e.message || '')) return null;
-    throw e;
-  }
+async function applyRelationshipDelta(args) {
+  return applyRelationshipDeltaImpl({ supabaseAdmin, pgPool }, args);
 }
 
 // Lees de huidige relatie-rij of geef een neutrale defaults-rij terug.
