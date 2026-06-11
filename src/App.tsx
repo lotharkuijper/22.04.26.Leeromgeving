@@ -13,6 +13,7 @@ import ShareStatsQuizPage from "./pages/ShareStatsQuizPage";
 
 const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage').then(m => ({ default: m.ResetPasswordPage })));
+const ActivatePage = lazy(() => import('./pages/ActivatePage').then(m => ({ default: m.ActivatePage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const ChatPage = lazy(() => import('./pages/ChatPage').then(m => ({ default: m.ChatPage })));
 const ExplainPage = lazy(() => import('./pages/ExplainPage').then(m => ({ default: m.ExplainPage })));
@@ -84,7 +85,13 @@ function ActiveCourseRedirectGuard() {
   const location = useLocation();
 
   useEffect(() => {
-    if (activeCourseUnavailable && location.pathname !== '/choose-course') {
+    // Publieke auth-pagina's nooit wegkapen: een net-uitgenodigde gebruiker zit
+    // op /activate (en /reset-password) en mag daar zijn wachtwoord afmaken,
+    // ook als de gekozen cursus (nog) niet zichtbaar is.
+    const safe = location.pathname === '/choose-course'
+      || location.pathname === '/activate'
+      || location.pathname === '/reset-password';
+    if (activeCourseUnavailable && !safe) {
       navigate('/choose-course', { replace: true, state: { courseUnavailable: true } });
     }
   }, [activeCourseUnavailable, location.pathname, navigate]);
@@ -108,6 +115,8 @@ function AppRoutes() {
       />
 
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+      <Route path="/activate" element={<ActivatePage />} />
 
       <Route
         path="/dashboard"

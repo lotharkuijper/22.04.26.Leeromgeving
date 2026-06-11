@@ -8,8 +8,6 @@ import type { TranslationKey } from '../i18n/translations';
 // Mapt een ruwe auth-foutmelding naar een i18n-sleutel met een nette,
 // gebruikersvriendelijke melding. Geeft `null` terug als er geen specifieke
 // vertaling is, zodat de aanroeper de ruwe melding kan tonen.
-// Belangrijk: 'User already registered' (uit signUp bij een verborgen bestaand
-// account) moet hier op 'login.err.alreadyRegistered' uitkomen.
 export function mapAuthErrorToKey(message: string): TranslationKey | null {
   if (message.includes('Invalid login credentials')) {
     return 'login.err.invalidCredentials';
@@ -26,15 +24,12 @@ export function mapAuthErrorToKey(message: string): TranslationKey | null {
 export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [fullName, setFullName] = useState('');
   const [error, setError] = useState('');
-  const [signUpSuccess, setSignUpSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   // Wachtwoord-vergeten-modus: toont een apart e-mailformulier i.p.v. login.
   const [isForgot, setIsForgot] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
-  const { signIn, signUp } = useAuth();
+  const { signIn } = useAuth();
   const { t, lang, setLang } = useLanguage();
 
   const handleForgotSubmit = async (e: React.FormEvent) => {
@@ -58,30 +53,9 @@ export function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setSignUpSuccess(false);
     setLoading(true);
-
     try {
-      if (isSignUp) {
-        if (!fullName.trim()) {
-          setError(t('login.err.nameRequired'));
-          setLoading(false);
-          return;
-        }
-        if (password.length < 6) {
-          setError(t('login.err.passwordTooShort'));
-          setLoading(false);
-          return;
-        }
-        await signUp(email, password, fullName);
-        // Met e-mailbevestiging aan komt er geen sessie terug en navigeert de
-        // app niet weg: toon een bevestiging en schakel terug naar inloggen.
-        setSignUpSuccess(true);
-        setIsSignUp(false);
-        setPassword('');
-      } else {
-        await signIn(email, password);
-      }
+      await signIn(email, password);
     } catch (err: any) {
       console.error('Auth error:', err);
       const errorMessage = err.message || t('login.err.generic');
@@ -102,7 +76,7 @@ export function LoginPage() {
               LEAP-VU
             </h1>
             <p className="text-gray-600 text-center">
-              {isForgot ? t('login.forgotSubtitle') : isSignUp ? t('login.signUpSubtitle') : t('login.signInSubtitle')}
+              {isForgot ? t('login.forgotSubtitle') : t('login.signInSubtitle')}
             </p>
             {/* Language toggle on login page */}
             <button
@@ -179,23 +153,6 @@ export function LoginPage() {
             )
           ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
-            {isSignUp && (
-              <div>
-                <label htmlFor="fullName" className="block text-sm font-semibold text-gray-700 mb-2">
-                  {t('login.fullName')}
-                </label>
-                <input
-                  id="fullName"
-                  type="text"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
-                  placeholder={t('login.fullNamePlaceholder')}
-                  required={isSignUp}
-                />
-              </div>
-            )}
-
             <div>
               <label htmlFor="email" className="block text-sm font-semibold text-gray-700 mb-2">
                 {t('login.email')}
@@ -210,6 +167,7 @@ export function LoginPage() {
                   className="w-full pl-11 pr-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all outline-none"
                   placeholder={t('login.emailPlaceholder')}
                   required
+                  data-testid="input-email"
                 />
               </div>
             </div>
@@ -229,18 +187,13 @@ export function LoginPage() {
                   placeholder="••••••••"
                   required
                   minLength={6}
+                  data-testid="input-password"
                 />
               </div>
             </div>
 
-            {signUpSuccess && (
-              <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm" data-testid="text-signup-success">
-                {t('login.signUpSuccess')}
-              </div>
-            )}
-
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm" data-testid="text-login-error">
                 {error}
               </div>
             )}
@@ -249,53 +202,29 @@ export function LoginPage() {
               type="submit"
               disabled={loading}
               className="w-full bg-gradient-to-r from-blue-500 to-green-500 text-white font-semibold py-3 rounded-lg hover:from-blue-600 hover:to-green-600 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              data-testid="button-login"
             >
               {loading ? (
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
               ) : (
                 <>
                   <LogIn className="w-5 h-5" />
-                  {isSignUp ? t('login.signUpBtn') : t('login.loginBtn')}
+                  {t('login.loginBtn')}
                 </>
               )}
             </button>
 
-            {!isSignUp && (
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={() => { setIsForgot(true); setForgotSent(false); setError(''); setSignUpSuccess(false); }}
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors"
-                  data-testid="button-forgot-password"
-                >
-                  {t('login.forgotLink')}
-                </button>
-              </div>
-            )}
-          </form>
-          )}
-
-          {!isForgot && (
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setError('');
-                setSignUpSuccess(false);
-              }}
-              className="text-blue-600 hover:text-blue-700 font-medium transition-colors"
-            >
-              {isSignUp ? t('login.switchToSignIn') : t('login.switchToSignUp')}
-            </button>
-          </div>
-          )}
-
-          {isSignUp && !isForgot && (
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <p className="text-xs text-gray-500 text-center leading-relaxed">
-                {t('login.firstUserNote')}
-              </p>
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => { setIsForgot(true); setForgotSent(false); setError(''); }}
+                className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors"
+                data-testid="button-forgot-password"
+              >
+                {t('login.forgotLink')}
+              </button>
             </div>
+          </form>
           )}
         </div>
       </div>

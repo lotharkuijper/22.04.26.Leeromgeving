@@ -3,7 +3,7 @@ import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Users, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, ChevronRight, Sparkles, AlertTriangle, BookText } from 'lucide-react';
+import { Users, UserPlus, FileUp, BookOpen, Settings, Search, Upload, File, Trash2, RefreshCw, CheckCircle, XCircle, Loader2, FolderTree, Eye, Tag, Download, MessageSquareText, CreditCard as Edit2, Home, Plus, Globe, GraduationCap, SlidersHorizontal, Save, ChevronDown, ChevronRight, Sparkles, AlertTriangle, BookText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Database } from '../lib/database.types';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
@@ -14,6 +14,7 @@ import { QuizSourcesAdminPanel } from '../components/QuizSourcesAdminPanel';
 import CursusInfoTab from '../components/CursusInfoTab';
 import { PersonaLibraryTab } from './admin/PersonaLibraryTab';
 import { ProjectsAdminTab } from './admin/ProjectsAdminTab';
+import { AddUsersTab } from './admin/AddUsersTab';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 
 import DocumentsPage from '../pages/DocumentsPage';
@@ -45,7 +46,7 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'documents' | 'rag_beheer' | 'concepts' | 'imports' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin' | 'course_info';
+type TabType = 'users' | 'add_users' | 'documents' | 'rag_beheer' | 'concepts' | 'imports' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin' | 'course_info';
 
 interface RagModuleSettings {
   similarity_threshold: number;
@@ -178,7 +179,7 @@ export function AdminPage() {
     let t = searchParams.get('tab') as TabType | null;
     // Backward-compat: oude deep-links naar de losse ShareStats-tab komen nu op de Imports-hub.
     if ((t as string | null) === 'sharestats_import') t = 'imports';
-    const allowed: TabType[] = ['users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
+    const allowed: TabType[] = ['users','add_users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
     if (t && allowed.includes(t)) return t;
     return isAdmin ? 'users' : 'documents';
   })();
@@ -204,7 +205,7 @@ export function AdminPage() {
     }
     const t = raw as TabType | null;
     if (t && t !== activeTab) {
-      const allowed: TabType[] = ['users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
+      const allowed: TabType[] = ['users','add_users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
       if (allowed.includes(t)) setActiveTabState(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1151,6 +1152,7 @@ export function AdminPage() {
 
 const tabs = [
   { id: 'users' as TabType, label: t('admin.tabs.users'), icon: Users, show: isAdmin },
+  { id: 'add_users' as TabType, label: t('admin.tabs.addUsers'), icon: UserPlus, show: isAdmin || isDocent },
   { id: 'documents' as TabType, label: t('admin.tabs.documents'), icon: FolderTree, show: true },
   { id: 'rag_beheer' as TabType, label: t('admin.tabs.ragBeheer'), icon: RefreshCw, show: true },
   { id: 'concepts' as TabType, label: t('admin.tabs.concepts'), icon: BookOpen, show: true },
@@ -2767,6 +2769,7 @@ const tabGroups = [
           )}
 
           {activeTab === 'projects_admin' && <ProjectsAdminTab />}
+          {activeTab === 'add_users' && <AddUsersTab />}
           {activeTab === 'personas' && <PersonaLibraryTab />}
 
           {activeTab === 'settings' && (

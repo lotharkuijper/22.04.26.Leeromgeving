@@ -34,6 +34,15 @@ import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normal
 import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse } from './courseAvailability.js';
 import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
 import {
+  extractEmails,
+  dedupeEmails,
+  normalizeEmailList,
+  authorizeBulkProvision,
+  validateBatchSize,
+  buildActivationRedirect,
+  MAX_BULK_BATCH,
+} from './bulkAccounts.js';
+import {
   processPptxCore as processPptxCoreImpl,
   processPlainRagDocument as processPlainRagDocumentImpl,
 } from './ragProcessing.js';
@@ -2899,6 +2908,166 @@ app.get('/api/me/teacher-courses', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+});
+
+// ── Bulk-accounts (Task #271) ───────────────────────────────────────────────
+// Schrijft een gebruiker in als student in een cursus. Vult BEIDE rolkolommen:
+// member_role (nieuw) én de legacy NOT NULL `role` (CHECK student/teacher/superuser).
+// insertOnly=true gebruikt resolution=ignore-duplicates zodat een bestaande rij
+// NOOIT wordt overschreven (een docent blijft docent, een superuser superuser).
+// Retourneert null bij succes, anders een foutmelding-string.
+async function enrollAsStudent(courseId, userId, { insertOnly } = {}) {
+  try {
+    const { error } = await supabaseAdmin
+      .from('course_members')
+      .upsert(
+        { course_id: courseId, user_id: userId, member_role: 'student', role: 'student' },
+        { onConflict: 'course_id,user_id', ignoreDuplicates: !!insertOnly }
+      );
+    if (error) return error.message;
+    return null;
+  } catch (e) {
+    return e.message || 'onbekende fout';
+  }
+}
+
+// POST /api/admin/bulk-accounts/parse-file — leest een geüpload bestand
+// (.csv/.txt of office-formaat .xlsx/.docx/.pdf/…) en vist er e-mailadressen uit.
+// Alleen voor staff (admin of docent ergens). Geeft een ontdubbelde lijst terug;
+// de client laat de docent de lijst nog nakijken vóór het echte aanmaken.
+app.post('/api/admin/bulk-accounts/parse-file', docUpload.single('file'), async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  if (!r.isAdmin && !r.isDocent) {
+    return res.status(403).json({ error: 'Alleen docent of admin mag bestanden inlezen' });
+  }
+  if (!req.file) return res.status(400).json({ error: 'Geen bestand ontvangen (veld "file")' });
+  let text = '';
+  try {
+    text = await extractTextFromUpload(req.file);
+  } catch (e) {
+    return res.status(400).json({ error: e.message || 'Kon tekst niet uit bestand halen' });
+  }
+  const emails = dedupeEmails(extractEmails(text));
+  return res.json({ emails, count: emails.length });
+});
+
+// POST /api/admin/bulk-accounts/provision — maakt in bulk studentaccounts aan
+// vanuit een e-maillijst en schrijft ze in één gekozen cursus in. Service-role
+// only. Autorisatie: admin (elke cursus) of docent van DÉZE cursus.
+// Body: { courseId, emails: string[], redirectBase?: string }.
+// Idempotent: bestaande adressen worden gerapporteerd als 'existed' en (alleen
+// indien nog niet ingeschreven) als student bijgeschreven zonder hun bestaande
+// rol of actieve cursus aan te raken. Nieuwe adressen krijgen een Supabase-
+// activatie-uitnodiging (e-mail), worden als student ingeschreven en krijgen de
+// gekozen cursus als actieve cursus.
+app.post('/api/admin/bulk-accounts/provision', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+
+  const courseId = req.body?.courseId;
+  const rawEmails = Array.isArray(req.body?.emails) ? req.body.emails : [];
+  if (!courseId) return res.status(400).json({ error: 'Cursus-ID ontbreekt' });
+
+  // Autorisatie: admin/superuser overal; anders docent van déze cursus.
+  const isAdmin = auth.profile?.role === 'admin' || auth.profile?.email === SUPERUSER_EMAIL;
+  const teacherOfCourse = isAdmin ? false : await isCourseTeacher(auth.user.id, courseId);
+  const decision = authorizeBulkProvision({ isAdmin, isCourseTeacher: teacherOfCourse });
+  if (!decision.allowed) return res.status(decision.status).json(decision.body);
+
+  // Cursus moet bestaan.
+  const { data: course, error: courseErr } = await supabaseAdmin
+    .from('courses').select('id, name').eq('id', courseId).maybeSingle();
+  if (courseErr) return res.status(500).json({ error: courseErr.message });
+  if (!course) return res.status(404).json({ error: 'Cursus niet gevonden' });
+
+  // Normaliseer/valideer/ontdubbel + batch-cap.
+  const { valid, invalid, duplicates } = normalizeEmailList(rawEmails);
+  const sizeCheck = validateBatchSize(valid);
+  if (!sizeCheck.ok) return res.status(sizeCheck.status).json(sizeCheck.body);
+
+  // Bestaande accounts opzoeken (profiles.email is door de trigger gevuld).
+  const existingByEmail = new Map();
+  {
+    const { data: existingProfiles, error: profErr } = await supabaseAdmin
+      .from('profiles').select('id, email').in('email', valid);
+    if (profErr) return res.status(500).json({ error: profErr.message });
+    for (const p of existingProfiles || []) {
+      if (p.email) existingByEmail.set(String(p.email).toLowerCase(), p.id);
+    }
+  }
+
+  const redirectTo = buildActivationRedirect({
+    bodyBase: req.body?.redirectBase,
+    originHeader: req.headers.origin,
+    envBase: process.env.APP_PUBLIC_URL,
+  });
+
+  const results = [];
+  let aborted = false;
+  for (const email of valid) {
+    if (aborted) {
+      results.push({ email, status: 'failed', error: 'Niet verwerkt — batch afgebroken na e-mail-limiet' });
+      continue;
+    }
+    const existingId = existingByEmail.get(email);
+    if (existingId) {
+      // Bestaand account: idempotent bijschrijven als student (overschrijft een
+      // bestaande rol NIET) en hun actieve cursus NIET aanraken.
+      const enrollErr = await enrollAsStudent(courseId, existingId, { insertOnly: true });
+      if (enrollErr) results.push({ email, status: 'failed', error: 'Bestond al, maar inschrijven mislukte: ' + enrollErr });
+      else results.push({ email, status: 'existed' });
+      continue;
+    }
+
+    // Nieuw account: uitnodigen (maakt auth.users-rij + verstuurt activatiemail).
+    const { data: inv, error: invErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(
+      email,
+      { redirectTo, data: { full_name: '' } }
+    );
+    if (invErr) {
+      const msg = invErr.message || '';
+      if (/already.*(registered|been registered)|email.*(exists|registered)/i.test(msg)) {
+        // Race: tussentijds aangemaakt → behandel als bestaand en schrijf bij.
+        const { data: p2 } = await supabaseAdmin.from('profiles').select('id').eq('email', email).maybeSingle();
+        if (p2?.id) await enrollAsStudent(courseId, p2.id, { insertOnly: true });
+        results.push({ email, status: 'existed' });
+        continue;
+      }
+      if (invErr.status === 429 || /rate limit|too many|over_email_send_rate/i.test(msg)) {
+        results.push({ email, status: 'failed', error: 'E-mail-limiet bereikt — probeer later opnieuw of stel aangepaste SMTP in.' });
+        aborted = true;
+        continue;
+      }
+      results.push({ email, status: 'failed', error: msg || 'Uitnodigen mislukt' });
+      continue;
+    }
+    const newId = inv?.user?.id;
+    if (!newId) {
+      results.push({ email, status: 'failed', error: 'Geen gebruiker-ID na uitnodiging' });
+      continue;
+    }
+    // Inschrijven als student (beide rolkolommen) + cursus als actief instellen.
+    const enrollErr = await enrollAsStudent(courseId, newId, { insertOnly: false });
+    if (enrollErr) {
+      results.push({ email, status: 'failed', error: 'Account aangemaakt maar inschrijven mislukte: ' + enrollErr });
+      continue;
+    }
+    await supabaseAdmin.from('profiles').update({ last_active_course_id: courseId }).eq('id', newId);
+    results.push({ email, status: 'created' });
+  }
+
+  const summary = {
+    created: results.filter((x) => x.status === 'created').length,
+    existed: results.filter((x) => x.status === 'existed').length,
+    failed: results.filter((x) => x.status === 'failed').length,
+    invalid: invalid.length,
+    duplicates,
+    total: valid.length,
+  };
+  return res.json({ results, summary, invalid, course: { id: course.id, name: course.name } });
 });
 
 // PATCH /api/admin/courses/:id — hernoem en/of werk beschrijving bij van een
