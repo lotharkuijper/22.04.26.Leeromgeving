@@ -2602,8 +2602,14 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(guard.status).json(guard.body);
       }
+      // Houd de legacy NOT NULL-kolom `role` in sync met member_role (behalve
+      // voor superusers, waar role='superuser' bewaard blijft). Voorkomt dat
+      // een demotie een role=teacher/member_role=student-drift achterlaat.
       await client.query(
-        'UPDATE course_members SET member_role = $1 WHERE course_id = $2 AND user_id = $3',
+        `UPDATE course_members
+            SET member_role = $1,
+                role = CASE WHEN role = 'superuser' THEN role ELSE $1 END
+          WHERE course_id = $2 AND user_id = $3`,
         [member_role, courseId, userId]
       );
       await client.query('COMMIT');
@@ -2620,7 +2626,7 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
   // Fallback zonder directe DB-verbinding (best-effort, niet race-safe).
   const { data: existing, error: fetchErr } = await supabaseAdmin
     .from('course_members')
-    .select('member_role')
+    .select('member_role, role')
     .eq('course_id', courseId).eq('user_id', userId).maybeSingle();
   if (fetchErr) return res.status(500).json({ error: fetchErr.message });
   if (!existing) return res.status(404).json({ error: 'Lid niet gevonden in deze cursus' });
@@ -2640,9 +2646,11 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
     });
     if (!guard.ok) return res.status(guard.status).json(guard.body);
   }
+  // Spiegel member_role naar de legacy `role`-kolom (superuser blijft superuser).
+  const nextLegacyRole = existing.role === 'superuser' ? 'superuser' : member_role;
   const { error: updErr } = await supabaseAdmin
     .from('course_members')
-    .update({ member_role })
+    .update({ member_role, role: nextLegacyRole })
     .eq('course_id', courseId)
     .eq('user_id', userId);
   if (updErr) return res.status(500).json({ error: updErr.message });
@@ -2681,7 +2689,7 @@ app.post('/api/admin/courses/:id/members/:userId', async (req, res) => {
     if (!prof) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
     const { data: existing } = await supabaseAdmin
       .from('course_members')
-      .select('member_role')
+      .select('member_role, role')
       .eq('course_id', courseId).eq('user_id', userId).maybeSingle();
     if (existing && existing.member_role === 'teacher' && member_role === 'student') {
       return res.status(409).json({
@@ -2693,10 +2701,13 @@ app.post('/api/admin/courses/:id/members/:userId', async (req, res) => {
     // (role IN ('superuser','teacher','student')). We spiegelen member_role
     // expliciet zodat upserts ook werken in omgevingen waar migratie
     // 20260527220000 (default 'student') nog niet is toegepast.
+    // Behoud een bestaande superuser-rol: superusers staan als role='superuser'
+    // met member_role='student'; die mag een gewone toevoeging niet overschrijven.
+    const nextLegacyRole = existing && existing.role === 'superuser' ? 'superuser' : member_role;
     const { error: upErr } = await supabaseAdmin
       .from('course_members')
       .upsert(
-        { course_id: courseId, user_id: userId, member_role, role: member_role },
+        { course_id: courseId, user_id: userId, member_role, role: nextLegacyRole },
         { onConflict: 'course_id,user_id' }
       );
     if (upErr) return res.status(500).json({ error: upErr.message });

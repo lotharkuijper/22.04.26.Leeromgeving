@@ -25,6 +25,24 @@ export default defineConfig({
     // wat de module-graph invalideerde ("Failed to fetch dynamically imported
     // module" + dubbele React → "Invalid hook call"-crash).
     exclude: ['lucide-react', 'pdfjs-dist'],
+    // Zware deps die ALLEEN achter lazy routes (React.lazy) zitten — de
+    // markdown/KaTeX-stack in MarkdownMessage en de Tiptap-editor + mammoth.
+    // Zonder deze include ontdekt Vite ze pas bij het eerste bezoek aan zo'n
+    // route en her-optimaliseert dan midden in de sessie. Dat geeft exact
+    // dezelfde crash als hierboven (stale chunk-URL's → "Failed to fetch
+    // dynamically imported module" + dubbele React → "Invalid hook call").
+    // Vooraf bundelen bij serverstart voorkomt de mid-sessie her-optimalisatie.
+    include: [
+      'react-markdown',
+      'remark-gfm',
+      'remark-math',
+      'rehype-katex',
+      'katex',
+      '@tiptap/react',
+      '@tiptap/starter-kit',
+      'tiptap-markdown',
+      'mammoth',
+    ],
   },
   server: {
     host: '0.0.0.0',
