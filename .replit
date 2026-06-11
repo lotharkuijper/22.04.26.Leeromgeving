@@ -74,5 +74,5 @@ timeoutMs = 20000
 
 [userenv.shared]
 AZURE_OPENAI_ENDPOINT = "https://leap-openai-vu.openai.azure.com/"
-AZURE_OPENAI_DEPLOYMENT = "gpt-5.1"
+AZURE_OPENAI_DEPLOYMENT = "gpt-5.5"
 AZURE_OPENAI_API_VERSION = "2024-10-21"

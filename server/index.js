@@ -137,7 +137,7 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 const AZURE_OPENAI_ENDPOINT = (process.env.AZURE_OPENAI_ENDPOINT || '').replace(/\/+$/, '');
 const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY || '';
 const AZURE_OPENAI_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-10-21';
-const AZURE_OPENAI_DEPLOYMENT = process.env.AZURE_OPENAI_DEPLOYMENT || process.env.OPENAI_MODEL || 'gpt-5.1';
+const AZURE_OPENAI_DEPLOYMENT = process.env.AZURE_OPENAI_DEPLOYMENT || process.env.OPENAI_MODEL || 'gpt-5.5';
 const AZURE_CHAT_READY = Boolean(AZURE_OPENAI_ENDPOINT && AZURE_OPENAI_API_KEY);
 // Géén OpenAI-fallback voor chat: als Azure niet is geconfigureerd blijft de URL
 // leeg en falen chat-calls expliciet (de endpoints gaten bovendien op AZURE_CHAT_READY).
@@ -145,6 +145,7 @@ const OPENAI_CHAT_URL = AZURE_CHAT_READY
   ? `${AZURE_OPENAI_ENDPOINT}/openai/deployments/${encodeURIComponent(AZURE_OPENAI_DEPLOYMENT)}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION}`
   : '';
 const LLM_NOT_CONFIGURED_MSG = 'Azure OpenAI is niet geconfigureerd op de server (AZURE_OPENAI_ENDPOINT en AZURE_OPENAI_API_KEY ontbreken).';
+console.log(`[API Server] Azure chat ${AZURE_CHAT_READY ? 'gereed' : 'NIET geconfigureerd'} — deployment=${AZURE_OPENAI_DEPLOYMENT}, api-version=${AZURE_OPENAI_API_VERSION}`);
 // Auth-headers voor een chat-call. Azure verwacht de 'api-key'-header.
 function chatAuthHeaders() {
   return { 'api-key': AZURE_OPENAI_API_KEY, 'Content-Type': 'application/json' };
@@ -161,6 +162,23 @@ const MAX_TOKENS_PARAM = IS_REASONING_MODEL
 // Houd die inspanning laag zodat er ruimte overblijft voor zichtbare output;
 // non-reasoning-modellen kennen deze parameter niet (zou een 400 geven).
 const REASONING_EFFORT = 'low';
+// Model-afhankelijke parameters voor de "satelliet"-LLM-aanroepen (quizgeneratie,
+// beoordeling, samenvattingen, project-evaluaties, document-oordelen, cues, …).
+// Reasoning-modellen (gpt-5.x / o1 / o3 / o4) weigeren een aangepaste temperature/
+// top_p met een HTTP 400 en gebruiken in plaats daarvan 'reasoning_effort'; non-
+// reasoning-modellen krijgen de meegegeven temperature. De juiste max-tokens-sleutel
+// (max_completion_tokens vs max_tokens) wordt altijd gezet. Het centrale /api/chat-
+// pad heeft zijn eigen, uitgebreidere afhandeling (retry + lege/afgekapte detectie).
+function chatModelParams({ temperature, maxTokens, reasoningEffort } = {}) {
+  const params = {};
+  if (maxTokens != null) params[MAX_TOKENS_PARAM] = maxTokens;
+  if (IS_REASONING_MODEL) {
+    params.reasoning_effort = reasoningEffort || REASONING_EFFORT;
+  } else if (temperature != null) {
+    params.temperature = temperature;
+  }
+  return params;
+}
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 
 const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
@@ -661,8 +679,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
               body: JSON.stringify({
                 model: OPENAI_MODEL,
                 messages: [{ role: 'user', content: summaryPrompt }],
-                temperature: 0.5,
-                [MAX_TOKENS_PARAM]: 600,
+                ...chatModelParams({ temperature: 0.5, maxTokens: 600 }),
               }),
             });
 
@@ -1594,8 +1611,7 @@ async function chunkSlideWindow(win, openaiKey, lang = 'nl') {
       { role: 'system', content: system },
       { role: 'user', content: instruction },
     ],
-    temperature: 0.2,
-    [MAX_TOKENS_PARAM]: 4000,
+    ...chatModelParams({ temperature: 0.2, maxTokens: 4000 }),
     response_format: { type: 'json_object' },
   };
 
@@ -3974,8 +3990,7 @@ ${combinedText}`;
           body: JSON.stringify({
             model: OPENAI_MODEL,
             messages: [{ role: 'user', content: extractionPrompt }],
-            temperature: 0.2,
-            [MAX_TOKENS_PARAM]: 8192,
+            ...chatModelParams({ temperature: 0.2, maxTokens: 8192 }),
           }),
         });
         if (resp.ok) return { resp, errData: null };
@@ -5023,8 +5038,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
             body: JSON.stringify({
               model: OPENAI_MODEL,
               messages: [{ role: 'user', content: summaryPrompt }],
-              temperature: 0.5,
-              [MAX_TOKENS_PARAM]: 600,
+              ...chatModelParams({ temperature: 0.5, maxTokens: 600 }),
             }),
           });
 
@@ -5266,8 +5280,7 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: summaryPrompt }],
-        temperature: 0.5,
-        [MAX_TOKENS_PARAM]: maxTokens,
+        ...chatModelParams({ temperature: 0.5, maxTokens: maxTokens }),
       }),
     });
 
@@ -5588,8 +5601,7 @@ Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees conc
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: summaryPrompt }],
-          temperature: 0.5,
-          [MAX_TOKENS_PARAM]: 1000,
+          ...chatModelParams({ temperature: 0.5, maxTokens: 1000 }),
         }),
       });
       if (!chatResp.ok) {
@@ -8544,8 +8556,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
           ...history.map(h => ({ role: h.role, content: h.content })),
           { role: 'user', content: message },
         ],
-        temperature: 0.7,
-        [MAX_TOKENS_PARAM]: 700,
+        ...chatModelParams({ temperature: 0.7, maxTokens: 700 }),
       }),
     });
     if (!chatResp.ok) {
@@ -8655,8 +8666,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.2,
-          [MAX_TOKENS_PARAM]: 600,
+          ...chatModelParams({ temperature: 0.2, maxTokens: 600 }),
           response_format: { type: 'json_object' },
         }),
       });
@@ -8804,8 +8814,7 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages,
-          temperature: 0.2,
-          [MAX_TOKENS_PARAM]: 700,
+          ...chatModelParams({ temperature: 0.2, maxTokens: 700 }),
           response_format: { type: 'json_object' },
         }),
       });
@@ -9014,8 +9023,7 @@ async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
       body: JSON.stringify({
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        [MAX_TOKENS_PARAM]: 800,
+        ...chatModelParams({ temperature: 0.3, maxTokens: 800 }),
         response_format: { type: 'json_object' },
       }),
     });
@@ -9095,7 +9103,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
               messages: [{ role: 'user', content: enMode
                 ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
                 : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
-              temperature: 0.3, [MAX_TOKENS_PARAM]: 300,
+              ...chatModelParams({ temperature: 0.3, maxTokens: 300 }),
             }),
           });
           if (r1.ok) studentSummary = ((await r1.json()).choices?.[0]?.message?.content || '').trim();
@@ -9109,7 +9117,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
               messages: [{ role: 'user', content: enMode
                 ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
                 : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
-              temperature: 0.3, [MAX_TOKENS_PARAM]: 600,
+              ...chatModelParams({ temperature: 0.3, maxTokens: 600 }),
             }),
           });
           if (r2.ok) personaSummary = ((await r2.json()).choices?.[0]?.message?.content || '').trim();
@@ -9252,7 +9260,7 @@ Geen tekst buiten de JSON.`;
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.4, [MAX_TOKENS_PARAM]: 1500,
+          ...chatModelParams({ temperature: 0.4, maxTokens: 1500 }),
           response_format: { type: 'json_object' },
         }),
       });
@@ -9287,7 +9295,7 @@ ${reflection}`;
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.5, [MAX_TOKENS_PARAM]: 700,
+          ...chatModelParams({ temperature: 0.5, maxTokens: 700 }),
         }),
       });
       if (!chatResp.ok) {
@@ -9511,7 +9519,7 @@ ${reflection}`;
                 body: JSON.stringify({
                   model: OPENAI_MODEL,
                   messages: [{ role: 'user', content: sumPrompt }],
-                  temperature: 0.3, [MAX_TOKENS_PARAM]: 350,
+                  ...chatModelParams({ temperature: 0.3, maxTokens: 350 }),
                 }),
               });
               if (sr.ok) summaryText = ((await sr.json()).choices?.[0]?.message?.content || '').trim();
@@ -11036,9 +11044,8 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages,
-          temperature: 0.2,
           response_format: { type: 'json_object' },
-          [MAX_TOKENS_PARAM]: 800,
+          ...chatModelParams({ temperature: 0.2, maxTokens: 800 }),
         }),
       });
       if (!r.ok) {
@@ -12072,7 +12079,7 @@ Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exact
         body: JSON.stringify({
           model: OPENAI_MODEL,
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.4, [MAX_TOKENS_PARAM]: 1800,
+          ...chatModelParams({ temperature: 0.4, maxTokens: 1800 }),
         }),
       });
       if (!gr.ok) {

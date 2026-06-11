@@ -11,6 +11,28 @@ non-default `temperature`/`top_p` with an HTTP 400 ("only the default (1) value 
 supported"). An earlier note claimed it accepted custom temperature — that was wrong
 (or the served snapshot changed). Do not trust that anymore.
 
+**gpt-5.5 (Azure deployment) is also strict — probe each deployment.** Confirmed live
+on the VU Azure resource (`leap-openai-vu`, deployment `gpt-5.5`): it rejects (HTTP 400)
+a custom `temperature` ("only the default (1)"), `top_p`, AND the legacy `max_tokens`
+(must use `max_completion_tokens`); it accepts `reasoning_effort` + `response_format:
+json_object`. Param-strictness is NOT guaranteed identical across gpt-5.x minor versions,
+so probe the actual deployment before switching, don't assume from the model name.
+**Azure routing is by deployment in the URL — the body `model` field is ignored** (a
+mismatched `model: gpt-5.2` on the gpt-5.5 deployment still returns 200), so the
+`OPENAI_MODEL` secret only drives `IS_REASONING_MODEL`/`MAX_TOKENS_PARAM`, not which model
+answers. The routing knob is `AZURE_OPENAI_DEPLOYMENT` (note: it can exist as BOTH a
+shared env var and a mirrored secret; the shared env var value wins at runtime — verify
+via the startup log line).
+
+**Both the central `/api/chat` path AND every "satellite" call site must shape params.**
+The central handler had the reasoning-safe logic; the satellite calls (quiz, grading,
+summaries, project-evaluations, document-reviews, cue-emission, pptx-chunking) sent
+hardcoded `temperature: 0.x` and only worked because the old gpt-5.1 deployment was
+lenient. They now all build sampling params via `chatModelParams({ temperature, maxTokens })`
+in `server/index.js` (reasoning ⇒ omit temperature/top_p, add `reasoning_effort`; else
+pass temperature; always set the right max-tokens key). When migrating models, audit
+EVERY `fetch(OPENAI_CHAT_URL` site, not just `/api/chat`.
+
 **Rule — request shaping for reasoning models** (`/^(gpt-5|o1|o3|o4)/i`, the same
 `IS_REASONING_MODEL` regex used for `MAX_TOKENS_PARAM`):
 - Do NOT send custom `temperature`/`top_p` at all. Omit them so OpenAI uses the default;
