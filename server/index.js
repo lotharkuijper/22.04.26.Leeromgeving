@@ -254,17 +254,29 @@ async function searchChunksServerSide(queryText, threshold, matchCount, allowedF
       headers: embeddingAuthHeaders(),
       body: JSON.stringify({ model: 'text-embedding-3-small', input: [embedQuery] }),
     });
-    if (!embRes.ok) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
+    if (!embRes.ok) {
+      // Niet stil slikken: een mislukte Azure-embedding (bijv. 404 ontbrekende
+      // deployment, 401 verkeerde key) leidde anders tot onzichtbare "0 resultaten".
+      const errText = await embRes.text().catch(() => '');
+      console.error(`[searchChunksServerSide] Azure embedding-call mislukt: HTTP ${embRes.status} — ${errText.slice(0, 300)}`);
+      return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
+    }
     const embData = await embRes.json();
     const embedding = embData.data?.[0]?.embedding;
-    if (!embedding) return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
+    if (!embedding) {
+      console.error('[searchChunksServerSide] Azure embedding-respons bevatte geen vector');
+      return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
+    }
 
     const { data: allChunks, error } = await supabaseAdmin.rpc('match_document_chunks', {
       query_embedding: embedding,
       match_threshold: 0,
       match_count: Math.max(matchCount * 3, 15),
     });
-    if (error || !allChunks) return { matched: [], maxScore: 0, candidatesInAllowed: 0 };
+    if (error || !allChunks) {
+      if (error) console.error('[searchChunksServerSide] match_document_chunks RPC-fout:', error.message || JSON.stringify(error));
+      return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
+    }
 
     let candidate = allChunks;
     if (Array.isArray(allowedFolderIds) && allowedFolderIds.length > 0) {
