@@ -5,6 +5,7 @@ import {
   buildRelationshipPromptBlock, BLOCK_THRESHOLD,
   clampCueDelta, validateCueResponse, buildCueInstructionBlock, cueJsonInstruction,
   CUE_DELTA_MIN, CUE_DELTA_MAX, sanitizeEventNote, hasCueTable,
+  clampCueDeltaMax, CUE_DELTA_MAX_MIN, CUE_DELTA_MAX_MAX, CUE_DELTA_MAX_DEFAULT,
 } from '../personaRelationship.js';
 
 describe('clampScore / applyDelta', () => {
@@ -285,6 +286,80 @@ describe('close-flow idempotentie (thread_close:<id> refId)', () => {
     expect(hasHistoryRef(history, 'persona_chat_close', 'review-1')).toBe(false);
     expect(hasHistoryRef(history, 'document_review', 'thread_close:t1')).toBe(false);
     expect(hasHistoryRef(history, 'persona_chat_close', 'thread_close:t1')).toBe(true);
+  });
+});
+
+describe('clampCueDeltaMax (Task #173 — per-cursus cue-bereik)', () => {
+  it('constanten', () => {
+    expect(CUE_DELTA_MAX_MIN).toBe(1);
+    expect(CUE_DELTA_MAX_MAX).toBe(5);
+    expect(CUE_DELTA_MAX_DEFAULT).toBe(2);
+  });
+  it('rondt af en clampt naar [1..5]', () => {
+    expect(clampCueDeltaMax(3)).toBe(3);
+    expect(clampCueDeltaMax(0)).toBe(1);
+    expect(clampCueDeltaMax(99)).toBe(5);
+    expect(clampCueDeltaMax(2.6)).toBe(3);
+  });
+  it('niet-numeriek (NaN/string/undefined) → default 2', () => {
+    expect(clampCueDeltaMax('foo')).toBe(2);
+    expect(clampCueDeltaMax(undefined)).toBe(2);
+    expect(clampCueDeltaMax(NaN)).toBe(2);
+  });
+  it('null wordt door Number() naar 0 gecast en daarna naar 1 geclampt', () => {
+    expect(clampCueDeltaMax(null)).toBe(1);
+  });
+});
+
+describe('cue-helpers met per-cursus maxDelta (Task #173)', () => {
+  it('clampCueDelta met maxDelta=4 staat ±4 toe', () => {
+    expect(clampCueDelta(4, 4)).toBe(4);
+    expect(clampCueDelta(-4, 4)).toBe(-4);
+    expect(clampCueDelta(9, 4)).toBe(4);
+    expect(clampCueDelta(-9, 4)).toBe(-4);
+  });
+  it('clampCueDelta met maxDelta=1 staat alleen ±1 toe', () => {
+    expect(clampCueDelta(2, 1)).toBe(1);
+    expect(clampCueDelta(-3, 1)).toBe(-1);
+    expect(clampCueDelta(1, 1)).toBe(1);
+  });
+  it('validateCueResponse respecteert per-cursus maxDelta', () => {
+    const out = validateCueResponse(
+      { relationship_delta: 5, relationship_reason: 'zeer sterk gesprek' },
+      { maxDelta: 3 }
+    );
+    expect(out.delta).toBe(3);
+    expect(out.reason).toBe('zeer sterk gesprek');
+  });
+  it('validateCueResponse met maxDelta=1 clampt neg.', () => {
+    expect(
+      validateCueResponse({ relationship_delta: -2, relationship_reason: 'x' }, { maxDelta: 1 }).delta
+    ).toBe(-1);
+  });
+  it('emissionEnabled=false overruled maxDelta', () => {
+    expect(
+      validateCueResponse(
+        { relationship_delta: 5, relationship_reason: 'goed' },
+        { emissionEnabled: false, maxDelta: 5 }
+      )
+    ).toEqual({ delta: 0, reason: '' });
+  });
+  it('buildCueInstructionBlock NL noemt het bereik', () => {
+    expect(buildCueInstructionBlock('nl', 3)).toMatch(/-3\.\.3/);
+    expect(buildCueInstructionBlock('nl', 5)).toMatch(/-5\.\.5/);
+    expect(buildCueInstructionBlock('nl', 1)).toMatch(/-1\.\.1/);
+  });
+  it('buildCueInstructionBlock EN noemt het bereik', () => {
+    expect(buildCueInstructionBlock('en', 4)).toMatch(/-4\.\.4/);
+  });
+  it('cueJsonInstruction noemt het bereik', () => {
+    expect(cueJsonInstruction('nl', 3)).toMatch(/-3\.\.3|-3 tot 3|tussen -3/);
+    expect(cueJsonInstruction('en', 3)).toMatch(/-3\.\.3|-3 to 3|between -3/);
+  });
+  it('default-argumenten gedragen zich nog als ±2 (backward-compat)', () => {
+    expect(clampCueDelta(3)).toBe(2);
+    expect(validateCueResponse({ relationship_delta: 5, relationship_reason: 'x' }).delta).toBe(2);
+    expect(buildCueInstructionBlock('nl')).toMatch(/-2\.\.2/);
   });
 });
 

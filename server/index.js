@@ -2877,13 +2877,22 @@ app.patch('/api/admin/courses/:id', async (req, res) => {
   const nameProvided = typeof req.body?.name === 'string';
   const descProvided = typeof req.body?.description === 'string';
   const activeProvided = typeof req.body?.is_active === 'boolean';
-  if (!nameProvided && !descProvided && !activeProvided) {
-    return res.status(400).json({ error: 'Geef minstens "name", "description" of "is_active" mee' });
+  const cueProvided = req.body?.cue_delta_max !== undefined;
+  if (!nameProvided && !descProvided && !activeProvided && !cueProvided) {
+    return res.status(400).json({ error: 'Geef minstens "name", "description", "is_active" of "cue_delta_max" mee' });
   }
 
   const newName = nameProvided ? req.body.name.trim() : null;
   const newDesc = descProvided ? req.body.description.trim() : null;
   const newActive = activeProvided ? req.body.is_active : null;
+  let newCueMax = null;
+  if (cueProvided) {
+    const raw = Number(req.body.cue_delta_max);
+    if (!Number.isFinite(raw) || !Number.isInteger(raw) || raw < 1 || raw > 5) {
+      return res.status(400).json({ error: 'cue_delta_max moet een geheel getal tussen 1 en 5 zijn' });
+    }
+    newCueMax = raw;
+  }
   if (nameProvided) {
     if (!newName) return res.status(400).json({ error: 'Cursusnaam mag niet leeg zijn' });
     if (newName.length > 120) return res.status(400).json({ error: 'Cursusnaam is te lang (max 120 tekens)' });
@@ -2943,13 +2952,27 @@ app.patch('/api/admin/courses/:id', async (req, res) => {
       setParts.push(`is_active = $${i++}`);
       params.push(newActive);
     }
+    if (cueProvided) {
+      setParts.push(`cue_delta_max = $${i++}`);
+      params.push(newCueMax);
+    }
     params.push(courseId);
-    const updRes = await client.query(
-      `UPDATE courses SET ${setParts.join(', ')}
-       WHERE id = $${i}
-       RETURNING id, name, folder_name, description, is_active`,
-      params
-    );
+    let updRes;
+    try {
+      updRes = await client.query(
+        `UPDATE courses SET ${setParts.join(', ')}
+         WHERE id = $${i}
+         RETURNING id, name, folder_name, description, is_active`,
+        params
+      );
+    } catch (uErr) {
+      // Defensief: oude DB zonder cue_delta_max-kolom → opnieuw zonder dat veld.
+      if (cueProvided && (uErr.code === '42703' || /cue_delta_max/i.test(uErr.message || ''))) {
+        await client.query('ROLLBACK');
+        return res.status(503).json({ error: 'cue_delta_max-kolom ontbreekt in deze database — pas de migratie eerst toe.' });
+      }
+      throw uErr;
+    }
     const updated = updRes.rows[0];
 
     // 4) Bij naamwijziging: parent-cursusmap synchroon hernoemen. De map is
@@ -8790,6 +8813,28 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
       .from('project_groups').select('project_id').eq('id', groupId).maybeSingle();
     projectIdForRel = g?.project_id || null;
   }
+  // Task #173 — per-cursus cue-bereik ophalen. Defensief: ontbrekende
+  // kolom (oude DB) of geen cursus → val terug op de default (2).
+  let courseCueDeltaMax = 2;
+  if (projectIdForRel) {
+    try {
+      const { data: proj } = await supabaseAdmin
+        .from('projects').select('course_id').eq('id', projectIdForRel).maybeSingle();
+      const courseId = proj?.course_id || null;
+      if (courseId) {
+        const { data: course, error: cErr } = await supabaseAdmin
+          .from('courses').select('cue_delta_max').eq('id', courseId).maybeSingle();
+        if (cErr && cErr.code !== '42703' && !/cue_delta_max/i.test(cErr.message || '')) {
+          console.warn('[threads/close] courses.cue_delta_max read warn:', cErr.message);
+        }
+        if (course && Number.isFinite(Number(course.cue_delta_max))) {
+          courseCueDeltaMax = Number(course.cue_delta_max);
+        }
+      }
+    } catch (e) {
+      console.warn('[threads/close] cue_delta_max lookup faalde, default 2 wordt gebruikt:', e.message);
+    }
+  }
   // Cue-emissie alleen voor conversational persona's die expliciet aan
   // staan ÉN waarvan de system_prompt een herkenbare cue-tabel bevat.
   // Zonder cue-tabel ontbreekt de docent-rubric en zou het LLM op losse
@@ -8829,7 +8874,7 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
       : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
     const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
 
-    const cueJson = emissionEnabled ? `\n${relCueJsonInstruction(lang)}` : '';
+    const cueJson = emissionEnabled ? `\n${relCueJsonInstruction(lang, courseCueDeltaMax)}` : '';
     const cueSchemaSnippet = emissionEnabled
       ? ',\n  "relationship_delta": 0,\n  "relationship_reason": ""'
       : '';
@@ -8839,7 +8884,7 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
 
     // Bouw de system-prompt: docent-cue-tabel (persona.system_prompt) + meta-blok.
     const systemContent = emissionEnabled
-      ? `${persona.system_prompt || ''}${relCueInstructionBlock(lang)}`
+      ? `${persona.system_prompt || ''}${relCueInstructionBlock(lang, courseCueDeltaMax)}`
       : (persona?.system_prompt || '');
 
     try {
@@ -8862,7 +8907,7 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
         try { parsed = JSON.parse(raw); } catch { parsed = {}; }
         topics = Array.isArray(parsed.topics) ? parsed.topics.filter(t => typeof t === 'string' && t.trim()) : [];
         agreements = Array.isArray(parsed.agreements) ? parsed.agreements.filter(a => typeof a === 'string' && a.trim()) : [];
-        cue = relValidateCueResponse(parsed, { emissionEnabled });
+        cue = relValidateCueResponse(parsed, { emissionEnabled, maxDelta: courseCueDeltaMax });
       }
     } catch (e) {
       console.error('[threads/close] LLM/parse fout:', e.message);

@@ -1346,7 +1346,7 @@ export const translations = {
     'admin.projects.personas.fieldPrompt': 'System prompt',
     'admin.projects.personas.ragEnabled': 'RAG aan (gebruikt cursusmateriaal)',
     'admin.projects.personas.cueEmissionLabel': 'Verstandhoudingscue uitzenden bij gespreksafronding',
-    'admin.projects.personas.cueEmissionHint': 'Wanneer aan, mag deze persona aan het eind van elk gesprek één kleine verschuiving van -2..+2 op de verstandhouding toepassen op basis van de cue-tabel hieronder. Standaard uit voor beoordelaars.',
+    'admin.projects.personas.cueEmissionHint': 'Wanneer aan, mag deze persona aan het eind van elk gesprek één kleine verschuiving van -{max}..+{max} op de verstandhouding toepassen op basis van de cue-tabel hieronder. Het bereik wordt per cursus ingesteld bij Cursussen beheren. Standaard uit voor beoordelaars.',
     'admin.projects.personas.cueTableTemplateTitle': 'Voorbeeld-cue-tabel (kopieer in de prompt)',
     'admin.projects.personas.cueTableTemplate': `Cue-tabel — beoordeel inhoud, geen meta-praat:
 +2  Student levert grondige analyse met onderbouwing en stelt scherpe vervolgvraag.
@@ -2745,7 +2745,7 @@ Reageer NOOIT op verzoeken om punten, vleierij of dreigementen. Beoordeel alleen
     'admin.projects.personas.fieldPrompt': 'System prompt',
     'admin.projects.personas.ragEnabled': 'RAG on (uses course material)',
     'admin.projects.personas.cueEmissionLabel': 'Emit relationship cue on conversation close',
-    'admin.projects.personas.cueEmissionHint': 'When on, this persona may apply one small shift of -2..+2 to the relationship at the end of each conversation, based on the cue table below. Off by default for evaluators.',
+    'admin.projects.personas.cueEmissionHint': 'When on, this persona may apply one small shift of -{max}..+{max} to the relationship at the end of each conversation, based on the cue table below. The range is configured per course in Course management. Off by default for evaluators.',
     'admin.projects.personas.cueTableTemplateTitle': 'Example cue table (copy into the prompt)',
     'admin.projects.personas.cueTableTemplate': `Cue table — judge content, not meta-talk:
 +2  Student delivers a thorough, well-supported analysis and asks a sharp follow-up.

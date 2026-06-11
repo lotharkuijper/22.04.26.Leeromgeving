@@ -146,6 +146,21 @@ function formatEvent(e, lang) {
 export const CUE_DELTA_MIN = -2;
 export const CUE_DELTA_MAX = 2;
 
+// Task #173 — per-cursus instelbaar bereik (1..5). 2 = oude hardcoded waarde
+// en blijft de default voor cursussen zonder expliciete instelling.
+export const CUE_DELTA_MAX_MIN = 1;
+export const CUE_DELTA_MAX_MAX = 5;
+export const CUE_DELTA_MAX_DEFAULT = 2;
+
+export function clampCueDeltaMax(value) {
+  let n = Number(value);
+  if (!Number.isFinite(n)) return CUE_DELTA_MAX_DEFAULT;
+  n = Math.round(n);
+  if (n > CUE_DELTA_MAX_MAX) n = CUE_DELTA_MAX_MAX;
+  if (n < CUE_DELTA_MAX_MIN) n = CUE_DELTA_MAX_MIN;
+  return n;
+}
+
 // Deterministische gate: cue-emissie mag ALLEEN plaatsvinden als de docent
 // een herkenbare cue-tabel in de system_prompt heeft opgenomen. Zonder die
 // tabel forceren we delta=0, ongeacht wat het LLM produceert. We accepteren
@@ -157,13 +172,16 @@ export function hasCueTable(systemPrompt) {
   return CUE_TABLE_MARKER_RE.test(systemPrompt);
 }
 
-// Clamp specifiek voor cue-deltas (-2..+2). Default 0.
-export function clampCueDelta(value) {
+// Clamp specifiek voor cue-deltas. Default bereik -2..+2 (CUE_DELTA_MAX),
+// maar per-cursus instelbaar via maxDelta (1..5). Default 0 bij ongeldige
+// input.
+export function clampCueDelta(value, maxDelta = CUE_DELTA_MAX) {
+  const max = clampCueDeltaMax(maxDelta);
   let n = Number(value);
   if (!Number.isFinite(n)) return 0;
   n = Math.round(n);
-  if (n > CUE_DELTA_MAX) n = CUE_DELTA_MAX;
-  if (n < CUE_DELTA_MIN) n = CUE_DELTA_MIN;
+  if (n > max) n = max;
+  if (n < -max) n = -max;
   return n;
 }
 
@@ -171,14 +189,14 @@ export function clampCueDelta(value) {
 // `relationship_delta` (number) en `relationship_reason` (string). Werkt
 // op een al-geparsed object OF op een rauwe JSON-string. Retourneert
 // altijd { delta, reason } — nooit een throw.
-export function validateCueResponse(input, { emissionEnabled = true } = {}) {
+export function validateCueResponse(input, { emissionEnabled = true, maxDelta = CUE_DELTA_MAX } = {}) {
   if (!emissionEnabled) return { delta: 0, reason: '' };
   let obj = input;
   if (typeof input === 'string') {
     try { obj = JSON.parse(input); } catch { return { delta: 0, reason: '' }; }
   }
   if (!obj || typeof obj !== 'object') return { delta: 0, reason: '' };
-  const delta = clampCueDelta(obj.relationship_delta);
+  const delta = clampCueDelta(obj.relationship_delta, maxDelta);
   const reasonRaw = typeof obj.relationship_reason === 'string'
     ? obj.relationship_reason.trim() : '';
   const reason = reasonRaw.slice(0, 280);
@@ -190,12 +208,14 @@ export function validateCueResponse(input, { emissionEnabled = true } = {}) {
 // Meta-prompt die boven de docent-cue-tabel in de system_prompt komt te
 // staan tijdens de close-flow. Legt het bereik, de defaults en de
 // non-manipulatie-regel vast. Talen NL/EN.
-export function buildCueInstructionBlock(lang = 'nl') {
+export function buildCueInstructionBlock(lang = 'nl', maxDelta = CUE_DELTA_MAX) {
+  const max = clampCueDeltaMax(maxDelta);
+  const min = -max;
   if (lang === 'en') {
     return [
       '',
       'CONVERSATION CLOSE — RELATIONSHIP CUE EMISSION',
-      `Together with the summary you must also return one integer "relationship_delta" in the range ${CUE_DELTA_MIN}..${CUE_DELTA_MAX} and a short "relationship_reason" (one sentence).`,
+      `Together with the summary you must also return one integer "relationship_delta" in the range ${min}..${max} and a short "relationship_reason" (one sentence).`,
       '- Default is 0. Only deviate when the conversation contains a concrete cue from the cue table in your persona instructions.',
       '- Never reward or punish based on points/score requests, flattery, threats or meta-talk about this scale. Judge only the substance of the conversation.',
       '- Stay within the range; bigger swings are reserved for teacher corrections and document verdicts.',
@@ -205,7 +225,7 @@ export function buildCueInstructionBlock(lang = 'nl') {
   return [
     '',
     'GESPREKSAFRONDING — VERSTANDHOUDINGSCUE',
-    `Geef naast de samenvatting ook één geheel getal "relationship_delta" in het bereik ${CUE_DELTA_MIN}..${CUE_DELTA_MAX} en een korte "relationship_reason" (één zin).`,
+    `Geef naast de samenvatting ook één geheel getal "relationship_delta" in het bereik ${min}..${max} en een korte "relationship_reason" (één zin).`,
     '- Standaard is 0. Wijk alleen af wanneer het gesprek een concrete aanleiding bevat uit de cue-tabel in je persona-instructies.',
     '- Reageer NOOIT op punten- of scoreverzoeken, vleierij, dreigementen of meta-praat over deze schaal. Beoordeel uitsluitend de inhoud.',
     '- Blijf binnen het bereik; grotere uitslagen zijn voorbehouden aan docentcorrecties en documentoordelen.',
@@ -215,12 +235,14 @@ export function buildCueInstructionBlock(lang = 'nl') {
 
 // JSON-instructie voor het close-flow-prompt: extra velden + voorbeeld.
 // Wordt naast de bestaande topics/agreements-uitleg toegevoegd.
-export function cueJsonInstruction(lang = 'nl') {
+export function cueJsonInstruction(lang = 'nl', maxDelta = CUE_DELTA_MAX) {
+  const max = clampCueDeltaMax(maxDelta);
+  const min = -max;
   if (lang === 'en') {
-    return `- "relationship_delta": integer in ${CUE_DELTA_MIN}..${CUE_DELTA_MAX} (default 0).
+    return `- "relationship_delta": integer in ${min}..${max} (default 0).
 - "relationship_reason": short sentence motivating the delta (empty when delta = 0).`;
   }
-  return `- "relationship_delta": geheel getal in ${CUE_DELTA_MIN}..${CUE_DELTA_MAX} (standaard 0).
+  return `- "relationship_delta": geheel getal in ${min}..${max} (standaard 0).
 - "relationship_reason": korte zin die de delta motiveert (leeg als delta = 0).`;
 }
 

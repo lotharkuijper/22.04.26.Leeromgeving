@@ -21,6 +21,7 @@ interface CourseRow {
   name: string;
   description: string | null;
   is_active: boolean;
+  cue_delta_max: number;
 }
 
 interface DeleteCounts {
@@ -53,6 +54,9 @@ export default function CoursesAdmin() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
+  // Task #173 — per-cursus cue-bereik (1..5). Houden we als string in de UI
+  // zodat tussentijds lege invoer mogelijk is; we parsen pas bij opslaan.
+  const [editCueMax, setEditCueMax] = useState('2');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -210,14 +214,34 @@ export default function CoursesAdmin() {
 
   async function loadCourses() {
     setLoadingList(true);
-    const { data, error: err } = await supabase
+    // Defensief: oude DB zonder cue_delta_max-kolom → fall back zonder dat veld.
+    let rows: CourseRow[] | null = null;
+    const primary = await supabase
       .from('courses')
-      .select('id, name, description, is_active')
+      .select('id, name, description, is_active, cue_delta_max')
       .order('name', { ascending: true });
-    if (err) {
-      console.error('[CoursesAdmin] load error:', err);
+    if (primary.error && (primary.error.code === '42703' || /cue_delta_max/i.test(primary.error.message || ''))) {
+      const fallback = await supabase
+        .from('courses')
+        .select('id, name, description, is_active')
+        .order('name', { ascending: true });
+      if (fallback.error) console.error('[CoursesAdmin] load error:', fallback.error);
+      rows = ((fallback.data as Array<Omit<CourseRow, 'cue_delta_max'>>) ?? []).map((c) => ({
+        ...c, cue_delta_max: 2,
+      }));
+    } else if (primary.error) {
+      console.error('[CoursesAdmin] load error:', primary.error);
+      rows = [];
+    } else {
+      rows = ((primary.data as Array<Partial<CourseRow>>) ?? []).map((c) => ({
+        id: c.id as string,
+        name: c.name as string,
+        description: (c.description as string) ?? null,
+        is_active: !!c.is_active,
+        cue_delta_max: Number.isFinite(Number(c.cue_delta_max)) ? Number(c.cue_delta_max) : 2,
+      }));
     }
-    setCourses((data as CourseRow[]) ?? []);
+    setCourses(rows);
     setLoadingList(false);
   }
 
@@ -317,6 +341,7 @@ export default function CoursesAdmin() {
     setEditingId(c.id);
     setEditName(c.name);
     setEditDesc(c.description ?? '');
+    setEditCueMax(String(c.cue_delta_max ?? 2));
     setEditError(null);
   }
 
@@ -324,6 +349,7 @@ export default function CoursesAdmin() {
     setEditingId(null);
     setEditName('');
     setEditDesc('');
+    setEditCueMax('2');
     setEditError(null);
   }
 
@@ -495,6 +521,11 @@ export default function CoursesAdmin() {
       setEditError('Naam mag niet leeg zijn.');
       return;
     }
+    const cueMaxNum = parseInt(editCueMax, 10);
+    if (!Number.isInteger(cueMaxNum) || cueMaxNum < 1 || cueMaxNum > 5) {
+      setEditError('Cue-bereik moet een geheel getal tussen 1 en 5 zijn.');
+      return;
+    }
     const token = session?.access_token;
     if (!token) {
       setEditError('Niet ingelogd.');
@@ -508,7 +539,7 @@ export default function CoursesAdmin() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ name: trimmedName, description: trimmedDesc }),
+        body: JSON.stringify({ name: trimmedName, description: trimmedDesc, cue_delta_max: cueMaxNum }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -655,6 +686,30 @@ export default function CoursesAdmin() {
                           data-testid={`input-edit-description-${c.id}`}
                         />
                       </div>
+                      <div>
+                        <label
+                          htmlFor={`input-edit-cue-max-${c.id}`}
+                          className="block text-xs font-medium text-gray-700 mb-1"
+                        >
+                          Maximale cue-uitslag (1–5)
+                        </label>
+                        <input
+                          id={`input-edit-cue-max-${c.id}`}
+                          type="number"
+                          min={1}
+                          max={5}
+                          step={1}
+                          value={editCueMax}
+                          onChange={(e) => setEditCueMax(e.target.value)}
+                          className="w-24 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          disabled={editSaving}
+                          data-testid={`input-edit-cue-max-${c.id}`}
+                        />
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          Bepaalt hoe ver een persona bij gespreksafronding mag uitslaan op de
+                          verstandhouding: ±waarde per gesprek. Default 2.
+                        </p>
+                      </div>
                       {editError && (
                         <div
                           className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2"
@@ -701,6 +756,12 @@ export default function CoursesAdmin() {
                           {c.description && (
                             <div className="text-xs text-gray-500 mt-0.5">{c.description}</div>
                           )}
+                          <div
+                            className="text-[11px] text-gray-500 mt-0.5"
+                            data-testid={`text-cue-max-${c.id}`}
+                          >
+                            Cue-bereik: ±{c.cue_delta_max ?? 2}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           <span
