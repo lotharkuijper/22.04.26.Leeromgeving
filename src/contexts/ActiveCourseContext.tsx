@@ -12,6 +12,10 @@ interface ActiveCourseContextType {
   activeCourseId: string | null;
   activeCourse: ActiveCourseInfo | null;
   activeCourseRagFolderIds: string[];
+  // Task #270: true zodra de actieve cursus voor deze gebruiker niet (meer)
+  // bereikbaar is (verborgen voor studenten of verwijderd → RLS geeft 0 rijen).
+  // De guard stuurt de student dan terug naar de kies-cursus-pagina.
+  activeCourseUnavailable: boolean;
   setActiveCourse: (courseId: string) => Promise<void>;
   refreshActiveCourse: () => Promise<void>;
   loading: boolean;
@@ -24,6 +28,7 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
   const [activeCourseId, setActiveCourseId] = useState<string | null>(null);
   const [activeCourse, setActiveCourseData] = useState<ActiveCourseInfo | null>(null);
   const [activeCourseRagFolderIds, setActiveCourseRagFolderIds] = useState<string[]>([]);
+  const [activeCourseUnavailable, setActiveCourseUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -34,6 +39,7 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
       setActiveCourseId(null);
       setActiveCourseData(null);
       setActiveCourseRagFolderIds([]);
+      setActiveCourseUnavailable(false);
       setLoading(false);
     }
   }, [authLoading, profile]);
@@ -57,6 +63,19 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
           name: courseRes.data.name,
           description: courseRes.data.description,
         });
+        setActiveCourseUnavailable(false);
+      } else if (courseRes.error?.code === "PGRST116") {
+        // PGRST116 = 0 (of >1) rijen bij .single(): de cursus is voor deze
+        // gebruiker niet zichtbaar (verborgen via RLS) of verwijderd. Alleen
+        // dán markeren we onbeschikbaar — netwerk-/andere fouten laten de
+        // bestaande actieve cursus staan, zonder ongewenste redirect.
+        console.warn("[ACTIVE COURSE] Active course unavailable (hidden or removed):", courseId);
+        setActiveCourseData(null);
+        setActiveCourseRagFolderIds([]);
+        setActiveCourseUnavailable(true);
+        return;
+      } else if (courseRes.error) {
+        console.error("[ACTIVE COURSE] Failed to load course:", courseRes.error);
       }
 
       const { data: sessionData } = await supabase.auth.getSession();
@@ -98,6 +117,7 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
     if (!user) return;
 
     setLoading(true);
+    setActiveCourseUnavailable(false);
 
     const { error } = await supabase
       .from("profiles")
@@ -121,6 +141,7 @@ export function ActiveCourseProvider({ children }: { children: ReactNode }) {
         activeCourseId,
         activeCourse,
         activeCourseRagFolderIds,
+        activeCourseUnavailable,
         setActiveCourse,
         refreshActiveCourse,
         loading,

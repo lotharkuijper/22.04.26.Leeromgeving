@@ -31,6 +31,7 @@ import {
   parseForceFlag,
 } from './memberRoleAuth.js';
 import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normalizeBadgeAwardMode } from './documentReview.js';
+import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse } from './courseAvailability.js';
 import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
 import {
   processPptxCore as processPptxCoreImpl,
@@ -339,6 +340,24 @@ async function detectConceptsCourseIdColumn() {
   } catch (e) {
     conceptsHasCourseId = false;
     console.warn('[API Server] Column detectie mislukt:', e.message);
+  }
+}
+
+// Task #270: courses.student_visible bepaalt of een cursus zichtbaar/bruikbaar
+// is voor studenten. Detecteer defensief of de migratie is toegepast, zodat een
+// oude DB blijft werken (dan gedragen alle cursussen zich als zichtbaar) en de
+// server-side toegangscheck (userHasCourseAccess) de kolom alleen raadpleegt
+// wanneer hij bestaat.
+let coursesHasStudentVisible = false;
+async function detectCoursesStudentVisibleColumn() {
+  if (!supabaseAdmin) return;
+  try {
+    const { error } = await supabaseAdmin.from('courses').select('student_visible').limit(1);
+    coursesHasStudentVisible = !error || !/student_visible/.test(error.message || '');
+    console.log(`[API Server] courses.student_visible: ${coursesHasStudentVisible ? 'beschikbaar' : 'niet gemigreerd — alle cursussen zichtbaar'}`);
+  } catch (e) {
+    coursesHasStudentVisible = false;
+    console.warn('[API Server] courses.student_visible detectie mislukt:', e.message);
   }
 }
 
@@ -3042,6 +3061,50 @@ app.patch('/api/admin/courses/:id', async (req, res) => {
     return res.status(500).json({ error: err?.message || 'Internal server error' });
   } finally {
     client.release();
+  }
+});
+
+// PATCH /api/courses/:id/availability — zet een cursus op beschikbaar/niet
+// beschikbaar voor studenten (Task #270). Anders dan PATCH /api/admin/courses
+// (admin-only, transactioneel over meerdere velden) mag hier óók de docent van
+// déze cursus de zichtbaarheid wijzigen. We gaten met requireAuthUser + de pure
+// authorizeAvailabilityChange-helper (admin OF per-cursus docent). De admin-
+// PATCH blijft expres ongemoeid zodat die admin-only contract houdt.
+app.patch('/api/courses/:id/availability', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const courseId = req.params.id;
+  if (!courseId) return res.status(400).json({ error: 'Cursus-ID ontbreekt' });
+
+  const parsed = parseStudentVisible(req.body);
+  if (!parsed.ok) return res.status(parsed.status).json(parsed.body);
+
+  const isAdmin = auth.profile?.role === 'admin' || auth.profile?.email === SUPERUSER_EMAIL;
+  const teacher = isAdmin ? false : await isCourseTeacher(auth.user.id, courseId);
+  const decision = authorizeAvailabilityChange({ isAdmin, isCourseTeacher: teacher });
+  if (!decision.allowed) return res.status(decision.status).json(decision.body);
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('courses')
+      .update({ student_visible: parsed.value })
+      .eq('id', courseId)
+      .select('id, name, is_active, student_visible')
+      .maybeSingle();
+    if (error) {
+      // Defensief: oude DB zonder student_visible-kolom → duidelijke 503.
+      if (error.code === '42703' || /student_visible/.test(error.message || '')) {
+        return res.status(503).json({ error: 'student_visible-kolom ontbreekt in deze database — pas de migratie eerst toe.' });
+      }
+      console.error('[courses/availability PATCH] update error:', error);
+      return res.status(500).json({ error: error.message || 'Bijwerken mislukt' });
+    }
+    if (!data) return res.status(404).json({ error: 'Cursus niet gevonden' });
+    console.log(`[courses/availability] Cursus ${courseId} student_visible → ${parsed.value}`);
+    return res.json({ course: data });
+  } catch (err) {
+    console.error('[courses/availability PATCH] Unexpected error:', err);
+    return res.status(500).json({ error: err?.message || 'Internal server error' });
   }
 });
 
@@ -6509,7 +6572,30 @@ async function userHasCourseAccess(user, profile, courseId) {
       .eq('user_id', user.id)
       .eq('course_id', courseId)
       .maybeSingle();
-    return !!membership;
+    if (!membership) return false;
+    // Task #270: een verborgen cursus (student_visible=false) blijft enkel
+    // toegankelijk voor de docent(en) van die cursus. Reeds-ingeschreven
+    // studenten worden hier server-side geweerd, zodat "verborgen" niet louter
+    // cosmetisch is (RLS dekt de directe client-queries, dit dekt de API).
+    // Defensief: alleen checken als de kolom bestaat; ontbreekt hij, dan
+    // gedraagt elke cursus zich als zichtbaar.
+    if (!coursesHasStudentVisible) return true;
+    const { data: course, error: courseErr } = await supabaseAdmin
+      .from('courses')
+      .select('student_visible')
+      .eq('id', courseId)
+      .maybeSingle();
+    // Bij een onverwachte leesfout (geen ontbrekende kolom) fail-closed: geen
+    // toegang. Een 42703 zou betekenen dat de kolom toch ontbreekt → zichtbaar.
+    if (courseErr) {
+      if (courseErr.code === '42703' || /student_visible/.test(courseErr.message || '')) return true;
+      return false;
+    }
+    if (!course) return false;
+    const studentVisible = course.student_visible !== false;
+    // Docent-check alleen uitvoeren wanneer nodig (cursus verborgen).
+    const teacher = studentVisible ? false : await isCourseTeacher(user.id, courseId);
+    return memberCanAccessCourse({ studentVisible, isCourseTeacher: teacher });
   } catch {
     return false;
   }
@@ -12342,6 +12428,7 @@ if (process.env.NODE_ENV !== 'test') {
       console.warn('[API Server] Azure-embeddings NIET geconfigureerd (AZURE_OPENAI_EMBEDDING_DEPLOYMENT ontbreekt) — RAG/ingestie/concept-extractie geven 503 tot dit is ingesteld. Géén terugval naar publieke OpenAI.');
     }
     detectConceptsCourseIdColumn();
+    detectCoursesStudentVisibleColumn();
     detectQuizAttemptsSchema();
     detectQuizSourcesSchema();
     detectConceptEvidenceSchema();

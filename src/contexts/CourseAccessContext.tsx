@@ -59,15 +59,26 @@ export function CourseAccessProvider({ children }: { children: ReactNode }) {
       }
 
       if (memberData && memberData.length > 0) {
-        const mapped: Course[] = memberData.map((row: any) => ({
-          role: row.role,
-          id: row.courses.id,
-          name: row.courses.name,
-          folder_name: row.courses.folder_name,
-        }));
-        setCourses(mapped);
-        setLoadingCourses(false);
-        return;
+        // Task #270: een niet-beschikbare cursus (student_visible=false) wordt
+        // door de RLS-policy weggefilterd uit de embedded `courses`-join, óók
+        // voor een student die er nog lid van is. Dan is `row.courses` null.
+        // Filter die rijen weg: zo verdwijnt de verborgen cursus uit de lijst
+        // en voorkomen we een crash op `row.courses.id`. Docenten van de cursus
+        // houden de join (RLS-uitzondering) en blijven hem dus wél zien.
+        const visibleMembers = memberData.filter((row: any) => row.courses != null);
+        if (visibleMembers.length > 0) {
+          const mapped: Course[] = visibleMembers.map((row: any) => ({
+            role: row.role,
+            id: row.courses.id,
+            name: row.courses.name,
+            folder_name: row.courses.folder_name,
+          }));
+          setCourses(mapped);
+          setLoadingCourses(false);
+          return;
+        }
+        // Alle lidmaatschappen wijzen naar verborgen cursussen → val door naar
+        // de student-fallback (toont overige beschikbare cursussen).
       }
 
       const isStudent = !profile || profile.role === "student";

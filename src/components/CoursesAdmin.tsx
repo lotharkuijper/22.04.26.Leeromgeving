@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2, Users, FolderTree, FolderOpen, UserX, Flame } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, AlertTriangle, BookOpen, Pencil, X, Check, Power, Trash2, Users, FolderTree, FolderOpen, UserX, Flame, Eye, EyeOff } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -22,6 +22,8 @@ interface CourseRow {
   description: string | null;
   is_active: boolean;
   cue_delta_max: number;
+  // Task #270: zichtbaar/selecteerbaar voor studenten ja/nee.
+  student_visible: boolean;
 }
 
 interface DeleteCounts {
@@ -214,20 +216,23 @@ export default function CoursesAdmin() {
 
   async function loadCourses() {
     setLoadingList(true);
-    // Defensief: oude DB zonder cue_delta_max-kolom → fall back zonder dat veld.
+    // Defensief: oude DB zonder cue_delta_max- of student_visible-kolom →
+    // fall back zonder die velden (Task #173 + Task #270).
     let rows: CourseRow[] | null = null;
     const primary = await supabase
       .from('courses')
-      .select('id, name, description, is_active, cue_delta_max')
+      .select('id, name, description, is_active, cue_delta_max, student_visible')
       .order('name', { ascending: true });
-    if (primary.error && (primary.error.code === '42703' || /cue_delta_max/i.test(primary.error.message || ''))) {
+    const missingNewColumn = primary.error
+      && (primary.error.code === '42703' || /cue_delta_max|student_visible/i.test(primary.error.message || ''));
+    if (missingNewColumn) {
       const fallback = await supabase
         .from('courses')
         .select('id, name, description, is_active')
         .order('name', { ascending: true });
       if (fallback.error) console.error('[CoursesAdmin] load error:', fallback.error);
-      rows = ((fallback.data as Array<Omit<CourseRow, 'cue_delta_max'>>) ?? []).map((c) => ({
-        ...c, cue_delta_max: 2,
+      rows = ((fallback.data as Array<Omit<CourseRow, 'cue_delta_max' | 'student_visible'>>) ?? []).map((c) => ({
+        ...c, cue_delta_max: 2, student_visible: true,
       }));
     } else if (primary.error) {
       console.error('[CoursesAdmin] load error:', primary.error);
@@ -239,6 +244,8 @@ export default function CoursesAdmin() {
         description: (c.description as string) ?? null,
         is_active: !!c.is_active,
         cue_delta_max: Number.isFinite(Number(c.cue_delta_max)) ? Number(c.cue_delta_max) : 2,
+        // Ontbrekende/onbekende waarde → behandel als zichtbaar (default true).
+        student_visible: c.student_visible !== false,
       }));
     }
     setCourses(rows);
@@ -369,6 +376,40 @@ export default function CoursesAdmin() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ is_active: !c.is_active }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRowError(c.id, json.error || `Wijzigen mislukt (${res.status})`);
+        return;
+      }
+      await Promise.all([loadCourses(), refreshCourses()]);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Onbekende fout';
+      setRowError(c.id, msg);
+    } finally {
+      setRowBusyId(null);
+    }
+  }
+
+  // Task #270: cursus zichtbaar/verborgen voor studenten zetten.
+  // Autorisatie wordt server-side afgedwongen (docent enkel eigen cursus, admin alles);
+  // de UI toont de knop alleen aan admins en docenten van de cursus.
+  async function toggleAvailability(c: CourseRow) {
+    setRowError(c.id, null);
+    const token = session?.access_token;
+    if (!token) {
+      setRowError(c.id, 'Niet ingelogd.');
+      return;
+    }
+    setRowBusyId(c.id);
+    try {
+      const res = await fetch(`/api/courses/${c.id}/availability`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ student_visible: !c.student_visible }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -774,6 +815,21 @@ export default function CoursesAdmin() {
                           >
                             {c.is_active ? 'Actief' : 'Inactief'}
                           </span>
+                          <span
+                            className={
+                              c.student_visible
+                                ? 'text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-800'
+                                : 'text-xs font-medium px-2 py-0.5 rounded-full bg-orange-100 text-orange-800'
+                            }
+                            title={
+                              c.student_visible
+                                ? 'Studenten kunnen deze cursus zien en selecteren'
+                                : 'Verborgen voor studenten; alleen docent van de cursus en admins zien hem'
+                            }
+                            data-testid={`status-course-visible-${c.id}`}
+                          >
+                            {c.student_visible ? 'Beschikbaar' : 'Niet beschikbaar'}
+                          </span>
                           <button
                             type="button"
                             onClick={() => startEdit(c)}
@@ -804,6 +860,33 @@ export default function CoursesAdmin() {
                             )}
                             {c.is_active ? 'Deactiveren' : 'Activeren'}
                           </button>
+                          {(isAdmin || myTeacherCourseIds.has(c.id)) && (
+                            <button
+                              type="button"
+                              onClick={() => toggleAvailability(c)}
+                              disabled={rowBusyId === c.id}
+                              className={
+                                c.student_visible
+                                  ? 'inline-flex items-center gap-1 text-xs font-medium text-orange-700 hover:text-orange-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-orange-50 transition-colors'
+                                  : 'inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-900 disabled:text-gray-400 px-2 py-1 rounded hover:bg-green-50 transition-colors'
+                              }
+                              title={
+                                c.student_visible
+                                  ? 'Verberg deze cursus voor studenten'
+                                  : 'Maak deze cursus weer beschikbaar voor studenten'
+                              }
+                              data-testid={`button-toggle-availability-${c.id}`}
+                            >
+                              {rowBusyId === c.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : c.student_visible ? (
+                                <EyeOff className="w-3.5 h-3.5" />
+                              ) : (
+                                <Eye className="w-3.5 h-3.5" />
+                              )}
+                              {c.student_visible ? 'Niet beschikbaar maken' : 'Beschikbaar maken'}
+                            </button>
+                          )}
                           {(isAdmin || myTeacherCourseIds.has(c.id)) && (
                             <button
                               type="button"

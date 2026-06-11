@@ -1,8 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Component, Suspense, lazy, type ReactNode } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Component, Suspense, lazy, useEffect, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { CourseAccessProvider } from './contexts/CourseAccessContext';
-import { ActiveCourseProvider } from './contexts/ActiveCourseContext';
+import { ActiveCourseProvider, useActiveCourse } from './contexts/ActiveCourseContext';
 import { Layout } from './components/Layout';
 import { LoadingSpinner } from './components/LoadingSpinner';
 import { LanguageProvider } from './i18n';
@@ -76,6 +76,22 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <Layout>{children}</Layout>;
 }
 
+// Task #270: stuurt een student wiens actieve cursus niet (meer) beschikbaar is
+// netjes terug naar de kies-cursus-pagina. Rendert niets; alleen het neveneffect.
+function ActiveCourseRedirectGuard() {
+  const { activeCourseUnavailable } = useActiveCourse();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (activeCourseUnavailable && location.pathname !== '/choose-course') {
+      navigate('/choose-course', { replace: true, state: { courseUnavailable: true } });
+    }
+  }, [activeCourseUnavailable, location.pathname, navigate]);
+
+  return null;
+}
+
 function AppRoutes() {
   const { user, loading } = useAuth();
 
@@ -84,6 +100,7 @@ function AppRoutes() {
   return (
     <LazyChunkErrorBoundary>
     <Suspense fallback={<LoadingSpinner />}>
+    <ActiveCourseRedirectGuard />
     <Routes>
       <Route
         path="/login"

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useLanguage } from "../i18n";
 import { useAuth } from "../contexts/AuthContext";
 import { useActiveCourse } from "../contexts/ActiveCourseContext";
@@ -8,8 +8,13 @@ import { supabase } from "../lib/supabase";
 export default function ChooseCoursePage() {
   const { t, lang } = useLanguage();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, loading: authLoading } = useAuth();
   const { setActiveCourse, loading: activeLoading } = useActiveCourse();
+
+  // Task #270: gezet door de ActiveCourseRedirectGuard wanneer de actieve cursus
+  // van de student niet meer beschikbaar is.
+  const redirectedUnavailable = (location.state as { courseUnavailable?: boolean } | null)?.courseUnavailable === true;
 
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,9 +55,26 @@ export default function ChooseCoursePage() {
     return <div style={{ padding: "2rem" }}>{t('common.loading')}</div>;
   }
 
+  const unavailableNotice = redirectedUnavailable ? (
+    <div
+      data-testid="text-course-unavailable-notice"
+      style={{
+        marginBottom: "1rem",
+        padding: "0.75rem 1rem",
+        borderRadius: "8px",
+        background: "#fff7ed",
+        border: "1px solid #fed7aa",
+        color: "#9a3412",
+      }}
+    >
+      {t('chooseCourse.unavailableRedirect')}
+    </div>
+  ) : null;
+
   if (courses.length === 0) {
     return (
       <div style={{ padding: "2rem" }}>
+        {unavailableNotice}
         {t('chooseCourse.noCourses')}
       </div>
     );
@@ -60,6 +82,7 @@ export default function ChooseCoursePage() {
 
   return (
     <div style={{ padding: "2rem", maxWidth: "600px", margin: "0 auto" }}>
+      {unavailableNotice}
       <h1 style={{ marginBottom: "1rem" }}>{t('chooseCourse.title')}</h1>
       <p style={{ marginBottom: "2rem", opacity: 0.8 }}>
         {t('chooseCourse.subtitle')}
