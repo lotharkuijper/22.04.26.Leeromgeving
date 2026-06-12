@@ -55,7 +55,7 @@ function FeedbackBlock({
   lang,
 }: {
   feedback: string;
-  retrievedSources: Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number; fromEvidence?: boolean }>;
+  retrievedSources: Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number; fromEvidence?: boolean; snippet?: string }>;
   retrievedStats: { threshold: number; maxSimilarity: number; candidatesConsidered: number; searchPerformed: boolean } | null;
   viewerRole?: string;
   t: (k: string) => string;
@@ -125,6 +125,7 @@ function FeedbackBlock({
         slideWord={lang === 'en' ? 'slide' : 'dia'}
         evidenceLabel={t('explain.sources.evidenceBadge')}
         evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
+        snippetToggleLabel={t('explain.sources.evidenceSnippetToggle')}
       />
       {retrievedStats && (
         <div className="mt-4">
@@ -155,7 +156,7 @@ export function ExplainPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showAllConcepts, setShowAllConcepts] = useState(false);
   const [profileTimeout, setProfileTimeout] = useState(false);
-  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number; fromEvidence?: boolean }>>([]);
+  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number; fromEvidence?: boolean; snippet?: string }>>([]);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [retrievedStats, setRetrievedStats] = useState<{
     threshold: number;
@@ -430,6 +431,17 @@ export function ExplainPage() {
       const evidenceDocIds = new Set(
         storedEvidence.map(e => e.documentId).filter((id): id is string => !!id)
       );
+      // Per bron-document het bij de extractie vastgelegde snippet, zodat de
+      // student het exacte fragment kan inzien. Bij meerdere fragmenten per
+      // document winnt het hoogst-scorende.
+      const evidenceSnippetByDoc = new Map<string, { snippet: string; similarity: number }>();
+      for (const e of storedEvidence) {
+        if (!e.documentId || !e.content) continue;
+        const cur = evidenceSnippetByDoc.get(e.documentId);
+        if (!cur || (e.similarity || 0) > cur.similarity) {
+          evidenceSnippetByDoc.set(e.documentId, { snippet: e.content, similarity: e.similarity || 0 });
+        }
+      }
       const mergedMap = new Map<string, typeof ragResult.chunks[number]>();
       for (const ch of [...ragResult.chunks, ...storedEvidence]) {
         const key = ch.id || `${ch.documentId || ''}:${(ch.content || '').slice(0, 80)}`;
@@ -448,11 +460,16 @@ export function ExplainPage() {
         searchPerformed: ragResult.searchPerformed,
       });
 
-      const allSources = chunks.map(chunk => ({
-        ...chunkToDisplaySource(chunk),
-        href: ragDocumentDownloadUrl(chunk.documentId),
-        fromEvidence: !!(chunk.documentId && evidenceDocIds.has(chunk.documentId)),
-      }));
+      const allSources = chunks.map(chunk => {
+        const fromEvidence = !!(chunk.documentId && evidenceDocIds.has(chunk.documentId));
+        const snippet = chunk.documentId ? evidenceSnippetByDoc.get(chunk.documentId)?.snippet : undefined;
+        return {
+          ...chunkToDisplaySource(chunk),
+          href: ragDocumentDownloadUrl(chunk.documentId),
+          fromEvidence,
+          snippet: fromEvidence ? snippet : undefined,
+        };
+      });
       // Studenten zien per bron-document maximaal de top 3 (de meest relevante
       // hoofdstukken). Alle chunks gaan nog wel mee als context naar het LLM.
       const displaySources = dedupeSourcesByDocument(allSources, 3);
@@ -977,6 +994,7 @@ export function ExplainPage() {
                         slideWord={lang === 'en' ? 'slide' : 'dia'}
                         evidenceLabel={t('explain.sources.evidenceBadge')}
                         evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
+                        snippetToggleLabel={t('explain.sources.evidenceSnippetToggle')}
                       />
                     </div>
                   )}

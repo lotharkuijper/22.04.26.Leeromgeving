@@ -12,6 +12,8 @@ export interface SourceItem {
   slideEnd?: number;
   /** True wanneer deze bron bij de begripsextractie als bewijs is vastgelegd (concept_evidence). */
   fromEvidence?: boolean;
+  /** Het bij de extractie vastgelegde bronfragment (concept_evidence.snippet). */
+  snippet?: string;
 }
 
 // "dia 4" of "dia 4–6" voor PowerPoint-bronnen; lege string als geen dia bekend is.
@@ -45,6 +47,8 @@ interface SourceListProps {
   evidenceLabel?: string;
   /** Tooltip (title-attribuut) voor de evidence-badge. */
   evidenceTitle?: string;
+  /** Label op de uitklap-knop voor het vastgelegde bronfragment (snippet). Leeg = geen uitklap. */
+  snippetToggleLabel?: string;
 }
 
 function dedupeByDocument(items: SourceItem[]): SourceItem[] {
@@ -74,6 +78,7 @@ export function SourceList({
   slideWord = 'dia',
   evidenceLabel,
   evidenceTitle,
+  snippetToggleLabel,
 }: SourceListProps) {
   const [internalOpen, setInternalOpen] = useState(!defaultCollapsed);
   const open = openProp ?? internalOpen;
@@ -134,31 +139,50 @@ export function SourceList({
                 )}
               </>
             );
+            const showSnippet = !!(source.fromEvidence && source.snippet && snippetToggleLabel);
             return (
               <li
                 key={`${source.title}-${index}`}
-                className="text-sm text-gray-700 flex items-start gap-1"
+                className="text-sm text-gray-700"
                 data-testid={`source-item-${index}`}
                 id={`source-${idNs}-${num}`}
               >
-                {(source.href || source.documentId) ? (
-                  <a
-                    href={source.href || '#'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hover:underline"
-                    data-testid={`link-source-${num}`}
-                    onClick={(e) => {
-                      if (onOpenSource) {
-                        e.preventDefault();
-                        onOpenSource(source);
-                      }
-                    }}
-                  >
-                    {inner}
-                  </a>
-                ) : (
-                  <span>{inner}</span>
+                <div className="flex items-start gap-1">
+                  {(source.href || source.documentId) ? (
+                    <a
+                      href={source.href || '#'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hover:underline"
+                      data-testid={`link-source-${num}`}
+                      onClick={(e) => {
+                        if (onOpenSource) {
+                          e.preventDefault();
+                          onOpenSource(source);
+                        }
+                      }}
+                    >
+                      {inner}
+                    </a>
+                  ) : (
+                    <span>{inner}</span>
+                  )}
+                </div>
+                {showSnippet && (
+                  <details className="ml-6 mt-1" data-testid={`details-snippet-${num}`}>
+                    <summary
+                      className="cursor-pointer select-none text-xs font-medium text-emerald-700 hover:underline"
+                      data-testid={`btn-toggle-snippet-${num}`}
+                    >
+                      {snippetToggleLabel}
+                    </summary>
+                    <blockquote
+                      className="mt-1 whitespace-pre-wrap border-l-2 border-emerald-300 pl-3 text-xs italic text-gray-600"
+                      data-testid={`text-snippet-${num}`}
+                    >
+                      {source.snippet}
+                    </blockquote>
+                  </details>
                 )}
               </li>
             );
