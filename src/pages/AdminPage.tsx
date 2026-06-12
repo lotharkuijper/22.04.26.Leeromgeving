@@ -394,6 +394,16 @@ export function AdminPage() {
     if (activeTab === 'rag_settings') loadRagSettingsAdmin();
   }, [ragSelectedCourseId]);
 
+  // Globale RAG-defaults zijn admin/superuser-only. Docenten beheren alleen
+  // hun eigen cursus-overrides, dus selecteer voor hen automatisch de eerste
+  // beschikbare cursus i.p.v. de (verborgen) globale standaard.
+  useEffect(() => {
+    if (activeTab !== 'rag_settings') return;
+    if (isAdmin) return;
+    if (ragSelectedCourseId) return;
+    if (allCourses.length > 0) setRagSelectedCourseId(allCourses[0].id);
+  }, [activeTab, isAdmin, ragSelectedCourseId, allCourses]);
+
   const loadUsers = async () => {
     const { data, error } = await supabase
       .from('profiles')
@@ -2035,7 +2045,7 @@ const tabGroups = [
             <div className="space-y-6">
               <p className="text-gray-600">{t('admin.prompts.subtitle')}</p>
 
-              {promptsMigration && !promptsMigration.hasSection && (
+              {isAdmin && promptsMigration && !promptsMigration.hasSection && (
                 <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl space-y-2">
                   <p className="text-sm font-semibold text-yellow-900">{t('admin.prompts.migrationTitle')}</p>
                   <p className="text-sm text-yellow-800">{t('admin.prompts.migrationDesc')}</p>
@@ -2106,7 +2116,8 @@ const tabGroups = [
                 </div>
               ) : (
                 <div className="space-y-8">
-                  {/* ── Chat ── */}
+                  {/* ── Chat (alleen admin: globale hoofdchat-prompt) ── */}
+                  {isAdmin && (
                   <div>
                     <div className="flex items-center gap-2 mb-3">
                       <MessageSquareText className="w-5 h-5 text-blue-600" />
@@ -2138,6 +2149,7 @@ const tabGroups = [
                       })()}
                     </div>
                   </div>
+                  )}
 
                   {/* ── Ik Leg Uit ── */}
                   <div>
@@ -2146,6 +2158,7 @@ const tabGroups = [
                       <h3 className="text-base font-bold text-gray-900">{t('admin.prompts.explainTitle')}</h3>
                       <span className="text-xs text-gray-400">— {t('admin.prompts.explainDesc')}</span>
                     </div>
+                    {isAdmin && (
                     <div className="space-y-2">
                       {(() => {
                         const explainPool = prompts.filter(p => p.section === 'explain');
@@ -2170,6 +2183,7 @@ const tabGroups = [
                         );
                       })()}
                     </div>
+                    )}
 
                     {/* ── Per-cursus uitleg-prompt (Task #28) ── */}
                     <div className="mt-4 p-4 border border-purple-200 bg-white rounded-xl space-y-3">
@@ -2252,7 +2266,8 @@ const tabGroups = [
                     </div>
                   </div>
 
-                  {/* ── Projecten ── */}
+                  {/* ── Projecten (alleen admin: globale project-agent-prompts) ── */}
+                  {isAdmin && (
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
@@ -2369,6 +2384,7 @@ const tabGroups = [
                       )}
                     </div>
                   </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2397,7 +2413,7 @@ const tabGroups = [
                     className="appearance-none pl-3 pr-8 py-2 text-sm bg-white border border-blue-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 text-gray-800 min-w-[220px]"
                     data-testid="select-rag-course"
                   >
-                    <option value="">{t('admin.ragSettings.globalDefault')}</option>
+                    {isAdmin && <option value="">{t('admin.ragSettings.globalDefault')}</option>}
                     {allCourses.map(course => (
                       <option key={course.id} value={course.id}>
                         {coursesWithOverrides.has(course.id) ? '⚙️ ' : '○ '}{course.name}

@@ -10,6 +10,7 @@ import {
 } from '../services/sharestats-integration.service';
 import { getRepositoryTopics, setItembankRepo } from '../services/github-parser.service';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
+import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 
 interface ImportResult {
@@ -78,6 +79,7 @@ const SKIP_REASON_LABELS: Record<string, string> = {
 
 export function ShareStatsImportPanel() {
   const { activeCourseId, activeCourse } = useActiveCourse();
+  const { isAdmin } = useAuth();
   const [autoLinkResult, setAutoLinkResult] = useState<AutoLinkResult | null>(null);
   const [autoLinking, setAutoLinking] = useState(false);
   const [repoUrl, setRepoUrl] = useState<string>('https://github.com/ShareStats/itembank');
@@ -368,28 +370,39 @@ export function ShareStatsImportPanel() {
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
             placeholder="https://github.com/ShareStats/itembank"
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono disabled:bg-gray-50 disabled:text-gray-500"
             data-testid="input-repo-url"
+            readOnly={!isAdmin}
+            disabled={!isAdmin}
           />
-          <button
-            onClick={handleSaveRepoUrl}
-            disabled={savingConfig || repoUrl === savedRepoUrl}
-            className="px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2"
-            data-testid="button-save-repo-url"
-          >
-            <Save className="w-4 h-4" />
-            Opslaan
-          </button>
-          <button
-            onClick={handleSyncAll}
-            disabled={importing || !savedRepoUrl}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
-            data-testid="button-sync-all"
-          >
-            <RefreshCw className={`w-4 h-4 ${importing ? 'animate-spin' : ''}`} />
-            Volledige sync
-          </button>
+          {isAdmin && (
+            <button
+              onClick={handleSaveRepoUrl}
+              disabled={savingConfig || repoUrl === savedRepoUrl}
+              className="px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2"
+              data-testid="button-save-repo-url"
+            >
+              <Save className="w-4 h-4" />
+              Opslaan
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              onClick={handleSyncAll}
+              disabled={importing || !savedRepoUrl}
+              className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
+              data-testid="button-sync-all"
+            >
+              <RefreshCw className={`w-4 h-4 ${importing ? 'animate-spin' : ''}`} />
+              Volledige sync
+            </button>
+          )}
         </div>
+        {!isAdmin && (
+          <p className="text-xs text-gray-500" data-testid="text-repo-admin-only">
+            Alleen een beheerder kan de ItemBank-repository wijzigen of een volledige synchronisatie starten.
+          </p>
+        )}
         {lastSyncedAt && (
           <p className="text-xs text-gray-500" data-testid="text-last-synced">
             Laatst gesynchroniseerd: {new Date(lastSyncedAt).toLocaleString('nl-NL')}
