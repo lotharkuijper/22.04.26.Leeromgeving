@@ -60,6 +60,7 @@ import {
 } from './webImport.js';
 import { promises as dnsPromises } from 'node:dns';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from './openaiSampling.js';
+import { computeChatConfig } from './chatConfig.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
@@ -146,16 +147,19 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 // (leap-openai-vu). Routing gebeurt via de deployment in de URL; authenticatie
 // via de 'api-key'-header (niet Bearer). Embeddings lopen óók via Azure — zie de
 // embedding-config hieronder (text-embedding-3-small, géén publieke OpenAI).
-const AZURE_OPENAI_ENDPOINT = (process.env.AZURE_OPENAI_ENDPOINT || '').replace(/\/+$/, '');
-const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY || '';
-const AZURE_OPENAI_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-10-21';
-const AZURE_OPENAI_DEPLOYMENT = process.env.AZURE_OPENAI_DEPLOYMENT || process.env.OPENAI_MODEL || 'gpt-5.5';
-const AZURE_CHAT_READY = Boolean(AZURE_OPENAI_ENDPOINT && AZURE_OPENAI_API_KEY);
-// Géén OpenAI-fallback voor chat: als Azure niet is geconfigureerd blijft de URL
-// leeg en falen chat-calls expliciet (de endpoints gaten bovendien op AZURE_CHAT_READY).
-const OPENAI_CHAT_URL = AZURE_CHAT_READY
-  ? `${AZURE_OPENAI_ENDPOINT}/openai/deployments/${encodeURIComponent(AZURE_OPENAI_DEPLOYMENT)}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION}`
-  : '';
+// De chat-configuratie (URL + guard) wordt door een pure helper berekend zodat
+// hij in tests verifieerbaar is zonder de Express-app te starten. Géén
+// OpenAI-fallback voor chat: als Azure niet is geconfigureerd blijft de URL
+// leeg en falen chat-calls expliciet (de endpoints gaten bovendien op
+// AZURE_CHAT_READY). Zie server/chatConfig.js + chatConfig.test.js (Task #249).
+const {
+  endpoint: AZURE_OPENAI_ENDPOINT,
+  apiKey: AZURE_OPENAI_API_KEY,
+  apiVersion: AZURE_OPENAI_API_VERSION,
+  deployment: AZURE_OPENAI_DEPLOYMENT,
+  azureChatReady: AZURE_CHAT_READY,
+  chatUrl: OPENAI_CHAT_URL,
+} = computeChatConfig(process.env);
 const LLM_NOT_CONFIGURED_MSG = 'Azure OpenAI is niet geconfigureerd op de server (AZURE_OPENAI_ENDPOINT en AZURE_OPENAI_API_KEY ontbreken).';
 console.log(`[API Server] Azure chat ${AZURE_CHAT_READY ? 'gereed' : 'NIET geconfigureerd'} — deployment=${AZURE_OPENAI_DEPLOYMENT}, api-version=${AZURE_OPENAI_API_VERSION}`);
 // Auth-headers voor een chat-call. Azure verwacht de 'api-key'-header.
