@@ -3,6 +3,7 @@ import {
   authorizeAvailabilityChange,
   parseStudentVisible,
   memberCanAccessCourse,
+  canAccessCourseContent,
 } from '../courseAvailability.js';
 
 describe('authorizeAvailabilityChange', () => {
@@ -55,5 +56,38 @@ describe('memberCanAccessCourse', () => {
   });
   it('laat de docent van de cursus wél toe in een verborgen cursus', () => {
     expect(memberCanAccessCourse({ studentVisible: false, isCourseTeacher: true })).toBe(true);
+  });
+});
+
+describe('canAccessCourseContent', () => {
+  const base = { isAdmin: false, isCourseTeacher: false, isMember: false, isActive: true, studentVisible: true };
+
+  it('laat admin/superuser altijd toe (ook verborgen + inactief)', () => {
+    expect(canAccessCourseContent({ ...base, isAdmin: true, studentVisible: false, isActive: false })).toBe(true);
+  });
+
+  it('opent een actieve, zichtbare cursus voor élke student (géén membership nodig)', () => {
+    expect(canAccessCourseContent({ ...base })).toBe(true);
+  });
+
+  it('weert een niet-lid uit een verborgen cursus', () => {
+    expect(canAccessCourseContent({ ...base, studentVisible: false })).toBe(false);
+  });
+
+  it('laat de docent wél toe in een verborgen cursus (ook als zij geen lid-rij zou hebben)', () => {
+    expect(canAccessCourseContent({ ...base, studentVisible: false, isCourseTeacher: true })).toBe(true);
+  });
+
+  it('weert een ingeschreven student uit een verborgen cursus (Task #270 blijft gelden)', () => {
+    expect(canAccessCourseContent({ ...base, studentVisible: false, isMember: true })).toBe(false);
+  });
+
+  it('houdt een inactieve maar zichtbare cursus open voor leden en docenten', () => {
+    expect(canAccessCourseContent({ ...base, isActive: false, isMember: true })).toBe(true);
+    expect(canAccessCourseContent({ ...base, isActive: false, isCourseTeacher: true })).toBe(true);
+  });
+
+  it('weert een niet-lid uit een inactieve (gearchiveerde) cursus', () => {
+    expect(canAccessCourseContent({ ...base, isActive: false })).toBe(false);
   });
 });

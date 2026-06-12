@@ -31,7 +31,7 @@ import {
   parseForceFlag,
 } from './memberRoleAuth.js';
 import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normalizeBadgeAwardMode } from './documentReview.js';
-import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse } from './courseAvailability.js';
+import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse, canAccessCourseContent } from './courseAvailability.js';
 import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
 import {
   extractEmails,
@@ -6694,47 +6694,73 @@ async function isStaffAnywhere(user, profile) {
   return userIsTeacherAnywhere(user.id);
 }
 
-// Controleer of een gebruiker toegang heeft tot een specifieke cursus.
-// Admins/superuser hebben altijd toegang; anderen moeten lid zijn via
-// course_members. Geen cursus = geen toegang.
+// Controleer of een gebruiker toegang heeft tot de inhoud van een cursus.
+// Centrale regel via canAccessCourseContent: admins altijd; een actieve,
+// zichtbare cursus is open voor élke ingelogde student (géén course_members
+// nodig — spiegelt de courses-RLS); verborgen cursussen alléén voor de docent;
+// inactieve maar zichtbare cursussen voor leden/docenten. Geen cursus = geen toegang.
 async function userHasCourseAccess(user, profile, courseId) {
   if (!courseId || !user) return false;
   const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
   if (isAdmin) return true;
   try {
-    const { data: membership } = await supabaseAdmin
-      .from('course_members')
-      .select('id')
-      .eq('user_id', user.id)
-      .eq('course_id', courseId)
-      .maybeSingle();
-    if (!membership) return false;
-    // Task #270: een verborgen cursus (student_visible=false) blijft enkel
-    // toegankelijk voor de docent(en) van die cursus. Reeds-ingeschreven
-    // studenten worden hier server-side geweerd, zodat "verborgen" niet louter
-    // cosmetisch is (RLS dekt de directe client-queries, dit dekt de API).
-    // Defensief: alleen checken als de kolom bestaat; ontbreekt hij, dan
-    // gedraagt elke cursus zich als zichtbaar.
-    if (!coursesHasStudentVisible) return true;
+    // Laad de cursus-status eerst. Een actieve, zichtbare cursus is voor élke
+    // student toegankelijk (spiegelt de courses-RLS van Task #270), zodat
+    // zelf-geregistreerde studenten (Task #272) zonder course_members-rij de
+    // inhoud zien. Membership wordt alléén opgevraagd op het inactieve pad.
+    const courseCols = coursesHasStudentVisible ? 'is_active, student_visible' : 'is_active';
     const { data: course, error: courseErr } = await supabaseAdmin
       .from('courses')
-      .select('student_visible')
+      .select(courseCols)
       .eq('id', courseId)
       .maybeSingle();
-    // Bij een onverwachte leesfout (geen ontbrekende kolom) fail-closed: geen
-    // toegang. Een 42703 zou betekenen dat de kolom toch ontbreekt → zichtbaar.
     if (courseErr) {
-      if (courseErr.code === '42703' || /student_visible/.test(courseErr.message || '')) return true;
+      // 42703 = student_visible-kolom ontbreekt toch → behandel als zichtbaar en
+      // lees enkel is_active opnieuw. Andere leesfouten: fail-closed.
+      if (courseErr.code === '42703' || /student_visible/.test(courseErr.message || '')) {
+        const { data: c2 } = await supabaseAdmin
+          .from('courses').select('is_active').eq('id', courseId).maybeSingle();
+        if (!c2) return false;
+        if (c2.is_active !== false) return true;
+        const isMember = await userHasCourseMembership(user.id, courseId);
+        const teacher = isMember ? false : await isCourseTeacher(user.id, courseId);
+        return canAccessCourseContent({ isAdmin: false, isCourseTeacher: teacher, isMember, isActive: false, studentVisible: true });
+      }
       return false;
     }
     if (!course) return false;
-    const studentVisible = course.student_visible !== false;
-    // Docent-check alleen uitvoeren wanneer nodig (cursus verborgen).
-    const teacher = studentVisible ? false : await isCourseTeacher(user.id, courseId);
-    return memberCanAccessCourse({ studentVisible, isCourseTeacher: teacher });
+    const isActive = course.is_active !== false;
+    const studentVisible = coursesHasStudentVisible ? (course.student_visible !== false) : true;
+    // Verborgen cursus: alléén docent (geen membership-lookup nodig).
+    if (!studentVisible) {
+      const teacher = await isCourseTeacher(user.id, courseId);
+      return canAccessCourseContent({ isAdmin: false, isCourseTeacher: teacher, isMember: false, isActive, studentVisible: false });
+    }
+    // Actief + zichtbaar: open voor iedereen.
+    if (isActive) {
+      return canAccessCourseContent({ isAdmin: false, isCourseTeacher: false, isMember: false, isActive: true, studentVisible: true });
+    }
+    // Inactief (gearchiveerd) maar zichtbaar: lid óf docent behoudt toegang.
+    const isMember = await userHasCourseMembership(user.id, courseId);
+    const teacher = isMember ? false : await isCourseTeacher(user.id, courseId);
+    return canAccessCourseContent({ isAdmin: false, isCourseTeacher: teacher, isMember, isActive: false, studentVisible: true });
   } catch {
     return false;
   }
+}
+
+// Helper: heeft de gebruiker een course_members-rij in deze cursus?
+async function userHasCourseMembership(userId, courseId) {
+  if (!userId || !courseId || !supabaseAdmin) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('course_members')
+      .select('user_id')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
+      .maybeSingle();
+    return !!data;
+  } catch { return false; }
 }
 
 // Helper: vereis admin/docent. Geeft op fout een response en `null` terug.
@@ -10615,11 +10641,51 @@ app.get('/api/projects/student-overview', async (req, res) => {
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   try {
-    // Cursussen waar de student lid van is.
+    // Cursussen waarvan de student projecten mag zien. Spiegelt de centrale
+    // toegangsregel (canAccessCourseContent): élke actieve, zichtbare cursus is
+    // open voor iedere student (géén course_members nodig — zo zien ook
+    // zelf-geregistreerde studenten een vers aangemaakt project meteen), plus de
+    // cursussen waar de student lid/docent van is en die de regel doorlaten
+    // (bv. een gearchiveerde maar zichtbare cursus). De frontend filtert
+    // vervolgens op de actieve cursus.
+    const courseMap = new Map(); // id -> { id, name }
+
+    // 1) Open cursussen: actief (+ zichtbaar wanneer de kolom bestaat).
+    let openQuery = supabaseAdmin
+      .from('courses')
+      .select(coursesHasStudentVisible ? 'id, name, is_active, student_visible' : 'id, name, is_active')
+      .eq('is_active', true);
+    if (coursesHasStudentVisible) openQuery = openQuery.eq('student_visible', true);
+    const { data: openCourses } = await openQuery;
+    for (const c of (openCourses || [])) {
+      if (c?.id) courseMap.set(c.id, { id: c.id, name: c.name });
+    }
+
+    // 2) Lidmaatschappen: voeg cursussen toe die de toegangsregel doorlaten maar
+    //    nog niet in de open-lijst staan (bv. inactief maar zichtbaar, of de
+    //    docent van een verborgen cursus).
+    const memberCols = coursesHasStudentVisible
+      ? 'course_id, member_role, courses(id, name, is_active, student_visible)'
+      : 'course_id, member_role, courses(id, name, is_active)';
     const { data: memberships } = await supabaseAdmin
-      .from('course_members').select('course_id, courses(id, name)').eq('user_id', auth.user.id);
-    const courseIds = (memberships || []).map(m => m.course_id).filter(Boolean);
-    const courses = (memberships || []).map(m => m.courses).filter(Boolean);
+      .from('course_members').select(memberCols).eq('user_id', auth.user.id);
+    for (const m of (memberships || [])) {
+      const c = m.courses;
+      if (!c?.id || courseMap.has(c.id)) continue;
+      const studentVisible = coursesHasStudentVisible ? (c.student_visible !== false) : true;
+      const isActive = c.is_active !== false;
+      const allowed = canAccessCourseContent({
+        isAdmin: false,
+        isCourseTeacher: m.member_role === 'teacher',
+        isMember: true,
+        isActive,
+        studentVisible,
+      });
+      if (allowed) courseMap.set(c.id, { id: c.id, name: c.name });
+    }
+
+    const courses = [...courseMap.values()];
+    const courseIds = courses.map(c => c.id);
     if (courseIds.length === 0) return res.json({ courses: [] });
 
     const { data: projects } = await supabaseAdmin
