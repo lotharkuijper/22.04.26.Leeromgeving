@@ -226,18 +226,24 @@ function post(path, body, { auth = true } = {}) {
       let raw = '';
       res.on('data', (c) => (raw += c));
       res.on('end', () => {
-        // De import-route streamt NDJSON (één JSON-event per regel); andere routes
-        // geven één JSON-object. Probeer eerst het geheel te parsen, val anders
-        // terug op het laatste geldige NDJSON-event (meestal het 'done'-event).
-        const text = raw.trim();
+        // De import-route streamt voortgang als NDJSON (één JSON-object per
+        // regel: start/progress/done). Validatie-fouten geven daarentegen een
+        // gewoon JSON-object terug. Probeer eerst de hele body als één JSON te
+        // parsen; lukt dat niet, behandel het als NDJSON en geef het 'done'-
+        // event terug (met alle events onder `events` voor rijkere asserts);
+        // niet-JSON regels worden defensief overgeslagen.
         let body = null;
-        if (text) {
+        const trimmed = (raw || '').trim();
+        if (trimmed) {
           try {
-            body = JSON.parse(text);
+            body = JSON.parse(trimmed);
           } catch {
-            for (const line of text.split('\n').map((s) => s.trim()).filter(Boolean)) {
-              try { body = JSON.parse(line); } catch { /* sla niet-JSON regels over */ }
+            const events = [];
+            for (const line of trimmed.split('\n').map((s) => s.trim()).filter(Boolean)) {
+              try { events.push(JSON.parse(line)); } catch { /* sla niet-JSON regels over */ }
             }
+            body = events.find((e) => e.type === 'done') || events[events.length - 1] || {};
+            body.events = events;
           }
         }
         resolve({ status: res.statusCode, body });
@@ -269,9 +275,12 @@ function redirectResponse(location, status = 302) {
 
 // `pages` is een map url→html (of url→{html,contentType,status}); embeddings
 // worden deterministisch teruggegeven (één vector per input-chunk).
-function mockFetch(pages) {
+// Optie `embeddings` overschrijft het embedding-antwoord (bv. om een falende
+// of misvormde respons van de AI-embeddingdienst te simuleren).
+function mockFetch(pages, { embeddings } = {}) {
   const fetchMock = vi.fn(async (url, opts) => {
     if (String(url).includes('/embeddings')) {
+      if (embeddings) return embeddings(opts);
       const inputs = JSON.parse(opts.body).input;
       return {
         ok: true,
@@ -484,5 +493,93 @@ describe('POST /api/admin/import-web/import', () => {
     expect(res.body.imported).toBe(0);
     expect(res.body.errors).toBe(1);
     expect(harness.state.db.tables.documents.length).toBe(0);
+  });
+
+  it('telt de pagina als error wanneer de AI-embeddingdienst een non-200 geeft', async () => {
+    seed({ user: ADMIN });
+    // Webpagina laadt prima, maar de embeddings-call faalt (HTTP 500).
+    mockFetch(
+      { [BASE + 'a.html']: page('Hoofdstuk A') },
+      {
+        embeddings: () => ({
+          ok: false,
+          status: 500,
+          json: async () => ({ error: { message: 'Service tijdelijk niet beschikbaar' } }),
+        }),
+      },
+    );
+    const res = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(0);
+    expect(res.body.errors).toBe(1);
+    // De pagina is expliciet als 'error' gerapporteerd met de fout-tekst.
+    const pageResult = res.body.results.find((x) => x.url === BASE + 'a.html');
+    expect(pageResult.status).toBe('error');
+    expect(pageResult.message).toMatch(/niet beschikbaar|500/i);
+    // Niets gepersisteerd: geen document- of chunk-rijen.
+    expect(harness.state.db.tables.documents.length).toBe(0);
+    expect(harness.state.db.tables.document_chunks.length).toBe(0);
+  });
+
+  it('telt de pagina als error wanneer de embeddingdienst een misvormde respons geeft', async () => {
+    seed({ user: ADMIN });
+    // HTTP 200, maar het `data`-veld is geen array → embedTextsServer gooit.
+    mockFetch(
+      { [BASE + 'a.html']: page('Hoofdstuk A') },
+      {
+        embeddings: () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({ unexpected: 'shape' }),
+        }),
+      },
+    );
+    const res = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(0);
+    expect(res.body.errors).toBe(1);
+    const pageResult = res.body.results.find((x) => x.url === BASE + 'a.html');
+    expect(pageResult.status).toBe('error');
+    expect(harness.state.db.tables.documents.length).toBe(0);
+    expect(harness.state.db.tables.document_chunks.length).toBe(0);
+  });
+
+  it('rapporteert per pagina: error bij embedding-fout, skipped bij te weinig tekst', async () => {
+    seed({ user: ADMIN });
+    // Pagina a: embeddings falen → error. Pagina b: te weinig tekst → skipped.
+    // Beide naast elkaar zodat partiële mislukkingen correct geteld worden.
+    let embedCalls = 0;
+    mockFetch(
+      {
+        [BASE + 'a.html']: page('Hoofdstuk A'),
+        [BASE + 'b.html']: '<html><head><title>Kort</title></head><body><main><p>Te kort.</p></main></body></html>',
+      },
+      {
+        embeddings: () => {
+          embedCalls++;
+          return { ok: false, status: 503, json: async () => ({ error: 'embeddings down' }) };
+        },
+      },
+    );
+    const res = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE,
+      pages: [{ url: BASE + 'a.html' }, { url: BASE + 'b.html' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(0);
+    expect(res.body.errors).toBe(1);
+    expect(res.body.skipped).toBe(1);
+    const aResult = res.body.results.find((x) => x.url === BASE + 'a.html');
+    const bResult = res.body.results.find((x) => x.url === BASE + 'b.html');
+    expect(aResult.status).toBe('error');
+    expect(bResult.status).toBe('skipped');
+    // De te-korte pagina bereikt de embedding-call niet (skip vóór embedden).
+    expect(embedCalls).toBe(1);
+    expect(harness.state.db.tables.documents.length).toBe(0);
+    expect(harness.state.db.tables.document_chunks.length).toBe(0);
   });
 });
