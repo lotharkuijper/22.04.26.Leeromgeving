@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import type { Plugin } from 'vite';
@@ -54,5 +55,12 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  test: {
+    // Standaard de node-omgeving (server-tests); component-tests kiezen zelf
+    // jsdom via een `// @vitest-environment jsdom`-docblock bovenaan het bestand.
+    environment: 'node',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
   },
 });
