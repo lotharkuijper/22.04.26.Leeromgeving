@@ -62,6 +62,7 @@ import { promises as dnsPromises } from 'node:dns';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from './openaiSampling.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
+import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
 import {
@@ -4793,74 +4794,16 @@ app.get('/api/concepts', async (req, res) => {
 // gebruikt als gegarandeerde basis-context uit het cursusmateriaal, los van de
 // live RAG-zoekopdracht. Geeft een lege lijst terug als de migratie nog niet is
 // toegepast, zodat de pagina blijft werken.
-app.get('/api/concepts/evidence', async (req, res) => {
-  const auth = await requireAuthUser(req, res);
-  if (!auth) return;
-  const { conceptId } = req.query;
-  if (!conceptId) {
-    return res.status(400).json({ error: 'conceptId is required' });
-  }
-  if (!conceptEvidenceSchemaReady) {
-    return res.json({ evidence: [] });
-  }
-  try {
-    const { data: allRows, error } = await supabaseAdmin
-      .from('concept_evidence')
-      .select('id, chunk_id, document_id, snippet, similarity, course_id')
-      .eq('concept_id', conceptId)
-      .order('similarity', { ascending: false })
-      .limit(20);
-    if (error) {
-      console.error('[concepts/evidence] query error:', error.message);
-      return res.status(500).json({ error: error.message });
-    }
-    // Autorisatie: begrippen kunnen (in de key_points-fallback) gedeeld zijn
-    // tussen cursussen, dus filteren we de bewijsrijen tot de cursussen waar de
-    // beller toegang toe heeft. Zo lekt een willekeurig concept-id geen
-    // cursusmateriaal van een andere cursus. Toegang wordt per course_id
-    // gecachet om herhaalde checks te voorkomen.
-    const accessCache = new Map();
-    const allowed = [];
-    for (const r of allRows || []) {
-      if (!r.course_id) { allowed.push(r); continue; }
-      if (!accessCache.has(r.course_id)) {
-        accessCache.set(r.course_id, await userHasCourseAccess(auth.user, auth.profile, r.course_id));
-      }
-      if (accessCache.get(r.course_id)) allowed.push(r);
-    }
-    const rows = allowed.slice(0, 10);
-    const docIds = [...new Set((rows || []).map((r) => r.document_id).filter(Boolean))];
-    const titleById = new Map();
-    const metaById = new Map();
-    if (docIds.length > 0) {
-      const { data: docs } = await supabaseAdmin
-        .from('documents')
-        .select('id, title')
-        .in('id', docIds);
-      for (const d of docs || []) titleById.set(d.id, d.title);
-      // Dia-reeks-metadata van de chunk meenemen wanneer beschikbaar.
-      const chunkIds = [...new Set((rows || []).map((r) => r.chunk_id).filter(Boolean))];
-      if (chunkIds.length > 0) {
-        const { data: chunkMeta } = await supabaseAdmin
-          .from('document_chunks')
-          .select('id, metadata')
-          .in('id', chunkIds);
-        for (const c of chunkMeta || []) metaById.set(c.id, c.metadata);
-      }
-    }
-    const evidence = (rows || []).map((r) => ({
-      id: r.chunk_id || r.id,
-      content: r.snippet || '',
-      documentTitle: titleById.get(r.document_id) || 'Cursusmateriaal',
-      documentId: r.document_id || undefined,
-      similarity: typeof r.similarity === 'number' ? r.similarity : 0,
-      metadata: (r.chunk_id && metaById.get(r.chunk_id)) || null,
-    }));
-    return res.json({ evidence });
-  } catch (err) {
-    console.error('[concepts/evidence] Unexpected error:', err);
-    return res.status(500).json({ error: err.message });
-  }
+// GET /api/concepts/evidence — bron-bewijs per begrip (Task #243), cursus-scoped
+// gefilterd (Task #244). De route en zijn filterhelper staan in
+// server/conceptEvidence.js zodat de cursus-isolatie geautomatiseerd getest kan
+// worden. conceptEvidenceSchemaReady wordt asynchroon gezet, dus we geven een
+// getter mee i.p.v. de momentane waarde.
+registerConceptEvidenceRoutes(app, {
+  supabaseAdmin,
+  requireAuthUser,
+  userHasCourseAccess,
+  getSchemaReady: () => conceptEvidenceSchemaReady,
 });
 
 app.delete('/api/admin/concepts/:id', async (req, res) => {
