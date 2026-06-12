@@ -17,6 +17,9 @@ These rules exist because the login flow silently hung (button spun forever, no 
 
 - **Detect obfuscated existing-account signup.** Supabase `signUp` on an already-registered email (with confirm-email on) returns NO error but a "fake" user with `data.user.identities === []` and no session. Treat empty `identities` as "account exists" → throw `'User already registered'`, which `LoginPage` maps to i18n `login.err.alreadyRegistered` (NL+EN). Without this it silently looks like success.
 
+- **Self-registration AND admin bulk-provisioning are BOTH supported account-creation paths — keep the `LoginPage` sign-up mode.** Do not remove the signup UI in favor of bulk-only; new users must be able to register themselves on the login page, and "Allow new users to sign up" stays ON in the Supabase Auth dashboard.
+  **Why:** a bulk-only assumption was tried and explicitly reversed by the product owner. The two flows coexist (public `signUp` vs admin `inviteUserByEmail` + `/activate`).
+
 - **Removing the signup UI from `LoginPage` does NOT disable self-registration.** Anyone with the anon key can still call `supabase.auth.signUp` directly. To truly close it the project owner must toggle off "Allow new users to sign up" in the Supabase Auth dashboard. Always surface this as a manual prerequisite when asked to "disable self-registration".
   **Why:** client-side UI removal is cosmetic; the GoTrue endpoint stays open until the dashboard setting is changed.
 
