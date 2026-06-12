@@ -8,7 +8,7 @@ import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocu
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
-import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, X, Loader2, Eye, Download, FileText } from 'lucide-react';
+import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, Trash2, X, Loader2, Eye, Download, FileText } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { DocumentViewer, type ViewerContext } from '../components/DocumentViewer';
 import { ViewerErrorBoundary } from '../components/ViewerErrorBoundary';
@@ -125,8 +125,8 @@ export function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [showContext, setShowContext] = useState(false);
   const [profileTimeout, setProfileTimeout] = useState(false);
-  const [archiveDialog, setArchiveDialog] = useState<{ conversationId: string; title: string } | null>(null);
-  const [archiving, setArchiving] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState<{ conversationId: string; title: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
@@ -309,13 +309,13 @@ export function ChatPage() {
     setMessages([]);
   };
 
-  const handleArchive = async (conversationId: string, generateSummary: boolean) => {
-    setArchiving(true);
+  const handleDelete = async (conversationId: string, generateSummary: boolean) => {
+    setDeleting(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const authHeader = session ? `Bearer ${session.access_token}` : '';
 
-      const res = await fetch('/api/chat/archive', {
+      const res = await fetch('/api/chat/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
         body: JSON.stringify({ conversationId, generateSummary, lang, courseId: activeCourse }),
@@ -323,7 +323,7 @@ export function ChatPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || (lang === 'en' ? `Archive failed (${res.status})` : `Archiveren mislukt (${res.status})`));
+        throw new Error(err.error || (lang === 'en' ? `Delete failed (${res.status})` : `Verwijderen mislukt (${res.status})`));
       }
 
       const result = await res.json();
@@ -334,18 +334,18 @@ export function ChatPage() {
         setCurrentConversationId(remaining.length > 0 ? remaining[0].id : null);
         if (remaining.length === 0) setMessages([]);
       }
-      setArchiveDialog(null);
+      setDeleteDialog(null);
 
       if (generateSummary && result.summaryFailed) {
         setPageNotice({
           kind: 'warning',
-          message: lang === 'en' ? 'The conversation was closed, but the summary could not be saved to your learning journal. Please try again later.' : 'Het gesprek is afgesloten, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
+          message: lang === 'en' ? 'The conversation was deleted, but the summary could not be saved to your learning journal. Please try again later.' : 'Het gesprek is verwijderd, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
         });
       }
     } catch (err: any) {
-      setPageNotice({ kind: 'error', message: lang === 'en' ? `Archive error: ${err.message}` : `Fout bij archiveren: ${err.message}` });
+      setPageNotice({ kind: 'error', message: lang === 'en' ? `Delete error: ${err.message}` : `Fout bij verwijderen: ${err.message}` });
     } finally {
-      setArchiving(false);
+      setDeleting(false);
     }
   };
 
@@ -646,12 +646,12 @@ export function ChatPage() {
                 </div>
               </button>
               <button
-                data-testid={`btn-archive-${conv.id}`}
-                onClick={(e) => { e.stopPropagation(); setArchiveDialog({ conversationId: conv.id, title: conv.title }); }}
-                title={lang === 'en' ? 'Move to learning journal' : 'Verplaats naar leerdagboek'}
-                className="absolute right-2 top-2.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-green-200 text-green-700"
+                data-testid={`btn-delete-${conv.id}`}
+                onClick={(e) => { e.stopPropagation(); setDeleteDialog({ conversationId: conv.id, title: conv.title }); }}
+                title={lang === 'en' ? 'Delete conversation' : 'Gesprek verwijderen'}
+                className="absolute right-2 top-2.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-100 text-red-600"
               >
-                <BookText className="w-4 h-4" />
+                <Trash2 className="w-4 h-4" />
               </button>
             </div>
           ))}
@@ -932,54 +932,54 @@ export function ChatPage() {
       </div>
     )}
 
-    {archiveDialog && (
+    {deleteDialog && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
           <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-green-100 rounded-xl">
-              <BookText className="w-5 h-5 text-green-700" />
+            <div className="p-2 bg-red-100 rounded-xl">
+              <Trash2 className="w-5 h-5 text-red-600" />
             </div>
-            <h2 className="text-lg font-semibold text-gray-900">{t('chat.moveToJournal')}</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{t('chat.deleteTitle')}</h2>
             <button
-              onClick={() => !archiving && setArchiveDialog(null)}
+              onClick={() => !deleting && setDeleteDialog(null)}
               className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
-              data-testid="btn-archive-cancel"
+              data-testid="btn-delete-cancel"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
           <p className="text-sm text-gray-600 mb-2">
-            {t('chat.archiveClosingText').replace('{title}', archiveDialog.title)}
+            {t('chat.deleteClosingText').replace('{title}', deleteDialog.title)}
           </p>
           <p className="text-sm text-gray-600 mb-6">
-            {t('chat.archiveAskSummary')}
+            {t('chat.deleteAskSummary')}
           </p>
 
           <div className="flex flex-col gap-3">
             <button
-              data-testid="btn-archive-with-summary"
-              onClick={() => handleArchive(archiveDialog.conversationId, true)}
-              disabled={archiving}
+              data-testid="btn-delete-with-summary"
+              onClick={() => handleDelete(deleteDialog.conversationId, true)}
+              disabled={deleting}
               className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
-              {t('chat.archiveWithSummary')}
+              {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
+              {t('chat.deleteWithSummary')}
             </button>
 
             <button
-              data-testid="btn-archive-without-summary"
-              onClick={() => handleArchive(archiveDialog.conversationId, false)}
-              disabled={archiving}
+              data-testid="btn-delete-without-summary"
+              onClick={() => handleDelete(deleteDialog.conversationId, false)}
+              disabled={deleting}
               className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {t('chat.archiveWithoutSummary')}
+              {t('chat.deleteWithoutSummary')}
             </button>
 
             <button
-              data-testid="btn-archive-dismiss"
-              onClick={() => setArchiveDialog(null)}
-              disabled={archiving}
+              data-testid="btn-delete-dismiss"
+              onClick={() => setDeleteDialog(null)}
+              disabled={deleting}
               className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
             >
               {t('chat.cancel')}

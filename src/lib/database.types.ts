@@ -125,7 +125,7 @@ export type Database = {
           module_type: 'general' | 'explain' | 'project' | 'quiz'
           context_id: string | null
           course_id: string | null
-          status: 'active' | 'archived'
+          status: 'active'
           created_at: string
           updated_at: string
         }
@@ -136,7 +136,7 @@ export type Database = {
           module_type?: 'general' | 'explain' | 'project' | 'quiz'
           context_id?: string | null
           course_id?: string | null
-          status?: 'active' | 'archived'
+          status?: 'active'
           created_at?: string
           updated_at?: string
         }
@@ -147,7 +147,7 @@ export type Database = {
           module_type?: 'general' | 'explain' | 'project' | 'quiz'
           context_id?: string | null
           course_id?: string | null
-          status?: 'active' | 'archived'
+          status?: 'active'
           created_at?: string
           updated_at?: string
         }

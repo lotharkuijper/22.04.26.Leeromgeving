@@ -653,7 +653,10 @@ async function resolveJournalCourseId(courseId) {
   } catch { return null; }
 }
 
-app.post('/api/chat/archive', async (req, res) => {
+// Task #251 — "verwijderen" is sinds Task #250 een definitieve delete (geen
+// soft-delete/archief meer). De canonieke route is /api/chat/delete;
+// /api/chat/archive blijft als alias bestaan zodat oudere clients niet breken.
+app.post(['/api/chat/delete', '/api/chat/archive'], async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   }
@@ -789,20 +792,20 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                   .single();
 
                 if (journalError) {
-                  console.error('[archive] Journal insert error:', journalError);
+                  console.error('[chat-delete] Journal insert error:', journalError);
                 } else {
                   journalEntryId = entry.id;
-                  console.log(`[archive] Journal entry aangemaakt: ${journalEntryId}`);
+                  console.log(`[chat-delete] Journal entry aangemaakt: ${journalEntryId}`);
                 }
               }
             } else {
-              console.error('[archive] OpenAI fout:', chatResp.status, await chatResp.text());
+              console.error('[chat-delete] OpenAI fout:', chatResp.status, await chatResp.text());
             }
           } catch (chatErr) {
-            console.error('[archive] OpenAI request mislukt:', chatErr.message);
+            console.error('[chat-delete] OpenAI request mislukt:', chatErr.message);
           }
         } else {
-          console.warn('[archive] Azure OpenAI niet geconfigureerd — samenvatting overgeslagen');
+          console.warn('[chat-delete] Azure OpenAI niet geconfigureerd — samenvatting overgeslagen');
         }
       }
     }
@@ -820,10 +823,10 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
       return res.status(500).json({ error: `Verwijderen mislukt: ${deleteError.message}` });
     }
 
-    console.log(`[archive] Gesprek ${conversationId} definitief verwijderd (summaryCreated: ${summaryCreated})`);
+    console.log(`[chat-delete] Gesprek ${conversationId} definitief verwijderd (summaryCreated: ${summaryCreated})`);
     return res.json({ success: true, journalEntryId, summaryCreated, summaryFailed });
   } catch (err) {
-    console.error('[archive] Onverwachte fout:', err);
+    console.error('[chat-delete] Onverwachte fout:', err);
     return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
