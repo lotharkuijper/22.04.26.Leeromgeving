@@ -242,7 +242,12 @@ function post(path, body, { auth = true } = {}) {
             for (const line of trimmed.split('\n').map((s) => s.trim()).filter(Boolean)) {
               try { events.push(JSON.parse(line)); } catch { /* sla niet-JSON regels over */ }
             }
-            body = events.find((e) => e.type === 'done') || events[events.length - 1] || {};
+            const picked = events.find((e) => e && e.type === 'done') || events[events.length - 1];
+            // Garandeer dat `body` altijd een object is: een NDJSON-regel die naar
+            // een primitive parset (of een lege/niet-JSON body) mag nooit een
+            // `body.events = ...` TypeError geven, maar moet leiden tot een nette
+            // assertion-fout op het lege object.
+            body = (picked && typeof picked === 'object') ? picked : {};
             body.events = events;
           }
         }
