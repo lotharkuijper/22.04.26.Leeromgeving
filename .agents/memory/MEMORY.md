@@ -18,3 +18,4 @@
 - [Vite lazy-dep re-optimization crash](vite-lazy-dep-optimization.md) — heavy deps only behind React.lazy routes must go in optimizeDeps.include, else mid-session re-opt → "Failed to fetch dynamically imported module" + duplicate React "Invalid hook call".
 - [course_members dual role columns](course-members-role-columns.md) — legacy NOT NULL `role` must mirror `member_role` (superuser preserved) on every insert/update; new logic uses member_role, role is compat-only.
 - [Course visibility (student_visible)](course-student-visible.md) — hide-from-students is a separate flag from is_active; RLS-hidden parent makes a PostgREST embedded join null (filter client-side); enforce in RLS+server+client; content-table RLS doesn't check it yet.
+- [RAG vector index](rag-vector-index.md) — document_chunks uses HNSW not ivfflat; ivfflat lists=100 + probes=1 over few-hundred chunks silently returned ZERO matches (seqscan still found them); not an embeddings bug.

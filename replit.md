@@ -36,6 +36,8 @@ Per module (`chat`, `explain`, `quiz`, `project`) en per cursus instelbaar via `
 
 `extraction` heeft een eigen vorm met `similarity_threshold` en `min_evidence_chunks` (gebruikt door `/api/admin/extract-concepts`).
 
+De vector-index op `document_chunks.embedding` is een **HNSW**-index (`vector_cosine_ops`, migratie `20260612100000_document_chunks_hnsw_index.sql`). De oude ivfflat-index (`lists=100`) gaf bij de huidige corpus stil ZERO treffers terug: ivfflat doorzoekt standaard maar 1 cluster (`ivfflat.probes=1`) en met 100 clusters over een paar honderd chunks raakt een willekeurige zoekvector bijna altijd een leeg cluster, terwijl een exacte scan wél treffers vond (similarity tot ~0.58). HNSW geeft hoge recall met de standaardinstellingen, schaalt mee en heeft geen probe-tuning nodig. De vectorruimte blijft 1536-dim cosine, dus geen re-embed.
+
 ## Admin-tabs & Diagnose
 - `quiz_sources` (nieuw) — mix-sliders per cursus, ItemBank-mapping, RAG-folder mapping, 4 quiz-prompts editor.
 - ItemBank-config in `chatbot_prompts` rij `__quiz_itembank_config__` (JSON: owner/repo/branch/last_synced_at).
