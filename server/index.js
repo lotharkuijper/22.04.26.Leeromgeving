@@ -380,7 +380,7 @@ async function detectCoursesStudentVisibleColumn() {
 // nieuwe kolommen (topics text[], difficulty, question_type, questions_data,
 // answers, score_percentage, created_at). Detecteer of de migratie
 // `20260430120000_extend_quiz_attempts_for_multi_type.sql` is toegepast,
-// zodat /api/quiz/archive en de nieuwe insert-flow vroegtijdig en duidelijk
+// zodat /api/quiz/delete en de nieuwe insert-flow vroegtijdig en duidelijk
 // kunnen falen als dat niet het geval is.
 let quizAttemptsHasNewSchema = false;
 async function detectQuizAttemptsSchema() {
@@ -5240,7 +5240,10 @@ app.delete('/api/explain/:id', async (req, res) => {
   }
 });
 
-app.post('/api/explain/archive', async (req, res) => {
+// Task #265 — net als bij chat (Task #251) is dit een definitieve delete (geen
+// archief/soft-delete). De canonieke route is /api/explain/delete; de oude
+// /api/explain/archive blijft als alias bestaan zodat oudere clients niet breken.
+app.post(['/api/explain/delete', '/api/explain/archive'], async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const authHeader = req.headers['authorization'];
   if (!authHeader) return res.status(401).json({ error: 'Authorization header vereist' });
@@ -5345,25 +5348,25 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                 .single();
 
               if (journalError) {
-                console.error('[explain/archive] Journal insert error:', journalError);
+                console.error('[explain/delete] Journal insert error:', journalError);
                 summaryFailed = true;
               } else {
                 journalEntryId = entry.id;
-                console.log(`[explain/archive] Journal entry aangemaakt: ${journalEntryId}`);
+                console.log(`[explain/delete] Journal entry aangemaakt: ${journalEntryId}`);
               }
             } else {
               summaryFailed = true;
             }
           } else {
-            console.error('[explain/archive] OpenAI fout:', chatResp.status, await chatResp.text());
+            console.error('[explain/delete] OpenAI fout:', chatResp.status, await chatResp.text());
             summaryFailed = true;
           }
         } catch (chatErr) {
-          console.error('[explain/archive] OpenAI request mislukt:', chatErr.message);
+          console.error('[explain/delete] OpenAI request mislukt:', chatErr.message);
           summaryFailed = true;
         }
       } else {
-        console.warn('[explain/archive] Azure OpenAI niet geconfigureerd — samenvatting overgeslagen');
+        console.warn('[explain/delete] Azure OpenAI niet geconfigureerd — samenvatting overgeslagen');
         summaryFailed = true;
       }
     }
@@ -5375,7 +5378,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
       .eq('id', explanationId);
 
     if (delErr) {
-      console.error('[explain/archive] kon uitleg niet verwijderen:', delErr);
+      console.error('[explain/delete] kon uitleg niet verwijderen:', delErr);
       return res.status(500).json({ error: `Verwijderen mislukt: ${delErr.message}` });
     }
 
@@ -5386,13 +5389,13 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
       summaryFailed: generateSummary && summaryFailed,
     });
   } catch (err) {
-    console.error('[explain/archive] Onverwachte fout:', err);
+    console.error('[explain/delete] Onverwachte fout:', err);
     return res.status(500).json({ error: 'Interne fout' });
   }
 });
 
 // ─── Gedeelde quiz-samenvattingsbouwer ──────────────────────────────────────
-// Beide endpoints (/api/quiz/archive en /api/quiz/save-summary) gebruiken
+// Beide endpoints (/api/quiz/delete en /api/quiz/save-summary) gebruiken
 // dezelfde notitie-stijl in het leerdagboek. De prompt schaalt mee in lengte
 // en focus afhankelijk van het aantal vragen en het vraagtype: een korte
 // 3-vragen meerkeuzequiz krijgt een compacte notitie van ~6 regels, een rijke
@@ -5676,7 +5679,10 @@ app.post('/api/quiz/save-summary', async (req, res) => {
   }
 });
 
-app.post('/api/quiz/archive', async (req, res) => {
+// Task #265 — net als bij chat (Task #251) is dit een definitieve delete (geen
+// archief/soft-delete). De canonieke route is /api/quiz/delete; de oude
+// /api/quiz/archive blijft als alias bestaan zodat oudere clients niet breken.
+app.post(['/api/quiz/delete', '/api/quiz/archive'], async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   if (!quizAttemptsHasNewSchema) {
     return res.status(503).json({
@@ -5736,7 +5742,7 @@ app.post('/api/quiz/archive', async (req, res) => {
       .eq('student_id', user.id);
 
     if (delErr) {
-      console.error('[quiz/archive] kon quizpoging niet verwijderen:', delErr);
+      console.error('[quiz/delete] kon quizpoging niet verwijderen:', delErr);
       return res.status(500).json({ error: `Verwijderen mislukt: ${delErr.message}` });
     }
 
@@ -5747,7 +5753,7 @@ app.post('/api/quiz/archive', async (req, res) => {
       summaryFailed: generateSummary && summaryFailed,
     });
   } catch (err) {
-    console.error('[quiz/archive] Onverwachte fout:', err);
+    console.error('[quiz/delete] Onverwachte fout:', err);
     return res.status(500).json({ error: 'Interne fout' });
   }
 });

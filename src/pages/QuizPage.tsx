@@ -196,8 +196,8 @@ export function QuizPage() {
   const [attemptsLoading, setAttemptsLoading] = useState(false);
   const [attemptsError, setAttemptsError] = useState<string | null>(null);
   const [expandedAttemptId, setExpandedAttemptId] = useState<string | null>(null);
-  const [archiveDialog, setArchiveDialog] = useState<{ id: string; label: string } | null>(null);
-  const [archiving, setArchiving] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState<{ id: string; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
 
   // Direct opslaan-flow op het "Quiz voltooid!"-scherm. Werkt ook als de
@@ -623,13 +623,13 @@ export function QuizPage() {
     }
   };
 
-  const handleArchive = async (attemptId: string, generateSummary: boolean) => {
-    setArchiving(true);
+  const handleDelete = async (attemptId: string, generateSummary: boolean) => {
+    setDeleting(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const authHeader = session ? `Bearer ${session.access_token}` : '';
 
-      const res = await fetch('/api/quiz/archive', {
+      const res = await fetch('/api/quiz/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: authHeader },
         body: JSON.stringify({ attemptId, generateSummary, lang, courseId: activeCourse }),
@@ -643,18 +643,18 @@ export function QuizPage() {
       const result = await res.json();
       setAttempts(prev => prev.filter(a => a.id !== attemptId));
       if (expandedAttemptId === attemptId) setExpandedAttemptId(null);
-      setArchiveDialog(null);
+      setDeleteDialog(null);
 
       if (generateSummary && result.summaryFailed) {
         setPageNotice({
           kind: 'warning',
-          message: t('quiz.archiveDeletedSummaryFailed'),
+          message: t('quiz.deletedSummaryFailed'),
         });
       }
     } catch (err: any) {
       setPageNotice({ kind: 'error', message: t('quiz.deleteError', { message: err.message }) });
     } finally {
-      setArchiving(false);
+      setDeleting(false);
     }
   };
 
@@ -1060,18 +1060,18 @@ export function QuizPage() {
           error={attemptsError}
           expandedId={expandedAttemptId}
           onToggleExpand={(id) => setExpandedAttemptId(prev => prev === id ? null : id)}
-          onAskDelete={(row) => setArchiveDialog({ id: row.id, label: topicsLabelOf(row, lang) })}
+          onAskDelete={(row) => setDeleteDialog({ id: row.id, label: topicsLabelOf(row, lang) })}
           lang={lang}
         />
 
-        {/* ARCHIVE DIALOG */}
-        {archiveDialog && (
-          <ArchiveDialog
-            label={archiveDialog.label}
-            archiving={archiving}
+        {/* DELETE DIALOG */}
+        {deleteDialog && (
+          <DeleteDialog
+            label={deleteDialog.label}
+            deleting={deleting}
             lang={lang}
-            onClose={() => !archiving && setArchiveDialog(null)}
-            onConfirm={(withSummary) => handleArchive(archiveDialog.id, withSummary)}
+            onClose={() => !deleting && setDeleteDialog(null)}
+            onConfirm={(withSummary) => handleDelete(deleteDialog.id, withSummary)}
           />
         )}
       </div>
@@ -1684,11 +1684,11 @@ function ResultsList({
   );
 }
 
-function ArchiveDialog({
-  label, archiving, lang, onClose, onConfirm,
+function DeleteDialog({
+  label, deleting, lang, onClose, onConfirm,
 }: {
   label: string;
-  archiving: boolean;
+  deleting: boolean;
   lang: string;
   onClose: () => void;
   onConfirm: (withSummary: boolean) => void;
@@ -1701,48 +1701,48 @@ function ArchiveDialog({
           <div className="p-2 bg-green-100 rounded-xl">
             <BookText className="w-5 h-5 text-green-700" />
           </div>
-          <h2 className="text-lg font-semibold text-gray-900">{t('quiz.saveToJournal')}</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{t('quiz.deleteDialogTitle')}</h2>
           <button
             onClick={onClose}
             className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
-            data-testid="btn-quiz-archive-cancel"
-            disabled={archiving}
+            data-testid="btn-quiz-delete-cancel"
+            disabled={deleting}
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         <p className="text-sm text-gray-600 mb-2">
-          {t('quiz.archiveConfirmText', { label })}
+          {t('quiz.deleteConfirmText', { label })}
         </p>
         <p className="text-sm text-gray-600 mb-6">
-          {t('quiz.archiveQuestion')}
+          {t('quiz.deleteQuestion')}
         </p>
 
         <div className="flex flex-col gap-3">
           <button
-            data-testid="btn-quiz-archive-with-summary"
+            data-testid="btn-quiz-delete-with-summary"
             onClick={() => onConfirm(true)}
-            disabled={archiving}
+            disabled={deleting}
             className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
-            {t('quiz.archiveWithSummary')}
+            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
+            {t('quiz.deleteWithSummary')}
           </button>
 
           <button
-            data-testid="btn-quiz-archive-without-summary"
+            data-testid="btn-quiz-delete-without-summary"
             onClick={() => onConfirm(false)}
-            disabled={archiving}
+            disabled={deleting}
             className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {t('quiz.archiveWithoutSummary')}
+            {t('quiz.deleteWithoutSummary')}
           </button>
 
           <button
-            data-testid="btn-quiz-archive-dismiss"
+            data-testid="btn-quiz-delete-dismiss"
             onClick={onClose}
-            disabled={archiving}
+            disabled={deleting}
             className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
           >
             {t('common.cancel')}

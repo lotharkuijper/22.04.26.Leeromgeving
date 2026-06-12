@@ -170,8 +170,8 @@ export function ExplainPage() {
   const [history, setHistory] = useState<ExplanationHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [activeExplanationId, setActiveExplanationId] = useState<string | null>(null);
-  const [archiveDialog, setArchiveDialog] = useState<{ id: string; conceptName: string } | null>(null);
-  const [archiving, setArchiving] = useState(false);
+  const [deleteSummaryDialog, setDeleteSummaryDialog] = useState<{ id: string; conceptName: string } | null>(null);
+  const [deletingWithSummary, setDeletingWithSummary] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [historyItemBusy, setHistoryItemBusy] = useState<string | null>(null);
   const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
@@ -303,23 +303,23 @@ export function ExplainPage() {
     }
   };
 
-  const handleArchiveExplanation = async (id: string, generateSummary: boolean) => {
+  const handleDeleteWithSummary = async (id: string, generateSummary: boolean) => {
     const session = (await supabase.auth.getSession()).data.session;
     if (!session?.access_token) return;
-    setArchiving(true);
+    setDeletingWithSummary(true);
     try {
-      const res = await fetch('/api/explain/archive', {
+      const res = await fetch('/api/explain/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ explanationId: id, generateSummary, lang: (localStorage.getItem('lair-vu-lang') || 'nl'), courseId: activeCourse }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setPageNotice({ kind: 'error', message: t('explain.moveToJournalFailed', { detail: String(err.error || res.status) }) });
+        setPageNotice({ kind: 'error', message: t('explain.deleteFailed', { detail: String(err.error || res.status) }) });
         return;
       }
       const result = await res.json();
-      setArchiveDialog(null);
+      setDeleteSummaryDialog(null);
       if (activeExplanationId === id) {
         setActiveExplanationId(null);
         setExplanation('');
@@ -330,13 +330,13 @@ export function ExplainPage() {
       if (generateSummary && result.summaryFailed) {
         setPageNotice({
           kind: 'warning',
-          message: t('explain.archivedSummaryFailed'),
+          message: t('explain.deletedSummaryFailed'),
         });
       }
     } catch (err: any) {
-      setPageNotice({ kind: 'error', message: t('explain.archiveError', { message: err?.message || '?' }) });
+      setPageNotice({ kind: 'error', message: t('explain.deleteError', { message: err?.message || '?' }) });
     } finally {
-      setArchiving(false);
+      setDeletingWithSummary(false);
     }
   };
 
@@ -828,9 +828,9 @@ export function ExplainPage() {
                   </button>
                   <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
-                      data-testid={`btn-archive-explanation-${item.id}`}
-                      onClick={(e) => { e.stopPropagation(); setArchiveDialog({ id: item.id, conceptName: item.conceptName }); }}
-                      title={t('explain.moveToJournal')}
+                      data-testid={`btn-delete-explanation-journal-${item.id}`}
+                      onClick={(e) => { e.stopPropagation(); setDeleteSummaryDialog({ id: item.id, conceptName: item.conceptName }); }}
+                      title={t('explain.deleteToJournal')}
                       className="p-1.5 rounded hover:bg-green-200 text-green-700"
                     >
                       <BookText className="w-4 h-4" />
@@ -998,54 +998,54 @@ export function ExplainPage() {
         </div>
       </div>
 
-      {archiveDialog && (
+      {deleteSummaryDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="p-2 bg-green-100 rounded-xl">
                 <BookText className="w-5 h-5 text-green-700" />
               </div>
-              <h2 className="text-lg font-semibold text-gray-900">{t('explain.moveToJournal')}</h2>
+              <h2 className="text-lg font-semibold text-gray-900">{t('explain.deleteDialogTitle')}</h2>
               <button
-                onClick={() => !archiving && setArchiveDialog(null)}
+                onClick={() => !deletingWithSummary && setDeleteSummaryDialog(null)}
                 className="ml-auto p-1 rounded hover:bg-gray-100 text-gray-500"
-                data-testid="btn-explain-archive-cancel"
+                data-testid="btn-explain-delete-cancel"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <p className="text-sm text-gray-600 mb-2">
-              <>{t('explain.archiveConfirmBefore')} <strong>"{archiveDialog.conceptName}"</strong> {t('explain.archiveConfirmAfter')}</>
+              <>{t('explain.deleteConfirmBefore')} <strong>"{deleteSummaryDialog.conceptName}"</strong> {t('explain.deleteConfirmAfter')}</>
             </p>
             <p className="text-sm text-gray-600 mb-6">
-              {t('explain.archiveQuestion')}
+              {t('explain.deleteQuestion')}
             </p>
 
             <div className="flex flex-col gap-3">
               <button
-                data-testid="btn-explain-archive-with-summary"
-                onClick={() => handleArchiveExplanation(archiveDialog.id, true)}
-                disabled={archiving}
+                data-testid="btn-explain-delete-with-summary"
+                onClick={() => handleDeleteWithSummary(deleteSummaryDialog.id, true)}
+                disabled={deletingWithSummary}
                 className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {archiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
-                {t('explain.archiveWithSummaryBtn')}
+                {deletingWithSummary ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookText className="w-4 h-4" />}
+                {t('explain.deleteWithSummaryBtn')}
               </button>
 
               <button
-                data-testid="btn-explain-archive-without-summary"
-                onClick={() => handleArchiveExplanation(archiveDialog.id, false)}
-                disabled={archiving}
+                data-testid="btn-explain-delete-without-summary"
+                onClick={() => handleDeleteWithSummary(deleteSummaryDialog.id, false)}
+                disabled={deletingWithSummary}
                 className="w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {t('explain.archiveWithoutSummaryBtn')}
+                {t('explain.deleteWithoutSummaryBtn')}
               </button>
 
               <button
-                data-testid="btn-explain-archive-dismiss"
-                onClick={() => setArchiveDialog(null)}
-                disabled={archiving}
+                data-testid="btn-explain-delete-dismiss"
+                onClick={() => setDeleteSummaryDialog(null)}
+                disabled={deletingWithSummary}
                 className="w-full px-4 py-3 text-gray-500 text-sm hover:text-gray-700 transition-colors disabled:opacity-50"
               >
                 {t('explain.cancel')}
