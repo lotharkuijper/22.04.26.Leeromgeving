@@ -14,6 +14,14 @@ missing server check means it's unprotected:
 - **ItemBank GitHub config** `__quiz_itembank_config__` (owner/repo/branch): also a
   `chatbot_prompts` row → same RLS guards writes (saveShareStatsConfig). Post-import
   `last_synced_at` save is wrapped in try/catch so a teacher's import doesn't break.
+- **ShareStats ItemBank import** (selective topic import AND full sync, ShareStatsImportPanel):
+  decided admin-only. The ItemBank (`quiz_questions`) is ONE globally shared pool every
+  course draws from, so any import is a global write. Write path is client-side
+  `supabase.from('quiz_questions').insert` → `quiz_questions` RLS allows
+  `profiles.role IN ('docent','admin')`; teachers carry `profiles.role='student'`
+  (teacher status is per-course via `course_members.member_role`), so RLS is already
+  effectively admin-only. UI gates topic-select + import + full-sync + repo config to
+  `isAdmin`; teachers map existing ItemBank questions to their course in Beheer → Quiz-bronnen.
 - **Global RAG defaults** `__rag_settings_global__`: written via server PUT
   `/api/rag-settings`, which checks admin/superuser when `courseId` is absent
   (course overrides use `isStaffForCourse`).

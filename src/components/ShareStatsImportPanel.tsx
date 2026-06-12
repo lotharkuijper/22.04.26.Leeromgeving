@@ -247,6 +247,13 @@ export function ShareStatsImportPanel() {
   };
 
   const runImport = async (topicsToImport: string[], startMessage: string) => {
+    if (!isAdmin) {
+      setNotice({
+        kind: 'warning',
+        message: 'Alleen een beheerder kan vragen importeren in de gedeelde ItemBank.',
+      });
+      return;
+    }
     setImporting(true);
     setResult(null);
     setProgress(null);
@@ -416,7 +423,27 @@ export function ShareStatsImportPanel() {
         </div>
       )}
 
-      {!loading && topics.length > 0 && (
+      {!loading && !isAdmin && (
+        <div className="bg-white border border-gray-200 rounded-lg p-6">
+          <div className="flex items-start gap-3" data-testid="text-import-admin-only">
+            <Info className="w-5 h-5 text-gray-500 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-gray-700">
+              <p className="font-semibold text-gray-900 mb-1">Importeren is beheerder-werk</p>
+              <p>
+                De ShareStats-ItemBank is een <strong>gedeelde vragenpool</strong> die door álle cursussen wordt
+                gebruikt. Eén import voegt vragen toe waar iedereen uit put, daarom kan alleen een beheerder
+                onderwerpen importeren of synchroniseren.
+              </p>
+              <p className="mt-2">
+                Je kunt bestaande ItemBank-vragen wél aan de begrippen van je eigen cursus koppelen via
+                <strong> Beheer → Quiz-bronnen</strong>.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && isAdmin && topics.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-gray-900">Selectief importeren per topic</h3>
