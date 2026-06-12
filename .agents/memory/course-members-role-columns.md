@@ -27,3 +27,21 @@ preserve backward compatibility; it still enforces NOT NULL.
 - Both the add path (`POST /api/admin/courses/:id/members/:userId`) and the
   promote/demote path (`PUT .../:userId`, both its pgPool and supabaseAdmin branches) do this.
 - Allowed legacy `role` values are only superuser/teacher/student — never write 'member' or NULL.
+
+## RLS: writes are service-role-only, by design
+
+`course_members` once shipped with **RLS disabled** while anon/authenticated still held full
+INSERT/UPDATE/DELETE grants — a privilege-escalation hole: any logged-in user could self-promote
+to `member_role='teacher'` of any course straight from the Supabase client. The lockdown:
+- RLS is ENABLED with a single SELECT policy `USING (user_id = auth.uid() OR pr_is_admin())`
+  (`pr_is_admin()` is SECURITY DEFINER: profiles.role='admin' OR email=superuser).
+- **No INSERT/UPDATE/DELETE policies on purpose.** All writes go through the server with the
+  service-role key, which bypasses RLS. Teacher↔course linking is therefore an admin-only server
+  operation.
+
+**Why:** the frontend reads own membership directly (AuthContext/CourseAccessContext, own rows)
+and admin UI reads all teacher rows (pr_is_admin) — so SELECT must allow own-or-admin; but no
+client should ever write this table directly.
+
+**How to apply:** never add a client-facing write policy here. New write paths must use
+`supabaseAdmin` (service role) behind an admin/superuser check, not the caller's anon client.

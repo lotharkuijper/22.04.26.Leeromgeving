@@ -1027,10 +1027,24 @@ app.get('/api/rag-settings/overrides', async (req, res) => {
       .like('name', '__rag_settings_%__')
       .neq('name', '__rag_settings_global__');
     if (error) throw new Error(error.message);
-    const courseIds = (data || []).map(row => {
+    let courseIds = (data || []).map(row => {
       const match = row.name.match(/^__rag_settings_(.+)__$/);
       return match ? match[1] : null;
     }).filter(Boolean);
+
+    // Admin/superuser ziet alle override-cursussen; een docent ziet uitsluitend
+    // de override-markers van de cursussen waaraan hij gekoppeld is. Zo lekken
+    // andere cursussen niet via deze lijst.
+    const isAdminLocal = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+    if (!isAdminLocal) {
+      const { data: ownRows } = await supabaseAdmin
+        .from('course_members')
+        .select('course_id')
+        .eq('user_id', user.id)
+        .eq('member_role', 'teacher');
+      const ownCourseIds = new Set((ownRows || []).map(r => r.course_id));
+      courseIds = courseIds.filter(id => ownCourseIds.has(id));
+    }
     return res.json({ courseIds });
   } catch (err) {
     console.error('[rag-settings/overrides GET] Error:', err.message);
@@ -6859,6 +6873,11 @@ async function initQuizPromptDefaults() {
 app.get('/api/admin/quiz-prompts', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
+  // Quiz-prompts zijn GLOBAAL (section='quiz', geen course_id): één edit raakt
+  // álle cursussen. Daarom voorbehouden aan admin/superuser, niet aan docenten.
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Alleen admin/superuser mag globale quiz-prompts beheren' });
+  }
   if (!promptsHasSection) {
     return res.json({ prompts: [], warning: 'chatbot_prompts.section ontbreekt — voer de section-migratie uit.' });
   }
@@ -6878,6 +6897,10 @@ app.get('/api/admin/quiz-prompts', async (req, res) => {
 app.put('/api/admin/quiz-prompts/:name', async (req, res) => {
   const auth = await requireAdminOrDocent(req, res);
   if (!auth) return;
+  // Globale quiz-prompts: alleen admin/superuser mag ze wijzigen (zie GET).
+  if (auth.role !== 'admin') {
+    return res.status(403).json({ error: 'Alleen admin/superuser mag globale quiz-prompts beheren' });
+  }
   const { name } = req.params;
   const { content, is_active } = req.body || {};
   if (!Object.prototype.hasOwnProperty.call(QUIZ_PROMPT_DEFAULTS, name)) {

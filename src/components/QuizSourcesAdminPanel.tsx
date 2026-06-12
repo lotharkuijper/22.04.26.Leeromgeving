@@ -108,7 +108,7 @@ const PROMPT_LABELS: Record<string, string> = {
 };
 
 export function QuizSourcesAdminPanel() {
-  const { session } = useAuth();
+  const { session, isAdmin } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
   const { t } = useLanguage();
 
@@ -268,8 +268,13 @@ export function QuizSourcesAdminPanel() {
         /* niet kritiek */
       }
 
-      // Quiz-prompts
+      // Quiz-prompts — globaal, alleen voor admin/superuser.
       try {
+        if (!isAdmin) {
+          setPrompts([]);
+          setPromptDrafts({});
+          return;
+        }
         const promptRes = await fetch('/api/admin/quiz-prompts', { headers });
         if (promptRes.ok) {
           const promptData = await promptRes.json();
@@ -1253,7 +1258,8 @@ export function QuizSourcesAdminPanel() {
         </button>
       </section>
 
-      {/* Quiz prompts */}
+      {/* Quiz prompts — globaal, alleen zichtbaar/bewerkbaar voor admin/superuser. */}
+      {isAdmin && (
       <section className="bg-white border border-gray-200 rounded-xl p-5 space-y-3" data-testid="section-quiz-prompts">
         <h3 className="font-semibold text-gray-900">
           <button
@@ -1300,6 +1306,7 @@ export function QuizSourcesAdminPanel() {
         ))}
         </>)}
       </section>
+      )}
     </div>
   );
 }
