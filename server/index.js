@@ -398,6 +398,8 @@ async function detectQuizAttemptsSchema() {
 }
 
 app.post('/api/chat', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
   const apiKey = process.env.OPENAI_API_KEY;
   if (!AZURE_CHAT_READY) {
     return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });

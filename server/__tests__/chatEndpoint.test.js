@@ -2,18 +2,61 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import http from 'http';
 
 // ───────────────────────────────────────────────────────────────────────────
-// Integratietest voor de /api/chat-handler (Task #231). De handler beschermt
-// tegen reasoning-modellen (zoals gpt-5.2) die een HTTP 200 met lege of
-// afgekapte content teruggeven: bij een lege/afgekapte eerste respons volgt één
-// retry met ruimer tokenbudget; blijft het leeg, dan een duidelijke HTTP 502
-// met code "empty_response" i.p.v. een misleidende lege 200.
+// Integratietest voor de /api/chat-handler (Task #231 + Task #254). De handler:
+//  1. vereist authenticatie (Task #254): zonder geldige Authorization-header
+//     volgt HTTP 401, zodat de betaalde Azure-deployment geen open proxy is.
+//  2. beschermt tegen reasoning-modellen (zoals gpt-5.2) die een HTTP 200 met
+//     lege of afgekapte content teruggeven: bij een lege/afgekapte eerste
+//     respons volgt één retry met ruimer tokenbudget; blijft het leeg, dan een
+//     duidelijke HTTP 502 met code "empty_response" i.p.v. een misleidende
+//     lege 200.
 //
 // We mounten de echte Express-app op een efemere poort en mocken global.fetch
-// zodat geen echte OpenAI-call wordt gedaan. supabaseAdmin/pgPool zijn null
-// (env geneutraliseerd vóór import), dus de handler gebruikt de fallback-prompt
-// en raakt geen database. De HTTP-verzoeken lopen via het node:http-pad zodat
-// de gemockte global.fetch alleen de OpenAI-calls onderschept.
+// zodat geen echte OpenAI-call wordt gedaan. We mocken óók @supabase/supabase-js
+// zodat requireAuthUser een geldige gebruiker ziet (zonder echte Supabase) en de
+// chat-prompt-query een lege uitslag geeft (fallback-prompt, geen echte DB).
+// pgPool blijft null (geen SUPABASE_DB_URL). De HTTP-verzoeken lopen via het
+// node:http-pad zodat de gemockte global.fetch alleen de OpenAI-calls onderschept.
 // ───────────────────────────────────────────────────────────────────────────
+
+// Universele, chainbare Supabase-query-stub: elke keten lost op als
+// { data: null, error: null } zodat álle startup-detecties en de chat-prompt-
+// query defensief de fallback nemen.
+vi.mock('@supabase/supabase-js', () => {
+  const result = { data: null, error: null };
+  const makeBuilder = () => {
+    const builder = {
+      select: () => builder,
+      insert: () => builder,
+      update: () => builder,
+      delete: () => builder,
+      upsert: () => builder,
+      eq: () => builder,
+      neq: () => builder,
+      not: () => builder,
+      in: () => builder,
+      like: () => builder,
+      ilike: () => builder,
+      is: () => builder,
+      gte: () => builder,
+      lte: () => builder,
+      order: () => builder,
+      limit: () => builder,
+      range: () => builder,
+      maybeSingle: async () => result,
+      single: async () => result,
+      then: (resolve) => resolve(result),
+    };
+    return builder;
+  };
+  const createClient = () => ({
+    auth: {
+      getUser: async () => ({ data: { user: { id: 'test-user-id' } }, error: null }),
+    },
+    from: () => makeBuilder(),
+  });
+  return { createClient };
+});
 
 let app;
 let server;
@@ -24,6 +67,7 @@ const ENV_KEYS = [
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
   'VITE_PUBLIC_SUPABASE_URL',
+  'VITE_PUBLIC_SUPABASE_ANON_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
   'SUPABASE_ANON_KEY',
   'SUPABASE_DB_URL',
@@ -32,12 +76,14 @@ const ENV_KEYS = [
 beforeAll(async () => {
   for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
 
-  // Hermetische module-load: geen poort, geen Supabase/pg, vaste reasoning-model.
+  // Module-load met gemockte Supabase (supabaseAdmin niet-null zodat
+  // requireAuthUser werkt), geen poort, geen pg, vaste reasoning-model.
   process.env.NODE_ENV = 'test';
   process.env.OPENAI_API_KEY = 'test-key';
   process.env.OPENAI_MODEL = 'gpt-5.2';
-  delete process.env.VITE_PUBLIC_SUPABASE_URL;
-  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  process.env.VITE_PUBLIC_SUPABASE_URL = 'https://test.supabase.co';
+  process.env.VITE_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
   delete process.env.SUPABASE_ANON_KEY;
   delete process.env.SUPABASE_DB_URL;
 
@@ -91,20 +137,24 @@ function mockFetchSequence(responses) {
 }
 
 // POST /api/chat via node:http (niet via fetch — dat is gemockt voor OpenAI).
-function postChat(body) {
+// Standaard met geldige Authorization-header (Task #254); geef `auth: false` om
+// een ongeauthenticeerd verzoek te simuleren.
+function postChat(body, { auth = true } = {}) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const { port } = server.address();
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data),
+    };
+    if (auth) headers.Authorization = 'Bearer test-token';
     const req = http.request(
       {
         host: '127.0.0.1',
         port,
         path: '/api/chat',
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(data),
-        },
+        headers,
       },
       (res) => {
         let raw = '';
@@ -126,6 +176,19 @@ const REQUEST = {
   messages: [{ role: 'user', content: 'Leg het centrale-limietstelling uit.' }],
   max_tokens: 512,
 };
+
+describe('POST /api/chat — authenticatie (Task #254)', () => {
+  it('weigert een verzoek zonder Authorization-header met HTTP 401 en doet geen OpenAI-call', async () => {
+    const fetchMock = mockFetchSequence([
+      makeResp(200, chatCompletion({ content: 'Zou nooit verstuurd mogen worden.', finish: 'stop' })),
+    ]);
+
+    const res = await postChat(REQUEST, { auth: false });
+
+    expect(res.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/chat — bescherming tegen lege/afgekapte reasoning-respons', () => {
   it('retryt met groter budget bij afgekapte eerste respons en geeft de volledige tekst terug', async () => {

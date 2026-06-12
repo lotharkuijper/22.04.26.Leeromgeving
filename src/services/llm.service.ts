@@ -141,9 +141,15 @@ function _getLang(): 'nl' | 'en' {
 }
 
 async function callChatAPI(body: object): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const { supabase } = await import('../lib/supabase');
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+  } catch {}
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ lang: _getLang(), ...body }),
   });
 
