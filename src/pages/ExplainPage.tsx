@@ -55,7 +55,7 @@ function FeedbackBlock({
   lang,
 }: {
   feedback: string;
-  retrievedSources: Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number }>;
+  retrievedSources: Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number; fromEvidence?: boolean }>;
   retrievedStats: { threshold: number; maxSimilarity: number; candidatesConsidered: number; searchPerformed: boolean } | null;
   viewerRole?: string;
   t: (k: string) => string;
@@ -123,6 +123,8 @@ function FeedbackBlock({
         idPrefix={idPrefix}
         onOpenSource={handleOpenSource}
         slideWord={lang === 'en' ? 'slide' : 'dia'}
+        evidenceLabel={t('explain.sources.evidenceBadge')}
+        evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
       />
       {retrievedStats && (
         <div className="mt-4">
@@ -153,7 +155,7 @@ export function ExplainPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showAllConcepts, setShowAllConcepts] = useState(false);
   const [profileTimeout, setProfileTimeout] = useState(false);
-  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number }>>([]);
+  const [retrievedSources, setRetrievedSources] = useState<Array<{ title: string; similarity: number; documentId?: string; href?: string; slideStart?: number; slideEnd?: number; fromEvidence?: boolean }>>([]);
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [retrievedStats, setRetrievedStats] = useState<{
     threshold: number;
@@ -422,6 +424,12 @@ export function ExplainPage() {
       const storedEvidence = selectedConcept.id
         ? await fetchConceptEvidence(selectedConcept.id)
         : [];
+      // Documenten waarvan minstens één fragment bij de extractie is vastgelegd
+      // (concept_evidence). Hiermee tonen we per bron de "vastgelegd"-badge,
+      // los van of dezelfde bron ook live via RAG werd gevonden.
+      const evidenceDocIds = new Set(
+        storedEvidence.map(e => e.documentId).filter((id): id is string => !!id)
+      );
       const mergedMap = new Map<string, typeof ragResult.chunks[number]>();
       for (const ch of [...ragResult.chunks, ...storedEvidence]) {
         const key = ch.id || `${ch.documentId || ''}:${(ch.content || '').slice(0, 80)}`;
@@ -443,6 +451,7 @@ export function ExplainPage() {
       const allSources = chunks.map(chunk => ({
         ...chunkToDisplaySource(chunk),
         href: ragDocumentDownloadUrl(chunk.documentId),
+        fromEvidence: !!(chunk.documentId && evidenceDocIds.has(chunk.documentId)),
       }));
       // Studenten zien per bron-document maximaal de top 3 (de meest relevante
       // hoofdstukken). Alle chunks gaan nog wel mee als context naar het LLM.
@@ -962,7 +971,13 @@ export function ExplainPage() {
                   </div>
                   {retrievedSources.length > 0 && (
                     <div className="mt-5 pt-4 border-t border-red-200">
-                      <SourceList sources={retrievedSources} showSimilarity={false} />
+                      <SourceList
+                        sources={retrievedSources}
+                        showSimilarity={false}
+                        slideWord={lang === 'en' ? 'slide' : 'dia'}
+                        evidenceLabel={t('explain.sources.evidenceBadge')}
+                        evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
+                      />
                     </div>
                   )}
                 </div>

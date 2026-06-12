@@ -10,6 +10,8 @@ export interface SourceItem {
   slideStart?: number;
   /** Laatste dia van de PowerPoint-chunk; gelijk aan slideStart bij één dia. */
   slideEnd?: number;
+  /** True wanneer deze bron bij de begripsextractie als bewijs is vastgelegd (concept_evidence). */
+  fromEvidence?: boolean;
 }
 
 // "dia 4" of "dia 4–6" voor PowerPoint-bronnen; lege string als geen dia bekend is.
@@ -39,6 +41,10 @@ interface SourceListProps {
   uniqueLabel?: string;
   /** Woord voor dia-aanduiding bij PowerPoint-bronnen, bv. "dia"/"slide". Default 'dia'. */
   slideWord?: string;
+  /** Label op de badge voor bronnen die uit `concept_evidence` komen (fromEvidence). Leeg = geen badge. */
+  evidenceLabel?: string;
+  /** Tooltip (title-attribuut) voor de evidence-badge. */
+  evidenceTitle?: string;
 }
 
 function dedupeByDocument(items: SourceItem[]): SourceItem[] {
@@ -66,6 +72,8 @@ export function SourceList({
   onOpenSource,
   uniqueLabel = 'uniek',
   slideWord = 'dia',
+  evidenceLabel,
+  evidenceTitle,
 }: SourceListProps) {
   const [internalOpen, setInternalOpen] = useState(!defaultCollapsed);
   const open = openProp ?? internalOpen;
@@ -115,6 +123,15 @@ export function SourceList({
                 )}
                 {source.href && <ExternalLink className="w-3 h-3 inline ml-1 text-gray-400" />}
                 {meta}
+                {source.fromEvidence && evidenceLabel && (
+                  <span
+                    className="not-italic ml-2 inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-200 align-middle"
+                    title={evidenceTitle}
+                    data-testid={`badge-evidence-${num}`}
+                  >
+                    {evidenceLabel}
+                  </span>
+                )}
               </>
             );
             return (
