@@ -340,6 +340,23 @@ export function FeedbackPage() {
     setShowForm(false);
   };
 
+  // Open een vers notitie-formulier met een bepaald vak voorgeselecteerd, zodat
+  // een student vanuit elke sectie (of de algemene knop) op elk moment een eigen
+  // notitie kan toevoegen. Scrollt naar het formulier zodat het ook in beeld komt.
+  const openFormForSection = (sectionActivityType: string) => {
+    setEditingEntry(null);
+    setTitle('');
+    setContent('');
+    setActivityType(sectionActivityType);
+    setShowForm(true);
+    setTimeout(() => {
+      const el = document.querySelector('[data-testid="journal-form"]');
+      if (el && 'scrollIntoView' in el) {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 50);
+  };
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return new Intl.DateTimeFormat(lang === 'en' ? 'en-GB' : 'nl-NL', {
@@ -383,7 +400,7 @@ export function FeedbackPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowForm(!showForm)}
+          onClick={() => (showForm ? resetForm() : openFormForSection('reflection'))}
           data-testid="btn-toggle-form"
           className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg flex items-center gap-2"
         >
@@ -393,7 +410,7 @@ export function FeedbackPage() {
       </div>
 
       {showForm && (
-        <div className="chic-card p-6">
+        <div className="chic-card p-6" data-testid="journal-form">
           <h2 className="text-xl font-bold text-gray-900 mb-4">
             {editingEntry ? t('feedback.edit') + ' ' + t('feedback.entryTitle') : t('feedback.newEntry')}
           </h2>
@@ -496,14 +513,14 @@ export function FeedbackPage() {
                 className={`bg-white rounded-2xl border ${group.border} overflow-hidden`}
                 data-testid={`section-${group.key}`}
               >
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.key)}
-                  data-testid={`btn-toggle-section-${group.key}`}
-                  aria-expanded={isOpen}
-                  className={`w-full flex items-center justify-between gap-3 px-6 py-4 ${group.bg} hover:brightness-95 transition-all text-left`}
-                >
-                  <div className="flex items-center gap-3">
+                <div className={`w-full flex items-center justify-between gap-3 px-6 py-4 ${group.bg}`}>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.key)}
+                    data-testid={`btn-toggle-section-${group.key}`}
+                    aria-expanded={isOpen}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity"
+                  >
                     {isOpen ? (
                       <ChevronDown className={`w-5 h-5 ${group.color}`} />
                     ) : (
@@ -511,21 +528,45 @@ export function FeedbackPage() {
                     )}
                     <Icon className={`w-5 h-5 ${group.color}`} />
                     <h2 className={`text-lg font-bold ${group.color}`}>{groupLabel(group.key)}</h2>
+                  </button>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${group.badgeBg} ${group.badgeText}`}
+                      data-testid={`count-${group.key}`}
+                    >
+                      {items.length} {lang === 'en' ? (items.length === 1 ? 'note' : 'notes') : (items.length === 1 ? 'notitie' : 'notities')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openFormForSection(group.activityType)}
+                      data-testid={`btn-add-note-${group.key}`}
+                      title={t('feedback.addOwnNote')}
+                      aria-label={t('feedback.addOwnNoteFull')}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/70 ${group.color} border ${group.border} hover:bg-white transition-colors`}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">{t('feedback.addOwnNote')}</span>
+                    </button>
                   </div>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${group.badgeBg} ${group.badgeText}`}
-                    data-testid={`count-${group.key}`}
-                  >
-                    {items.length} {lang === 'en' ? (items.length === 1 ? 'note' : 'notes') : (items.length === 1 ? 'samenvatting' : 'samenvattingen')}
-                  </span>
-                </button>
+                </div>
 
                 {isOpen && (
                   <div className="border-t border-gray-100 divide-y divide-gray-100">
                     {items.length === 0 ? (
-                      <p className="px-6 py-5 text-sm text-gray-500" data-testid={`empty-${group.key}`}>
-                        {groupEmptyHint(group.key)}
-                      </p>
+                      <div className="px-6 py-5">
+                        <p className="text-sm text-gray-500" data-testid={`empty-${group.key}`}>
+                          {groupEmptyHint(group.key)}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => openFormForSection(group.activityType)}
+                          data-testid={`btn-add-note-empty-${group.key}`}
+                          className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors"
+                        >
+                          <Plus className="w-4 h-4" />
+                          {t('feedback.addOwnNoteFull')}
+                        </button>
+                      </div>
                     ) : (
                       items.map(entry => {
                         const expanded = openEntryIds.has(entry.id);
