@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -103,6 +103,19 @@ interface ConceptCardProps {
 
 function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deletingConceptId, onDeleteRequest, onDeleteConfirm, onDeleteCancel, isSelected, onToggleSelect, lang }: ConceptCardProps) {
   const { t } = useLanguage();
+  // Detecteer of de (op 2 regels afgeknotte) definitie daadwerkelijk is
+  // afgekapt, zodat we alleen dán een hover-tooltip met de volledige tekst
+  // tonen. Herberekent ook bij venstergrootte-wijziging.
+  const defRef = useRef<HTMLParagraphElement>(null);
+  const [defTruncated, setDefTruncated] = useState(false);
+  useEffect(() => {
+    const el = defRef.current;
+    if (!el) return;
+    const check = () => setDefTruncated(el.scrollHeight > el.clientHeight + 1);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, [concept.definition]);
   return (
     <div
       className={`p-4 border rounded-lg transition-colors ${isSelected ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
@@ -161,7 +174,24 @@ function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deleting
             </div>
           </div>
           {concept.definition && (
-            <p className="text-sm text-gray-600 line-clamp-2">{concept.definition}</p>
+            <div className="relative group/def">
+              <p
+                ref={defRef}
+                className={`text-sm text-gray-600 line-clamp-2 ${defTruncated ? 'cursor-help' : ''}`}
+                data-testid={`text-concept-definition-${concept.id}`}
+              >
+                {concept.definition}
+              </p>
+              {defTruncated && (
+                <div
+                  role="tooltip"
+                  className="absolute left-0 top-full z-30 hidden group-hover/def:block w-80 max-w-[calc(100vw-3rem)] max-h-72 overflow-auto rounded-lg bg-gray-900 text-gray-50 text-xs leading-relaxed p-3 shadow-xl whitespace-pre-wrap break-words"
+                  data-testid={`tooltip-concept-definition-${concept.id}`}
+                >
+                  {concept.definition}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
