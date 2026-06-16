@@ -61,6 +61,14 @@ import {
 import { promises as dnsPromises } from 'node:dns';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from './openaiSampling.js';
 import { computeChatConfig } from './chatConfig.js';
+import {
+  normalizeTargetLang,
+  normalizePageKey,
+  normalizeSourceText,
+  hashSource,
+  buildTranslationPrompt,
+  MAX_SOURCE_CHARS as TRANSLATION_MAX_SOURCE_CHARS,
+} from './documentTranslation.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
@@ -1485,15 +1493,13 @@ app.get('/api/rag/documents/:documentId/download', async (req, res) => {
   }
 });
 
-// GET /api/rag/documents/:documentId/view — bekijkbare versie voor de in-app
-// documentviewer (Task #209). Zelfde toegangscontrole als de download-route.
-// - pdf        → signed URL van het origineel
-// - docx/pptx  → gecachte PDF-rendition (LibreOffice headless), signed URL
-// - txt/md     → platte tekst inline
-app.get('/api/rag/documents/:documentId/view', async (req, res) => {
-  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+// Gedeelde toegangscontrole voor de document-viewer-routes (/view én
+// /translate): laadt de documentrij en dwingt exact dezelfde folder_permissions-
+// regels af als de download-route. Stuurt zelf het foutantwoord en geeft dan
+// null terug; bij succes retourneert het { doc, role, isAdmin }.
+async function loadViewableDocument(req, res) {
   const auth = await requireAuthUser(req, res);
-  if (!auth) return;
+  if (!auth) return null;
   const role = auth.profile?.role || 'student';
   const isAdmin = role === 'admin' || auth.profile?.email === SUPERUSER_EMAIL;
   const { documentId } = req.params;
@@ -1503,21 +1509,40 @@ app.get('/api/rag/documents/:documentId/view', async (req, res) => {
       .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id, updated_at')
       .eq('id', documentId)
       .maybeSingle();
-    if (!doc) return res.status(404).json({ error: 'Document niet gevonden.' });
+    if (!doc) { res.status(404).json({ error: 'Document niet gevonden.' }); return null; }
     if (doc.bucket && doc.bucket !== 'rag_sources') {
-      return res.status(403).json({ error: 'Dit document is geen RAG-bron.' });
+      res.status(403).json({ error: 'Dit document is geen RAG-bron.' }); return null;
     }
     if (!isAdmin) {
-      if (!doc.folder_id) return res.status(403).json({ error: 'Geen toegang tot dit document.' });
+      if (!doc.folder_id) { res.status(403).json({ error: 'Geen toegang tot dit document.' }); return null; }
       const { data: perm } = await supabaseAdmin
         .from('folder_permissions')
         .select('can_view')
         .eq('folder_id', doc.folder_id)
         .eq('role', role)
         .maybeSingle();
-      if (!perm?.can_view) return res.status(403).json({ error: 'Geen toegang tot dit document.' });
+      if (!perm?.can_view) { res.status(403).json({ error: 'Geen toegang tot dit document.' }); return null; }
     }
+    return { doc, role, isAdmin };
+  } catch (err) {
+    console.error('[viewer-auth] documenttoegang controleren mislukt:', err);
+    res.status(500).json({ error: 'Kon documenttoegang niet controleren.' });
+    return null;
+  }
+}
 
+// GET /api/rag/documents/:documentId/view — bekijkbare versie voor de in-app
+// documentviewer (Task #209). Zelfde toegangscontrole als de download-route.
+// - pdf        → signed URL van het origineel
+// - docx/pptx  → gecachte PDF-rendition (LibreOffice headless), signed URL
+// - txt/md     → platte tekst inline
+app.get('/api/rag/documents/:documentId/view', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const loaded = await loadViewableDocument(req, res);
+  if (!loaded) return;
+  const { doc } = loaded;
+  const { documentId } = req.params;
+  try {
     const title = String(doc.title || doc.filename || 'document');
     // Web-bron (Task #234): geen renderbaar bestand — geef de externe URL terug
     // zodat de viewer een link toont in plaats van te proberen te renderen.
@@ -1589,6 +1614,75 @@ app.get('/api/rag/documents/:documentId/view', async (req, res) => {
     // wel volledig serverside loggen voor debugging.
     console.error('[view] documentweergave mislukt:', err);
     return res.status(500).json({ error: 'Kon het document niet voorbereiden voor weergave.' });
+  }
+});
+
+// POST /api/rag/documents/:documentId/translate — vertaalt op aanvraag een stuk
+// reeds-geëxtraheerde bron-tekst (door de client uit de huidige pagina/dia
+// gehaald) naar een doeltaal en cachet het resultaat per (document, eenheid,
+// taal, bron-hash). Zelfde toegangscontrole als /view; fail-closed zonder Azure.
+app.post('/api/rag/documents/:documentId/translate', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
+  const loaded = await loadViewableDocument(req, res);
+  if (!loaded) return;
+  const { documentId } = req.params;
+
+  const targetLang = normalizeTargetLang(req.body?.targetLang);
+  if (!targetLang) return res.status(400).json({ error: 'Onbekende doeltaal.' });
+  const pageKey = normalizePageKey(req.body?.pageKey);
+  if (!pageKey) return res.status(400).json({ error: 'Ongeldige pagina-aanduiding.' });
+  const text = normalizeSourceText(typeof req.body?.text === 'string' ? req.body.text : '');
+  if (!text) return res.status(400).json({ error: 'Geen tekst om te vertalen.' });
+  if (text.length > TRANSLATION_MAX_SOURCE_CHARS) {
+    return res.status(413).json({ error: 'Tekstfragment te groot om te vertalen.' });
+  }
+  const sourceType = typeof req.body?.sourceType === 'string' ? req.body.sourceType : '';
+  const sourceHash = hashSource(text);
+
+  try {
+    // Cache-hit? (service-role: deze tabel heeft bewust geen client-leesbeleid).
+    const { data: cached } = await supabaseAdmin
+      .from('document_translations')
+      .select('translated_text')
+      .eq('document_id', documentId)
+      .eq('page_key', pageKey)
+      .eq('target_lang', targetLang)
+      .eq('source_hash', sourceHash)
+      .maybeSingle();
+    if (cached?.translated_text) {
+      return res.json({ translated: cached.translated_text, cached: true, targetLang });
+    }
+
+    const body = {
+      model: OPENAI_MODEL,
+      messages: [
+        { role: 'system', content: buildTranslationPrompt(targetLang, sourceType) },
+        { role: 'user', content: text },
+      ],
+      ...chatModelParams({ temperature: 0.2, maxTokens: 4000 }),
+    };
+    const resp = await openaiChatCompletion(body);
+    const data = await resp.json();
+    if (!resp.ok) {
+      console.warn(`[translate] LLM-status ${resp.status} voor doc ${documentId} ${pageKey}->${targetLang}`);
+      return res.status(502).json({ error: 'Vertaling mislukt.' });
+    }
+    const translated = data?.choices?.[0]?.message?.content?.trim();
+    if (!translated) return res.status(502).json({ error: 'Vertaling leeg.' });
+
+    // Persist (idempotent op de unique-constraint).
+    await supabaseAdmin
+      .from('document_translations')
+      .upsert(
+        { document_id: documentId, page_key: pageKey, target_lang: targetLang, source_hash: sourceHash, translated_text: translated },
+        { onConflict: 'document_id,page_key,target_lang,source_hash' },
+      );
+
+    return res.json({ translated, cached: false, targetLang });
+  } catch (err) {
+    console.error('[translate] vertaling mislukt:', err);
+    return res.status(500).json({ error: 'Kon de vertaling niet maken.' });
   }
 });
 
