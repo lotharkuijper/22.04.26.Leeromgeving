@@ -9,6 +9,7 @@ import {
   hashSource,
   buildTranslationPrompt,
   MAX_SOURCE_CHARS,
+  TRANSLATION_FORMAT_VERSION,
 } from '../documentTranslation.js';
 
 describe('documentTranslation helpers', () => {
@@ -73,6 +74,14 @@ describe('documentTranslation helpers', () => {
       expect(a).not.toBe(d);
       expect(a).toMatch(/^[0-9a-f]{64}$/);
     });
+
+    it('hash folds in the format version so a bump invalidates old cache rows', () => {
+      // Verschillende versies over dezelfde bron => verschillende hash.
+      expect(hashSource('same text', 1)).not.toBe(hashSource('same text', 2));
+      // Default gebruikt de huidige formaatversie.
+      expect(hashSource('same text')).toBe(hashSource('same text', TRANSLATION_FORMAT_VERSION));
+      expect(TRANSLATION_FORMAT_VERSION).toBeGreaterThanOrEqual(2);
+    });
   });
 
   describe('buildTranslationPrompt', () => {
@@ -89,6 +98,15 @@ describe('documentTranslation helpers', () => {
     it('falls back gracefully for an unknown code', () => {
       const p = buildTranslationPrompt('xx', 'pdf');
       expect(p).toContain('the requested language');
+    });
+    it('instructs the model to emit formulas as LaTeX and never translate the math', () => {
+      const p = buildTranslationPrompt('nl', 'pdf');
+      expect(p).toContain('LaTeX');
+      expect(p).toContain('$...$');
+      expect(p).toContain('$$...$$');
+      expect(p).toMatch(/NEVER translate or change the mathematical content/i);
+      // Beschrijvende woord-indices mogen wél mee, symbolische niet.
+      expect(p).toMatch(/word-based subscripts/i);
     });
   });
 

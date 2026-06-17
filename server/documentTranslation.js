@@ -58,10 +58,20 @@ export function normalizeSourceText(text) {
   return text.replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// Deterministische SHA-256 over de genormaliseerde bron-tekst. Bij een
-// gewijzigde bron verandert de hash, dus de cache invalideert vanzelf.
-export function hashSource(text) {
-  return createHash('sha256').update(normalizeSourceText(text), 'utf8').digest('hex');
+// Deterministische SHA-256 over de genormaliseerde bron-tekst (+ formaatversie).
+// Bij een gewijzigde bron óf een nieuwe formaatversie verandert de hash, dus de
+// cache invalideert vanzelf.
+// Versie van het vertaal-uitvoerformaat. Bump dit wanneer de prompt of het
+// uitvoerformaat verandert: de versie wordt in de bron-hash gevouwen zodat oude
+// cache-rijen (met een ander formaat) niet meer als geldige treffer gelden en de
+// tekst opnieuw wordt vertaald. v1 = platte tekst (oorspronkelijk),
+// v2 = Markdown + LaTeX-formules.
+export const TRANSLATION_FORMAT_VERSION = 2;
+
+export function hashSource(text, version = TRANSLATION_FORMAT_VERSION) {
+  return createHash('sha256')
+    .update(`v${version}\n${normalizeSourceText(text)}`, 'utf8')
+    .digest('hex');
 }
 
 // Bouw de system-prompt voor de vertaling. Strikt: alleen vertalen, geen
@@ -75,9 +85,15 @@ export function buildTranslationPrompt(targetCode, sourceType) {
     'Rules:',
     `- Output ONLY the translation in ${target}. No preamble, no notes, no explanations, no original text.`,
     '- Translate faithfully; do not summarize, add, or omit content.',
-    '- Keep proper nouns, author names, citations, formulas, code, units and numbers unchanged.',
-    '- Preserve line breaks, bullet/list structure and paragraph boundaries where possible.',
+    '- Keep proper nouns, author names, citations, code, units and numbers unchanged.',
     '- Leave URLs and email addresses untouched.',
     '- If a fragment is already in the target language, keep it as-is.',
+    '- Preserve line breaks, bullet/list structure and paragraph boundaries. You may use light Markdown (lists, tables, headings) to keep that structure.',
+    'Mathematics and formulas:',
+    '- Mathematics is universal: NEVER translate or change the mathematical content of a formula. Keep every symbol, operator, variable, Greek letter, function name (sin, cos, log, …), number and unit exactly as in the source.',
+    '- Render every mathematical expression as LaTeX: use $...$ for inline math and $$...$$ for display (standalone) formulas. Wrap ALL math in these delimiters, even a single symbol or variable mentioned inside prose.',
+    '- Use only standard KaTeX-compatible LaTeX (e.g. \\frac, ^, _, \\sqrt, \\sum, \\int, Greek letters). Do not use custom macros, packages or environments that KaTeX cannot render.',
+    '- The source text is extracted from a PDF, so formulas may be garbled (broken spacing, lost super/subscripts, stray characters). Reconstruct the intended formula as correct LaTeX when you are confident; if unsure, keep the original characters verbatim inside the math delimiters rather than guessing.',
+    '- You MAY translate descriptive, word-based subscripts or labels (e.g. a subscript spelled out as a real word) into the target language, but keep single-letter or symbolic indices (i, j, k, n, t, x, y, …) unchanged.',
   ].join('\n');
 }

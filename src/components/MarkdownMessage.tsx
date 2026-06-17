@@ -11,6 +11,7 @@ interface MarkdownMessageProps {
   onCitationClick?: (index: number) => void;
   onSourceOpen?: (source: CitationSource) => void;
   className?: string;
+  style?: React.CSSProperties;
 }
 
 export function MarkdownMessage({
@@ -19,6 +20,7 @@ export function MarkdownMessage({
   onCitationClick,
   onSourceOpen,
   className,
+  style,
 }: MarkdownMessageProps) {
   const wrap = (children: React.ReactNode) =>
     sources.length > 0 ? (
@@ -46,6 +48,7 @@ export function MarkdownMessage({
         'prose-pre:bg-gray-900 prose-pre:text-gray-100 ' +
         'prose-a:text-blue-600 prose-a:underline'
       }
+      style={style}
       data-testid="markdown-message"
     >
       <ReactMarkdown

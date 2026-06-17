@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { X, ChevronLeft, ChevronRight, Loader2, AlertCircle, Download, FileText, Languages, Maximize2, Minimize2 } from 'lucide-react';
 import { openRagDocument } from '../services/rag.service';
 import { TRANSLATION_LANGUAGES, TRANSLATION_LANGUAGE_CODES, nativeLangName } from '../lib/translationLanguages';
+import { MarkdownMessage } from './MarkdownMessage';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -639,13 +640,18 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
               )}
               {!translating && !translateError && translatedText !== null && translatedText !== '' && (
                 <div
-                  className="whitespace-pre-wrap break-words text-gray-800"
-                  style={{ fontSize: `${fontScale}rem`, lineHeight: 1.7 }}
+                  className="break-words"
                   dir={RTL_LANGS.has(targetLang) ? 'rtl' : 'ltr'}
                   lang={targetLang}
                   data-testid="text-translation-content"
                 >
-                  {translatedText}
+                  {/* Render via de wiskunde-bewuste Markdown-renderer zodat $…$ en
+                      $$…$$ als KaTeX-formules verschijnen. fontScale schaalt de
+                      prose-root inline; de em-gebaseerde kinderen schalen mee. */}
+                  <MarkdownMessage
+                    content={translatedText}
+                    style={{ fontSize: `${fontScale}rem` }}
+                  />
                 </div>
               )}
             </div>
