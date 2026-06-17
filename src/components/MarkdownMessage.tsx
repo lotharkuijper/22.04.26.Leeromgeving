@@ -5,6 +5,42 @@ import rehypeKatex from 'rehype-katex';
 import { CitationText, type CitationSource } from './CitationText';
 import { prepareLatex } from '../lib/mathDelimiters';
 
+// Kleine, dependency-vrije remark-stap (vervangt remark-breaks): zet enkele
+// regeleindes binnen tekst-nodes om naar harde `break`-nodes, zodat
+// regel-per-regel bronmateriaal (dichte dia's/pagina's) zijn regelindeling
+// behoudt in plaats van in één paragraaf samen te vloeien. Draait ná
+// remark-math, dus formule-nodes ($…$, $$…$$) blijven onaangeroerd: we splitsen
+// uitsluitend `text`-nodes.
+interface MdastNode {
+  type: string;
+  value?: string;
+  children?: MdastNode[];
+}
+
+function splitTextNodes(node: MdastNode): void {
+  if (!node.children) return;
+  const next: MdastNode[] = [];
+  for (const child of node.children) {
+    if (child.type === 'text' && typeof child.value === 'string' && child.value.includes('\n')) {
+      const segments = child.value.split('\n');
+      segments.forEach((seg, i) => {
+        if (i > 0) next.push({ type: 'break' });
+        if (seg) next.push({ type: 'text', value: seg });
+      });
+    } else {
+      splitTextNodes(child);
+      next.push(child);
+    }
+  }
+  node.children = next;
+}
+
+function remarkHardBreaks() {
+  return (tree: MdastNode) => {
+    splitTextNodes(tree);
+  };
+}
+
 interface MarkdownMessageProps {
   content: string;
   sources?: CitationSource[];
@@ -12,6 +48,8 @@ interface MarkdownMessageProps {
   onSourceOpen?: (source: CitationSource) => void;
   className?: string;
   style?: React.CSSProperties;
+  /** Behoud enkele regeleindes als harde breaks (regel-per-regel bronmateriaal). */
+  hardBreaks?: boolean;
 }
 
 export function MarkdownMessage({
@@ -21,6 +59,7 @@ export function MarkdownMessage({
   onSourceOpen,
   className,
   style,
+  hardBreaks = false,
 }: MarkdownMessageProps) {
   const wrap = (children: React.ReactNode) =>
     sources.length > 0 ? (
@@ -52,7 +91,7 @@ export function MarkdownMessage({
       data-testid="markdown-message"
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={hardBreaks ? [remarkGfm, remarkMath, remarkHardBreaks] : [remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         skipHtml
         components={{

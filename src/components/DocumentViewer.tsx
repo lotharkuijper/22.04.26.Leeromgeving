@@ -651,6 +651,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
                   <MarkdownMessage
                     content={translatedText}
                     style={{ fontSize: `${fontScale}rem` }}
+                    hardBreaks
                   />
                 </div>
               )}
