@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLanguage } from '../i18n';
-import { Download, Search, FileText, BookOpen, FolderOpen } from 'lucide-react';
+import { Download, Search, FileText, BookOpen, FolderOpen, ExternalLink } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { STORAGE_CONFIG } from '../config/storage.config';
 import { formatFileSize, getFileIcon } from '../services/dataset.service';
@@ -32,6 +32,17 @@ function toResource(doc: any): Resource {
     created_at: doc.created_at,
     folder_name: doc.document_folders?.name,
   };
+}
+
+// Web-bronnen bewaren hun URL in file_path. Laat alleen veilige http(s)-links toe
+// zodat een onverwachte rij (bijv. een javascript:-URL) geen script kan uitvoeren.
+function safeWebHref(raw: string): string | null {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch {
+    return null;
+  }
 }
 
 export function ResourcesPage() {
@@ -117,7 +128,9 @@ export function ResourcesPage() {
   const filteredRag = filter(ragFiles);
   const filteredOther = filter(otherDocs);
 
-  const ResourceRow = ({ resource }: { resource: Resource }) => (
+  const ResourceRow = ({ resource }: { resource: Resource }) => {
+    const webHref = resource.file_type === 'web' ? safeWebHref(resource.file_path) : null;
+    return (
     <div
       className="flex items-center gap-3 p-3 border border-gray-100 rounded-lg hover:bg-gray-50 transition-colors"
       data-testid={`resource-row-${resource.id}`}
@@ -139,16 +152,40 @@ export function ResourcesPage() {
           <p className="text-xs text-gray-500 mt-0.5 truncate">{resource.description}</p>
         )}
       </div>
-      <button
-        onClick={() => handleDownload(resource)}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors flex-shrink-0"
-        data-testid={`download-btn-${resource.id}`}
-      >
-        <Download className="w-3.5 h-3.5" />
-        {t('resources.download')}
-      </button>
+      {resource.file_type === 'web' ? (
+        webHref ? (
+          <a
+            href={webHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors flex-shrink-0"
+            data-testid={`link-btn-${resource.id}`}
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            {t('resources.openLink')}
+          </a>
+        ) : (
+          <span
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-200 text-gray-400 text-xs rounded-lg cursor-not-allowed flex-shrink-0"
+            data-testid={`link-btn-disabled-${resource.id}`}
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            {t('resources.openLink')}
+          </span>
+        )
+      ) : (
+        <button
+          onClick={() => handleDownload(resource)}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors flex-shrink-0"
+          data-testid={`download-btn-${resource.id}`}
+        >
+          <Download className="w-3.5 h-3.5" />
+          {t('resources.download')}
+        </button>
+      )}
     </div>
-  );
+    );
+  };
 
   const EmptyState = ({ search }: { search: boolean }) => (
     <p className="text-sm text-gray-400 text-center py-8">
