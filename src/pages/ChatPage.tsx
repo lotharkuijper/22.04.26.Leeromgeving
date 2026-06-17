@@ -136,6 +136,16 @@ export function ChatPage() {
   const [viewerContext, setViewerContext] = useState<ViewerContext | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize van het chat-invoerveld: groeit mee met de tekst tot ~8 regels
+  // (max 200px) en gaat daarna scrollen, zodat langere vragen comfortabel passen.
+  useEffect(() => {
+    const ta = chatInputRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+  }, [input]);
   const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
 
   useEffect(() => {
@@ -821,15 +831,24 @@ export function ChatPage() {
               <div className="mb-3">
                 <RAGStatusIndicator strictMode={ragSettings.chat.rag_strict_mode} />
               </div>
-              <div className="flex gap-3">
-                <input
-                  type="text"
+              <div className="flex gap-3 items-end">
+                <textarea
+                  ref={chatInputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !loading && handleSendMessage()}
+                  onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing) return;
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (!loading) handleSendMessage();
+                    }
+                  }}
                   placeholder={t('chat.inputPlaceholder')}
-                  className="flex-1 px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none"
+                  aria-label={t('chat.inputPlaceholder')}
+                  rows={3}
+                  className="flex-1 px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all outline-none resize-none leading-relaxed min-h-[88px] max-h-[200px] overflow-y-auto"
                   disabled={loading}
+                  data-testid="input-chat-message"
                 />
                 <button
                   onClick={handleSendMessage}
