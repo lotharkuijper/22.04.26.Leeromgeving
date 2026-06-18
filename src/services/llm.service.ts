@@ -1,3 +1,6 @@
+import { isSupportedLang, getLanguageMeta, type Lang } from '../i18n/languages';
+import { tStatic } from '../i18n/translations';
+
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -21,7 +24,7 @@ export class LLMError extends Error {
   }
 }
 
-type LlmErrLang = 'nl' | 'en';
+type LlmErrLang = string;
 
 export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title: string; detail?: string } {
   const nl = lang !== 'en';
@@ -132,10 +135,10 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
   return { title: nl ? 'Er ging iets mis bij het taalmodel.' : 'Something went wrong with the language model.' };
 }
 
-function _getLang(): 'nl' | 'en' {
+function _getLang(): Lang {
   try {
     const v = localStorage.getItem('lair-vu-lang');
-    if (v === 'nl' || v === 'en') return v;
+    if (isSupportedLang(v)) return v;
   } catch {}
   return 'nl';
 }
@@ -363,14 +366,26 @@ export interface AnswerEvaluation {
   score: number; // 0–100
 }
 
-const difficultyLabel = (d: 'easy' | 'medium' | 'hard', lang: 'nl' | 'en' = 'nl') =>
-  lang === 'en'
+const difficultyLabel = (d: 'easy' | 'medium' | 'hard', lang: string = 'nl') =>
+  lang !== 'nl'
     ? (d === 'easy' ? 'easy' : d === 'medium' ? 'medium' : 'hard')
     : (d === 'easy' ? 'makkelijke' : d === 'medium' ? 'gemiddelde' : 'moeilijke');
 
 const SECOND_PERSON_RULE_NL = `Aanspraakvorm (volg STRIKT): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT "de student", "deze student" of "de student heeft" — schrijf alsof je het één-op-één tegen de student zegt.`;
 const SECOND_PERSON_RULE_EN = `Addressing rule (follow STRICTLY): address the student directly using "you" / "your". NEVER use "the student", "this student" or "the student has" — write as if giving feedback one-on-one.`;
-const getSecondPersonRule = () => _getLang() === 'en' ? SECOND_PERSON_RULE_EN : SECOND_PERSON_RULE_NL;
+const getSecondPersonRule = () => _getLang() !== 'nl' ? SECOND_PERSON_RULE_EN : SECOND_PERSON_RULE_NL;
+
+// Voor talen anders dan NL/EN: instrueer het model expliciet in welke taal het
+// de (AI-gegenereerde) uitvoer moet schrijven. NL en EN hebben al een eigen
+// volledige prompt, dus daar is geen extra instructie nodig. Wordt o.a. gebruikt
+// bij quizgeneratie, die de systeemprompt overslaat (skipSystemPrompt) en dus
+// niet automatisch de server-taalinstructie meekrijgt.
+function outputLanguageDirective(lang: Lang): string {
+  if (lang === 'nl' || lang === 'en') return '';
+  const name = getLanguageMeta(lang)?.english;
+  if (!name) return '';
+  return `\n\nLANGUAGE REQUIREMENT (follow strictly): Write all human-readable text — every question, every answer option, every explanation, model answer and rubric — in ${name}. Do not write in English or Dutch. Keep the JSON structure intact: do NOT translate or rename any JSON property names/keys (they must stay exactly as specified, in English), and keep fixed/structural values exactly as generated — in particular the \`type\` field (e.g. "mcq", "open", "casus") and any numeric fields or indices. Translate ONLY the human-readable text values.`;
+}
 
 function buildContextSection(ragContext?: string, ragStrictMode?: boolean): string {
   if (ragContext) {
@@ -509,8 +524,9 @@ export async function generateQuiz(
   systemPromptOverride?: string,
 ): Promise<QuizQuestion[]> {
   const lang = _getLang();
+  const en = lang !== 'nl';
   const contextSection = buildContextSection(ragContext, ragStrictMode);
-  const topicsLabel = lang === 'en'
+  const topicsLabel = en
     ? (topics.length === 1 ? `the topic "${topics[0]}"` : `the topics ${topics.map(t => `"${t}"`).join(', ')}`)
     : (topics.length === 1 ? `het onderwerp "${topics[0]}"` : `de onderwerpen ${topics.map(t => `"${t}"`).join(', ')}`);
   const diff = difficultyLabel(difficulty, lang);
@@ -520,7 +536,7 @@ export async function generateQuiz(
   let maxTokens = 2048;
 
   if (questionType === 'mcq') {
-    promptCore = lang === 'en'
+    promptCore = en
       ? `Generate ${numQuestions} ${diff} multiple-choice questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
 
 For each question:
@@ -535,7 +551,7 @@ Voor elke vraag:
 - Geef exact 4 antwoordopties (A, B, C, D).
 - Geef aan welk antwoord correct is (0, 1, 2 of 3).
 - Geef een korte uitleg waarom dit antwoord correct is. Schrijf de uitleg in tweede persoon ("je"/"jij") gericht aan de student.`;
-    exampleJson = lang === 'en'
+    exampleJson = en
       ? `[
   {
     "type": "mcq",
@@ -555,7 +571,7 @@ Voor elke vraag:
   }
 ]`;
   } else if (questionType === 'open') {
-    promptCore = lang === 'en'
+    promptCore = en
       ? `Generate ${numQuestions} ${diff} open questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
 
 For each question:
@@ -568,7 +584,7 @@ Voor elke vraag:
 - Stel een open vraag (geen meerkeuze) waarop de student in 3–8 zinnen een inhoudelijk antwoord kan geven.
 - Geef een "modelAnswer": een ideaal antwoord van ongeveer 4–8 zinnen dat de kernpunten bevat.
 - Geef een "rubric": korte beoordelingscriteria (3–5 bullets, in één string met newlines) waarmee een beoordelaar later het studentantwoord kan scoren.`;
-    exampleJson = lang === 'en'
+    exampleJson = en
       ? `[
   {
     "type": "open",
@@ -586,7 +602,7 @@ Voor elke vraag:
   }
 ]`;
   } else {
-    promptCore = lang === 'en'
+    promptCore = en
       ? `Generate ${numQuestions} ${diff} case study questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
 
 For each case:
@@ -601,7 +617,7 @@ Voor elke casus:
 - Stel daarna één duidelijke vraag ("question") die de student dwingt het probleem analytisch te benaderen.
 - Geef een "modelAnswer": een ideaal antwoord van ongeveer 5–8 zinnen.
 - Geef een "rubric": korte beoordelingscriteria (3–5 bullets, in één string met newlines).`;
-    exampleJson = lang === 'en'
+    exampleJson = en
       ? `[
   {
     "type": "casus",
@@ -627,14 +643,14 @@ Voor elke casus:
 
 ${getSecondPersonRule()}
 
-${lang === 'en'
+${en
     ? `Format your answer as a JSON array with this structure:\n${exampleJson}\n\nIMPORTANT: Return ONLY the JSON array, no extra text, no markdown code block.`
     : `Formatteer je antwoord als een JSON array met deze structuur:\n${exampleJson}\n\nBELANGRIJK: Geef ALLEEN de JSON array terug, geen extra tekst, geen markdown-codeblok.`}`;
 
   try {
     const data = await callChatAPI({
       model: undefined,
-      messages: [{ role: 'user', content: quizPrompt }],
+      messages: [{ role: 'user', content: quizPrompt + outputLanguageDirective(lang) }],
       temperature: 0.7,
       max_tokens: maxTokens,
       skipSystemPrompt: true,
@@ -645,9 +661,16 @@ ${lang === 'en'
 
     const content = data.choices[0]?.message?.content || '';
     const parsed = extractJSON<QuizQuestion[]>(content, 'array');
-    // Defensief: zorg dat elk vraag-object het type heeft (sommige modellen
-    // vergeten dat veld bij MCQ omdat dat de oude default was).
-    const typed = parsed.map((q: any) => ({ ...q, type: q.type || questionType })) as QuizQuestion[];
+    // Defensief: zorg dat elk vraag-object een geldig type heeft. Sommige
+    // modellen vergeten het veld (oude MCQ-default), en bij meertalige output
+    // kan het model de enum-waarde vertalen ("mcq" -> "keuzevraag"); val in
+    // beide gevallen terug op het gevraagde questionType i.p.v. een ongeldige
+    // (vertaalde) waarde te accepteren.
+    const VALID_QUESTION_TYPES = new Set<QuestionType>(['mcq', 'open', 'casus']);
+    const typed = parsed.map((q: any) => ({
+      ...q,
+      type: VALID_QUESTION_TYPES.has(q?.type) ? q.type : questionType,
+    })) as QuizQuestion[];
     // Veiligheidsfilter: gooi weigeringsvragen eruit die het model per ongeluk
     // als echte quiz-vraag heeft opgemaakt.
     return typed.filter(q => !isRefusalQuestion(q));
@@ -745,38 +768,31 @@ function evaluateNumericAnswer(
   modelAnswer: string,
 ): AnswerEvaluation {
   const lang = _getLang();
-  const en = lang === 'en';
   const tolerance = Number.isFinite(toleranceRaw as number) && (toleranceRaw as number) > 0
     ? (toleranceRaw as number)
     : 0;
   const student = parseNumericAnswer(studentAnswer);
   const formatExpected = () => {
     const t = tolerance > 0
-      ? (en ? ` (tolerance ± ${tolerance})` : ` (tolerantie ± ${tolerance})`)
+      ? tStatic(lang, 'quiz.numericEval.toleranceSuffix', { tol: tolerance })
       : '';
     return `${expected}${t}`;
   };
   const methodNote = tolerance > 0
-    ? (en
-        ? `Evaluation method: numeric tolerance check (±${tolerance}, based on the ItemBank field extol).`
-        : `Beoordelingsmethode: numerieke tolerantie-check (±${tolerance}, op basis van het ItemBank-veld extol).`)
-    : (en
-        ? `Evaluation method: strict numeric comparison (no extol tolerance specified in the ItemBank).`
-        : `Beoordelingsmethode: strikte numerieke vergelijking (geen extol-tolerantie opgegeven in de ItemBank).`);
+    ? tStatic(lang, 'quiz.numericEval.methodTolerance', { tol: tolerance })
+    : tStatic(lang, 'quiz.numericEval.methodStrict');
   const modelNote = modelAnswer && modelAnswer.trim().length > 0
-    ? (en
-        ? `\n\nExplanation from the model answer:\n${modelAnswer.trim()}`
-        : `\n\nUitleg uit het modelantwoord:\n${modelAnswer.trim()}`)
+    ? tStatic(lang, 'quiz.numericEval.modelExplanation', { model: modelAnswer.trim() })
     : '';
 
   if (student === null) {
     return {
-      feedback: en
-        ? `You did not provide a numeric answer that I could parse. The expected answer is ${formatExpected()}. ${methodNote}${modelNote}`
-        : `Je hebt geen numeriek antwoord gegeven dat ik kon herleiden. Het verwachte antwoord is ${formatExpected()}. ${methodNote}${modelNote}`,
-      feedforward: en
-        ? `Write your answer as a single number (e.g. ${expected}). A brief explanation is fine, but make sure the number appears clearly in your answer.`
-        : `Schrijf je antwoord als één getal (bijv. ${expected}). Een korte toelichting mag, maar zorg dat het getal duidelijk in je antwoord staat.`,
+      feedback: tStatic(lang, 'quiz.numericEval.noNumberFeedback', {
+        expected: formatExpected(),
+        method: methodNote,
+        model: modelNote,
+      }),
+      feedforward: tStatic(lang, 'quiz.numericEval.noNumberFeedforward', { expected }),
       score: 0,
     };
   }
@@ -787,23 +803,26 @@ function evaluateNumericAnswer(
 
   if (correct) {
     return {
-      feedback: en
-        ? `Your answer ${student} matches the expected answer ${formatExpected()}. ${methodNote}${modelNote}`
-        : `Je antwoord ${student} komt overeen met het verwachte antwoord ${formatExpected()}. ${methodNote}${modelNote}`,
-      feedforward: en
-        ? `Well done — with similar numeric questions, always double-check your intermediate steps and units.`
-        : `Goed zo — bij vergelijkbare numerieke vragen blijf je telkens controleren of je tussenstappen en eenheden kloppen.`,
+      feedback: tStatic(lang, 'quiz.numericEval.correctFeedback', {
+        student,
+        expected: formatExpected(),
+        method: methodNote,
+        model: modelNote,
+      }),
+      feedforward: tStatic(lang, 'quiz.numericEval.correctFeedforward'),
       score: 100,
     };
   }
 
   return {
-    feedback: en
-      ? `Your answer ${student} differs from the expected answer ${formatExpected()}; the difference is ${Number(diff.toPrecision(4))}. ${methodNote}${modelNote}`
-      : `Je antwoord ${student} wijkt af van het verwachte antwoord ${formatExpected()}; het verschil is ${Number(diff.toPrecision(4))}. ${methodNote}${modelNote}`,
-    feedforward: en
-      ? `Redo the calculation step by step and pay attention to units, rounding, and exactly what number is being asked for.`
-      : `Reken de berekening stap voor stap opnieuw door en let op eenheden, afronding en welk getal precies gevraagd wordt.`,
+    feedback: tStatic(lang, 'quiz.numericEval.wrongFeedback', {
+      student,
+      expected: formatExpected(),
+      diff: Number(diff.toPrecision(4)),
+      method: methodNote,
+      model: modelNote,
+    }),
+    feedforward: tStatic(lang, 'quiz.numericEval.wrongFeedforward'),
     score: 0,
   };
 }
@@ -843,14 +862,9 @@ export async function evaluateOpenAnswer(
   // tegen het ShareStats-modelantwoord (Task #67).
   if (question.source === 'itembank') {
     const lang = _getLang();
-    const en = lang === 'en';
     const methodNote = question.extype === 'cloze'
-      ? (en
-          ? `Evaluation method: textual comparison with the ShareStats model answer (cloze question from the ItemBank).`
-          : `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (cloze-vraag uit de ItemBank).`)
-      : (en
-          ? `Evaluation method: textual comparison with the ShareStats model answer (open question from the ItemBank).`
-          : `Beoordelingsmethode: tekstuele vergelijking met het ShareStats-modelantwoord (open vraag uit de ItemBank).`);
+      ? tStatic(lang, 'quiz.itembankEval.methodCloze')
+      : tStatic(lang, 'quiz.itembankEval.methodOpen');
     return {
       ...evaluation,
       feedback: evaluation.feedback ? `${evaluation.feedback}\n\n${methodNote}` : methodNote,

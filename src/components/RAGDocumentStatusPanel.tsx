@@ -34,7 +34,7 @@ function docNeedsAttention(d: { processing_status: string; chunkCount: number })
 export function RAGDocumentStatusPanel() {
   const { activeCourseId, activeCourseRagFolderIds, activeCourse } = useActiveCourse();
   const { session } = useAuth();
-  const { lang } = useLanguage();
+  const { t } = useLanguage();
   const [documents, setDocuments] = useState<DocumentWithChunkCount[]>([]);
   const [loading, setLoading] = useState(false);
   const [retryingDocId, setRetryingDocId] = useState<string | null>(null);
@@ -119,8 +119,8 @@ export function RAGDocumentStatusPanel() {
     } catch (error) {
       console.error('[RAG PANEL] Retry failed:', error);
       alert(
-        (lang === 'en' ? 'Error reprocessing: ' : 'Fout bij opnieuw verwerken: ') +
-          (error instanceof Error ? error.message : (lang === 'en' ? 'Unknown error' : 'Onbekende fout'))
+        t('rag.docStatus.reprocessErrorPrefix') +
+          (error instanceof Error ? error.message : t('common.unknownError'))
       );
     } finally {
       setRetryingDocId(null);
@@ -133,10 +133,7 @@ export function RAGDocumentStatusPanel() {
     if (failedDocs.length === 0) return;
 
     if (
-      !confirm(lang === 'en'
-        ? `Reprocess ${failedDocs.length} document(s)? This may take a few minutes.`
-        : `${failedDocs.length} document(en) opnieuw verwerken? Dit kan enkele minuten duren.`
-      )
+      !confirm(t('rag.docStatus.reprocessConfirm', { n: String(failedDocs.length) }))
     ) {
       return;
     }
@@ -249,12 +246,10 @@ export function RAGDocumentStatusPanel() {
           <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5 flex-shrink-0" />
           <div className="flex-1">
             <p className="font-medium text-gray-900 text-sm">
-              {lang === 'en' ? `${failedCount} document(s) without chunks` : `${failedCount} document(en) zonder chunks`}
+              {t('rag.docStatus.docsWithoutChunks', { n: String(failedCount) })}
             </p>
             <p className="text-sm text-gray-700 mt-0.5">
-              {lang === 'en'
-                ? 'Documents that failed or have no chunks cannot be used for RAG. Reprocess them to keep the content index up to date.'
-                : 'Documenten die zijn mislukt of geen chunks hebben kunnen niet worden gebruikt voor RAG. Verwerk ze opnieuw zodat de inhoudsindex up-to-date is.'}
+              {t('rag.docStatus.failedNoChunksDesc')}
             </p>
           </div>
           <button
@@ -262,7 +257,7 @@ export function RAGDocumentStatusPanel() {
             disabled={retryingDocId !== null}
             className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 transition-colors disabled:opacity-50"
           >
-            {lang === 'en' ? 'Reprocess' : 'Verwerk opnieuw'}
+            {t('rag.docStatus.reprocess')}
           </button>
         </div>
       )}
@@ -366,7 +361,7 @@ export function RAGDocumentStatusPanel() {
                         className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
                         data-testid={`button-cancel-delete-doc-${doc.id}`}
                       >
-                        {lang === 'en' ? 'Cancel' : 'Annuleer'}
+                        {t('common.cancel')}
                       </button>
                     </div>
                   ) : (
@@ -374,7 +369,7 @@ export function RAGDocumentStatusPanel() {
                       onClick={() => setDeleteConfirmId(doc.id)}
                       disabled={deletingDocId !== null || retryingDocId !== null}
                       className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                      title={lang === 'en' ? 'Delete' : 'Verwijderen'}
+                      title={t('rag.docStatus.deleteTitle')}
                       data-testid={`button-delete-doc-${doc.id}`}
                     >
                       <Trash2 className="w-4 h-4" />

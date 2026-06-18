@@ -25,21 +25,17 @@ function DeleteModal({
   itemName,
   onConfirm,
   onCancel,
-  lang,
 }: {
   itemName: string;
   onConfirm: () => void;
   onCancel: () => void;
-  lang: string;
 }) {
+  const { t } = useLanguage();
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white p-5 rounded-lg shadow-lg w-80">
         <p className="mb-4">
-          {lang === 'en'
-            ? <><strong>{itemName}</strong> will be deleted.</>
-            : <>Map of bestand <strong>{itemName}</strong> wordt verwijderd.</>
-          }
+          {t('fileManager.deleteConfirm', { name: itemName })}
         </p>
 
         <div className="flex justify-end gap-3">
@@ -47,7 +43,7 @@ function DeleteModal({
             onClick={onCancel}
             className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
           >
-            {lang === 'en' ? 'Cancel' : 'Annuleer'}
+            {t('common.cancel')}
           </button>
 
           <button
@@ -63,7 +59,7 @@ function DeleteModal({
 }
 
 export default function FileManager() {
-  const { lang } = useLanguage();
+  const { t } = useLanguage();
   const [currentPath, setCurrentPath] = useState("");
   const [items, setItems] = useState<StorageItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -159,7 +155,7 @@ const loadItems = async (path: string) => {
         .upload(filePath, file);
 
       if (error) {
-        alert((lang === 'en' ? 'Upload failed: ' : 'Upload mislukt: ') + error.message);
+        alert(t('fileManager.uploadFailed', { msg: error.message }));
       }
     }
 
@@ -511,7 +507,7 @@ const moveItem = async (name: string, targetPath: string) => {
 
             <div className="max-h-60 overflow-y-auto border rounded p-2 space-y-1">
               {moveLoading ? (
-                <p className="text-sm text-gray-500">{lang === 'en' ? 'Loading...' : 'Laden...'}</p>
+                <p className="text-sm text-gray-500">{t('common.loading')}</p>
               ) : (
                 <>
                   {moveItems
@@ -615,7 +611,7 @@ const moveItem = async (name: string, targetPath: string) => {
         )}
 
         {loading ? (
-          <p>{lang === 'en' ? 'Loading...' : 'Laden...'}</p>
+          <p>{t('common.loading')}</p>
         ) : (
           <div className="space-y-2">
             {creatingFolder && (
@@ -746,7 +742,7 @@ const moveItem = async (name: string, targetPath: string) => {
                         }}
                         className="block w-full text-left px-3 py-2 text-red-600 hover:bg-red-50"
                       >
-                        {lang === 'en' ? 'Delete' : 'Verwijderen'}
+                        {t('fileManager.delete')}
                       </button>
                     </div>
                   )}
@@ -757,7 +753,6 @@ const moveItem = async (name: string, targetPath: string) => {
             {itemToDelete && (
               <DeleteModal
                 itemName={itemToDelete}
-                lang={lang}
                 onCancel={() => setItemToDelete(null)}
                 onConfirm={async () => {
                   const name = itemToDelete;

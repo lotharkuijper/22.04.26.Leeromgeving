@@ -33,6 +33,7 @@ import {
 import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normalizeBadgeAwardMode } from './documentReview.js';
 import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse, canAccessCourseContent } from './courseAvailability.js';
 import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
+import { buildLanguageInstruction, localizePrompt, languageEnglishName, normalizeLang } from './languages.js';
 import {
   extractEmails,
   dedupeEmails,
@@ -444,19 +445,15 @@ app.post('/api/chat', async (req, res) => {
   };
   const chatSourcesBlock = buildChatSourcesBlock(sources);
 
-  const LANG_INSTRUCTION_EN = '\n\nIMPORTANT: Always respond in English. Use English for all your answers, feedback, and explanations, regardless of the language of the question or course material.';
-
   const userMessages = Array.isArray(messages) ? messages.filter(m => m.role !== 'system') : [];
 
   let finalMessages;
   if (skipSystemPrompt) {
     if (systemPromptOverride) {
-      const langSuffixSkip = lang === 'en' ? LANG_INSTRUCTION_EN : '';
-      finalMessages = [{ role: 'system', content: `${systemPromptOverride}${langSuffixSkip}` }, ...userMessages];
-    } else if (lang === 'en') {
-      finalMessages = [{ role: 'system', content: LANG_INSTRUCTION_EN.trim() }, ...userMessages];
+      finalMessages = [{ role: 'system', content: `${systemPromptOverride}${buildLanguageInstruction(lang)}` }, ...userMessages];
     } else {
-      finalMessages = userMessages;
+      const langOnly = buildLanguageInstruction(lang).trim();
+      finalMessages = langOnly ? [{ role: 'system', content: langOnly }, ...userMessages] : userMessages;
     }
   } else {
     let systemPromptContent = FALLBACK_SYSTEM_PROMPT;
@@ -490,7 +487,7 @@ app.post('/api/chat', async (req, res) => {
         console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
       }
     }
-    const langSuffix = lang === 'en' ? LANG_INSTRUCTION_EN : '';
+    const langSuffix = buildLanguageInstruction(lang);
     let systemContent;
     if (ragStrictMode) {
       if (context) {
@@ -732,20 +729,20 @@ app.post(['/api/chat/delete', '/api/chat/archive'], async (req, res) => {
           }
         }
 
-        const userLabel = lang === 'en' ? 'You' : 'Jij';
-        const tutorLabel = lang === 'en' ? 'Tutor' : 'Tutor';
+        const userLabel = lang === 'nl' ? 'Jij' : 'You';
+        const tutorLabel = 'Tutor';
         const chatText = msgs
           .filter(m => m.role !== 'system')
           .map(m => `${m.role === 'user' ? userLabel : tutorLabel}: ${m.content}`)
           .join('\n\n');
 
         const sourcesText = ragSources.size > 0
-          ? (lang === 'en'
-              ? `\n\nCourse sources used in this conversation: ${[...ragSources].join(', ')}`
-              : `\n\nGebruikte cursusbronnen in dit gesprek: ${[...ragSources].join(', ')}`)
+          ? (lang === 'nl'
+              ? `\n\nGebruikte cursusbronnen in dit gesprek: ${[...ragSources].join(', ')}`
+              : `\n\nCourse sources used in this conversation: ${[...ragSources].join(', ')}`)
           : '';
 
-        const summaryPrompt = lang === 'en'
+        const summaryPrompt = (lang !== 'nl'
           ? `You are a "critical friend" for a student epidemiology/biostatistics at VU Amsterdam. Analyse the following study conversation and write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
 
 Addressing rule (follow STRICTLY):
@@ -779,7 +776,7 @@ Gesprekstitel: "${conversation.title}"
 Gesprek (regels gemarkeerd met "Jij:" zijn de student aan wie je het verslag richt):
 ${chatText}
 
-Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
+Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`) + buildLanguageInstruction(lang);
 
         if (AZURE_CHAT_READY) {
           try {
@@ -797,7 +794,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                   .from('learning_journal_entries')
                   .insert({
                     user_id: user.id,
-                    title: lang === 'en' ? `Chat reflection: ${conversation.title}` : `Chatreflectie: ${conversation.title}`,
+                    title: lang === 'nl' ? `Chatreflectie: ${conversation.title}` : `Chat reflection: ${conversation.title}`,
                     content: summaryContent,
                     activity_type: 'chat_reflection',
                     course_id: await resolveJournalCourseId(courseId),
@@ -5373,7 +5370,7 @@ app.post(['/api/explain/delete', '/api/explain/archive'], async (req, res) => {
       const keyPoints = Array.isArray(row.concepts?.key_points) ? row.concepts.key_points : [];
       const feedbackText = row.feedback?.content || (typeof row.feedback === 'string' ? row.feedback : '(geen feedback)');
 
-      const summaryPrompt = lang === 'en'
+      const summaryPrompt = (lang !== 'nl'
         ? `You are a "critical friend" for a student epidemiology/biostatistics at VU Amsterdam. A student has explained the concept "${conceptName}" in their own words and received feedback from the learning assistant. Write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
 
 Addressing rule (follow STRICTLY):
@@ -5415,7 +5412,7 @@ ${row.explanation_text}
 Feedback van de leerassistent:
 ${feedbackText}
 
-Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`;
+Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`) + buildLanguageInstruction(lang);
 
       if (AZURE_CHAT_READY) {
         try {
@@ -5433,7 +5430,7 @@ Schrijf het verslag direct zonder aanhef. Wees concreet, eerlijk en motiverend.`
                 .from('learning_journal_entries')
                 .insert({
                   user_id: user.id,
-                  title: lang === 'en' ? `Explanation reflection: ${conceptName}` : `Uitleg-reflectie: ${conceptName}`,
+                  title: lang === 'nl' ? `Uitleg-reflectie: ${conceptName}` : `Explanation reflection: ${conceptName}`,
                   content: summaryContent,
                   activity_type: 'explanation_reflection',
                   course_id: await resolveJournalCourseId(courseId),
@@ -5499,10 +5496,10 @@ function buildQuizSummaryParams({ topics, difficulty, questionType, questions, a
   const safeTopics = Array.isArray(topics) && topics.length > 0 ? topics : ['(geen onderwerp opgegeven)'];
   const topicsLabel = safeTopics.join(', ');
   const qType = questionType === 'open' || questionType === 'casus' ? questionType : 'mcq';
-  const typeLabel = lang === 'en'
+  const typeLabel = lang !== 'nl'
     ? (qType === 'mcq' ? 'multiple choice questions' : qType === 'open' ? 'open questions' : 'case questions')
     : (qType === 'mcq' ? 'meerkeuzevragen' : qType === 'open' ? 'open vragen' : 'casusvragen');
-  const safeDifficulty = difficulty || (lang === 'en' ? 'medium' : 'gemiddeld');
+  const safeDifficulty = difficulty || (lang === 'nl' ? 'gemiddeld' : 'medium');
   const qList = Array.isArray(questions) ? questions : [];
   const aList = Array.isArray(answers) ? answers : [];
   const totalQuestions = qList.length;
@@ -5532,28 +5529,28 @@ function buildQuizSummaryParams({ topics, difficulty, questionType, questions, a
     const qText = q?.question || `(vraag ${i + 1})`;
     if (qType === 'mcq') {
       const opts = Array.isArray(q?.options) ? q.options : [];
-      const noAns = lang === 'en' ? '(not answered)' : '(niet beantwoord)';
-      const noCorrect = lang === 'en' ? '(unknown)' : '(onbekend)';
+      const noAns = lang !== 'nl' ? '(not answered)' : '(niet beantwoord)';
+      const noCorrect = lang !== 'nl' ? '(unknown)' : '(onbekend)';
       const sel = typeof a.selectedIndex === 'number' ? opts[a.selectedIndex] : noAns;
       const correct = typeof q?.correctAnswer === 'number' ? opts[q.correctAnswer] : noCorrect;
-      const status = lang === 'en' ? (a.isCorrect ? 'correct' : 'incorrect') : (a.isCorrect ? 'goed' : 'fout');
-      const qLabel = lang === 'en' ? 'Question' : 'Vraag';
-      const ansLabel = lang === 'en' ? 'Your answer' : 'Jouw antwoord';
+      const status = lang !== 'nl' ? (a.isCorrect ? 'correct' : 'incorrect') : (a.isCorrect ? 'goed' : 'fout');
+      const qLabel = lang !== 'nl' ? 'Question' : 'Vraag';
+      const ansLabel = lang !== 'nl' ? 'Your answer' : 'Jouw antwoord';
       const corrLabel = lang === 'en' ? 'Correct' : 'Correct';
       return `${qLabel} ${i + 1}: ${qText}\n  - ${ansLabel}: ${sel} (${status})\n  - ${corrLabel}: ${correct}`;
     }
-    const noAnsOpen = lang === 'en' ? '(no answer)' : '(geen antwoord)';
-    const noScore = lang === 'en' ? '(no score)' : '(geen score)';
+    const noAnsOpen = lang !== 'nl' ? '(no answer)' : '(geen antwoord)';
+    const noScore = lang !== 'nl' ? '(no score)' : '(geen score)';
     const ans = (a.text || '').trim() || noAnsOpen;
     const ev = a.evaluation || {};
     const fb = (ev.feedback || '').trim();
     const ff = (ev.feedforward || '').trim();
     const sc = ev.score != null ? `${ev.score}/100` : noScore;
     const ctx = qType === 'casus' && q?.context
-      ? (lang === 'en' ? `\n  - Case: ${q.context}` : `\n  - Casus: ${q.context}`)
+      ? (lang !== 'nl' ? `\n  - Case: ${q.context}` : `\n  - Casus: ${q.context}`)
       : '';
-    const qLabel = lang === 'en' ? 'Question' : 'Vraag';
-    const ansLabel = lang === 'en' ? 'Your answer' : 'Jouw antwoord';
+    const qLabel = lang !== 'nl' ? 'Question' : 'Vraag';
+    const ansLabel = lang !== 'nl' ? 'Your answer' : 'Jouw antwoord';
     const scoreLabel = lang === 'en' ? 'Score' : 'Score';
     const fbLabel = lang === 'en' ? 'Feedback' : 'Feedback';
     const ffLabel = lang === 'en' ? 'Feed forward' : 'Feed forward';
@@ -5561,7 +5558,7 @@ function buildQuizSummaryParams({ topics, difficulty, questionType, questions, a
   }).join('\n\n');
 
   // Type-specifieke focusinstructie.
-  const focusInstruction = lang === 'en'
+  const focusInstruction = lang !== 'nl'
     ? (qType === 'mcq'
       ? 'Focus on patterns: which concepts or reasoning steps went well, which needed correction. Reference specific question numbers where relevant.'
       : qType === 'open'
@@ -5631,7 +5628,7 @@ ${detailLines || '(no details available)'}
 
 Write the report directly, without a greeting or closing. Be concrete, honest and motivating; avoid vague generalities and clichés.`;
 
-  const summaryPrompt = lang === 'en' ? summaryPromptEN : summaryPromptNL;
+  const summaryPrompt = (lang === 'nl' ? summaryPromptNL : summaryPromptEN) + buildLanguageInstruction(lang);
 
   return {
     summaryPrompt,
@@ -5679,10 +5676,10 @@ async function generateAndSaveQuizSummary({ user, summaryPrompt, topicsLabel, qT
   }
 
   const titleTopics = topicsLabel.length > 80 ? `${topicsLabel.slice(0, 77)}...` : topicsLabel;
-  const typePrefix = lang === 'en'
+  const typePrefix = lang !== 'nl'
     ? (qType === 'mcq' ? 'MCQ quiz' : qType === 'open' ? 'Open quiz' : 'Case quiz')
     : (qType === 'mcq' ? 'Meerkeuzequiz' : qType === 'open' ? 'Open quiz' : 'Casusquiz');
-  const reflectionLabel = lang === 'en' ? 'reflection' : 'reflectie';
+  const reflectionLabel = lang === 'nl' ? 'reflectie' : 'reflection';
   const { data: entry, error: journalError } = await supabaseAdmin
     .from('learning_journal_entries')
     .insert({
@@ -8625,7 +8622,7 @@ app.get('/api/projects/:projectId/room', async (req, res) => {
     // worden stille open threads eerst afgerond (op basis van auto_close_hours).
     let consultations = [];
     if (group) {
-      const lang = req.query.lang === 'en' ? 'en' : 'nl';
+      const lang = normalizeLang(req.query.lang);
       const projectPersonas = personas.filter(p => p._source === 'project');
       // Lui auto-close per persona met een ingesteld venster.
       for (const p of projectPersonas) {
@@ -8958,8 +8955,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
     const ragBlock = context ? `\n\nContext uit cursusmateriaal:\n${context}` : '';
     const docBlock = uploadedContext ? `\n\nGeüploade documenten van de groep:\n${uploadedContext}` : '';
     const projectDocBlock = projectDocContext ? `\n\nProjectmateriaal van de docent:\n${projectDocContext}` : '';
-    const LANG_INSTR_EN = '\n\nIMPORTANT: Always respond in English. Use English for all your answers, feedback, and explanations.';
-    const langSuffix = lang === 'en' ? LANG_INSTR_EN : '';
+    const langSuffix = buildLanguageInstruction(lang);
     // Task #167: relatie-blok altijd injecteren voor echte persona's, ook bij
     // score 0 — zo blijft de instructie consistent en weet de persona dat de
     // verstandhouding gewogen wordt.
@@ -9037,7 +9033,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId, threadId } = req.params;
-  const lang = req.body?.lang === 'en' ? 'en' : 'nl';
+  const lang = normalizeLang(req.body?.lang);
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -9068,12 +9064,14 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close-preview', async 
       .join('\n').slice(0, 12000);
 
     const msgCount = allMsgs.filter(m => m.role === 'user').length;
-    const topicsInstruction = lang === 'en'
+    const topicsInstruction = lang !== 'nl'
       ? (msgCount <= 3 ? '2-3 short topics' : msgCount <= 8 ? '3-5 topics' : '5-8 topics')
       : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
 
-    const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
-    const prompt = lang === 'en'
+    const langInstruction = lang === 'nl'
+      ? 'Schrijf in het Nederlands.'
+      : `Write everything in ${languageEnglishName(lang)}. Keep every JSON property name exactly as written in the structure above (do not translate the keys); only the string values may be in ${languageEnglishName(lang)}.`;
+    const prompt = lang !== 'nl'
       ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
       : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
 
@@ -9224,16 +9222,18 @@ async function performThreadClose({ thread, groupId, lang, closedBy }) {
       .map(m => `${m.role === 'user' ? 'Student' : 'Persona'}: ${(m.content || '').slice(0, 2000)}`)
       .join('\n').slice(0, 12000);
     const msgCount = allMsgs.filter(m => m.role === 'user').length;
-    const topicsInstruction = lang === 'en'
+    const topicsInstruction = lang !== 'nl'
       ? (msgCount <= 3 ? '2-3 short topics' : msgCount <= 8 ? '3-5 topics' : '5-8 topics')
       : (msgCount <= 3 ? '2-3 korte onderwerpen' : msgCount <= 8 ? '3-5 onderwerpen' : '5-8 onderwerpen');
-    const langInstruction = lang === 'en' ? 'Write in English.' : 'Schrijf in het Nederlands.';
+    const langInstruction = lang === 'nl'
+      ? 'Schrijf in het Nederlands.'
+      : `Write everything in ${languageEnglishName(lang)}. Keep every JSON property name exactly as written in the structure above (do not translate the keys); only the string values may be in ${languageEnglishName(lang)}.`;
 
     const cueJson = emissionEnabled ? `\n${relCueJsonInstruction(lang, courseCueDeltaMax)}` : '';
     const cueSchemaSnippet = emissionEnabled
       ? ',\n  "relationship_delta": 0,\n  "relationship_reason": ""'
       : '';
-    const prompt = lang === 'en'
+    const prompt = lang !== 'nl'
       ? `You are a minute-taker. Analyse the following conversation between a student and an AI persona.\n\nRespond ONLY with valid JSON in this structure:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array of ${topicsInstruction}. Each item is one discussed topic (concise, max 1 sentence).\n- "agreements": array of 0 or more strings. Only concrete agreements or commitments. Leave empty if none.${cueJson}\n\n${langInstruction} No markdown outside the JSON, no explanation.\n\nConversation:\n${conversationText}`
       : `Je bent een notulist. Analyseer het volgende gesprek tussen een student en een AI-persona.\n\nGeef je antwoord UITSLUITEND als geldige JSON met deze structuur:\n{\n  "topics": [...],\n  "agreements": [...]${cueSchemaSnippet}\n}\n\n- "topics": array van ${topicsInstruction}. Elk item is één besproken onderwerp (bondig, maximaal 1 zin).\n- "agreements": array van 0 of meer strings. Alleen concrete afspraken of toezeggingen. Laat leeg als er geen zijn.${cueJson}\n\n${langInstruction} Geen markdown buiten de JSON, geen uitleg.\n\nGesprek:\n${conversationText}`;
 
@@ -9347,7 +9347,7 @@ app.post('/api/projects/groups/:groupId/threads/:threadId/close', async (req, re
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId, threadId } = req.params;
-  const lang = req.body?.lang === 'en' ? 'en' : 'nl';
+  const lang = normalizeLang(req.body?.lang);
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -9473,7 +9473,7 @@ app.get('/api/projects/groups/:groupId/conversation-log', async (req, res) => {
 // Helper: genereert cross-agent synthese op basis van afgesloten gesprekken.
 // Geeft null terug als er minder dan 2 afgesloten gesprekken zijn.
 async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
-  const enMode = lang === 'en';
+  const enMode = lang !== 'nl';
   const { data: closedThreads } = await supabaseAdmin
     .from('group_persona_threads')
     .select('id, persona_id, topics, agreements')
@@ -9497,9 +9497,9 @@ async function generateCrossAgentSynthesis(groupId, apiKey, lang = 'nl') {
       : `${p.avatar_emoji || '💬'} ${p.name || 'Persona'}:\n- Besproken: ${topics || '(geen)'}\n- Afgesproken: ${agreements || '(geen)'}`;
   }).join('\n\n');
 
-  const prompt = enMode
+  const prompt = (enMode
     ? `You are analysing conversations a group of students has had with different AI personas in a research project.\n\nConversation summary per persona:\n${convText}\n\nReturn your answer ONLY as valid JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 points that multiple personas agreed on or gave similar information about.\n- "spanningspunten": 1-3 points where personas clearly disagreed or gave contradictory information. Leave the array empty if there are none.\n- "suggesties": 2-3 concrete next steps the group can take based on the conversations.\n\nWrite in English, concise and concrete. No markdown outside the JSON.`
-    : `Je analyseert gesprekken die een groep studenten heeft gevoerd met verschillende AI-personas in een onderzoeksproject.\n\nGesprekssamenvatting per persona:\n${convText}\n\nGeef je antwoord UITSLUITEND als geldige JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 punten waarover meerdere personas het eens zijn of vergelijkbare informatie gaven.\n- "spanningspunten": 1-3 punten waarover personas duidelijk anders denken of tegenstrijdige informatie gaven. Laat de array leeg als er geen zijn.\n- "suggesties": 2-3 concrete volgende stappen die de groep kan zetten op basis van de gesprekken.\n\nSchrijf in het Nederlands, bondig en concreet. Geen markdown buiten de JSON.`;
+    : `Je analyseert gesprekken die een groep studenten heeft gevoerd met verschillende AI-personas in een onderzoeksproject.\n\nGesprekssamenvatting per persona:\n${convText}\n\nGeef je antwoord UITSLUITEND als geldige JSON:\n{\n  "overeenstemming": ["...", ...],\n  "spanningspunten": ["...", ...],\n  "suggesties": ["...", ...]\n}\n\n- "overeenstemming": 2-4 punten waarover meerdere personas het eens zijn of vergelijkbare informatie gaven.\n- "spanningspunten": 1-3 punten waarover personas duidelijk anders denken of tegenstrijdige informatie gaven. Laat de array leeg als er geen zijn.\n- "suggesties": 2-3 concrete volgende stappen die de groep kan zetten op basis van de gesprekken.\n\nSchrijf in het Nederlands, bondig en concreet. Geen markdown buiten de JSON.`) + buildLanguageInstruction(lang, { json: true });
 
   try {
     const resp = await openaiChatCompletion({
@@ -9533,7 +9533,7 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId } = req.params;
   const lang = req.body?.lang || 'nl';
-  const enMode = lang === 'en';
+  const enMode = lang !== 'nl';
 
   try {
     if (!(await isGroupMember(groupId, auth.user.id))) {
@@ -9578,9 +9578,9 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
         if (userText.trim()) {
           const r1 = await openaiChatCompletion({
             model: OPENAI_MODEL,
-            messages: [{ role: 'user', content: enMode
+            messages: [{ role: 'user', content: (enMode
               ? `Below are the messages a student sent in a conversation with "${personaName}". Write a factual summary in at most 4 sentences. Describe what the student asked and contributed. Write in the third person ("the student"). No greeting, no closing.\n\nMessages:\n${userText}`
-              : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}` }],
+              : `Hieronder staan de berichten die een student stuurde in een gesprek met "${personaName}". Schrijf een feitelijke samenvatting in maximaal 4 zinnen. Beschrijf wat de student vroeg en inbracht. Schrijf in de derde persoon ("de student"). Geen aanhef, geen afsluitende groet.\n\nBerichten:\n${userText}`) + buildLanguageInstruction(lang) }],
             ...chatModelParams({ temperature: 0.3, maxTokens: 300 }),
           });
           if (r1.ok) studentSummary = ((await r1.json()).choices?.[0]?.message?.content || '').trim();
@@ -9588,9 +9588,9 @@ app.post('/api/projects/groups/:groupId/checkpoint-preview', async (req, res) =>
         if (asstText.trim()) {
           const r2 = await openaiChatCompletion({
             model: OPENAI_MODEL,
-            messages: [{ role: 'user', content: enMode
+            messages: [{ role: 'user', content: (enMode
               ? `Below are the responses of "${personaName}" in a conversation with a student. Write a summary in at most 8 sentences. Describe the key points ${personaName} raised. Write in the third person. No greeting, no closing.\n\nResponses:\n${asstText}`
-              : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}` }],
+              : `Hieronder staan de reacties van "${personaName}" in een gesprek met een student. Schrijf een samenvatting in maximaal 8 zinnen. Beschrijf de kernpunten die ${personaName} aanhaalde. Schrijf in derde persoon. Geen aanhef, geen afsluitende groet.\n\nReacties:\n${asstText}`) + buildLanguageInstruction(lang) }],
             ...chatModelParams({ temperature: 0.3, maxTokens: 600 }),
           });
           if (r2.ok) personaSummary = ((await r2.json()).choices?.[0]?.message?.content || '').trim();
@@ -9634,7 +9634,7 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { groupId } = req.params;
   const { kind = 'checkpoint', reflection, requestId, personaSummaries, lang = 'nl' } = req.body || {};
-  const enMode = lang === 'en';
+  const enMode = lang !== 'nl';
   if (!['checkpoint', 'final'].includes(kind)) {
     return res.status(400).json({ error: "kind moet 'checkpoint' of 'final' zijn" });
   }
@@ -9688,7 +9688,7 @@ app.post('/api/projects/groups/:groupId/checkpoint', async (req, res) => {
     let rubricFeedback = null;
 
     if (kind === 'final') {
-      const prompt = enMode
+      const prompt = (enMode
         ? `You are a "critical friend" for a group of VU students (epi/biostat). The group has completed a research project and submits a joint final reflection below. Assess the work per rubric criterion — honestly, formatively and concretely. Address the group as "you" (plural).
 
 Project: ${project?.title || '(unnamed)'}
@@ -9708,7 +9708,7 @@ Return ONLY valid JSON with this structure:
 }
 
 No text outside the JSON.`
-        : `Je bent een "critical friend" voor een groep VU-studenten epi/biostat. De groep heeft een onderzoeksproject afgerond en geeft hieronder een gezamenlijke eindreflectie. Beoordeel het werk per rubriekspunt — eerlijk, formatief en concreet. Spreek de groep aan met "jullie".
+        : (`Je bent een "critical friend" voor een groep VU-studenten epi/biostat. De groep heeft een onderzoeksproject afgerond en geeft hieronder een gezamenlijke eindreflectie. Beoordeel het werk per rubriekspunt — eerlijk, formatief en concreet. Spreek de groep aan met "jullie".
 
 Project: ${project?.title || '(naamloos)'}
 Onderzoeksvraag: ${project?.research_question || '(geen)'}
@@ -9726,7 +9726,7 @@ Geef je antwoord ALLEEN als geldige JSON met deze structuur:
   "vervolgstappen": "<1-3 concrete suggesties>"
 }
 
-Geen tekst buiten de JSON.`;
+Geen tekst buiten de JSON.`)) + buildLanguageInstruction(lang, { json: true });
       const chatResp = await openaiChatCompletion({
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: prompt }],
@@ -9747,7 +9747,7 @@ Geen tekst buiten de JSON.`;
       }
     } else if (!hasPersonaSummaries) {
       // Geen AI-preview-samenvattingen: vat de handmatige reflectietekst samen.
-      const prompt = enMode
+      const prompt = (enMode
         ? `You are a "critical friend" for a group of VU students (epi/biostat). Below, a group writes a mid-project reflection. In 6-10 lines, addressed to the group ("you"), write a formative report: what stands out about their approach, where is there still doubt or a gap, and what concrete next step is most obvious. No greeting, no closing.
 
 Project: ${project?.title || '(unnamed)'}
@@ -9757,7 +9757,7 @@ ${reflection}`
 
 Project: ${project?.title || '(naamloos)'}
 Reflectie:
-${reflection}`;
+${reflection}`) + buildLanguageInstruction(lang);
       const chatResp = await openaiChatCompletion({
         model: OPENAI_MODEL,
         messages: [{ role: 'user', content: prompt }],
@@ -9854,7 +9854,7 @@ ${reflection}`;
         const synthesis = await generateCrossAgentSynthesis(groupId, apiKey, lang);
         if (synthesis) {
           const synthLang = synthesis.lang || lang;
-          const synthEnMode = synthLang === 'en';
+          const synthEnMode = synthLang !== 'nl';
           const sections = [
             synthesis.overeenstemming.length > 0
               ? `**${synthEnMode ? 'Agreement' : 'Overeenstemming'}**\n${synthesis.overeenstemming.map(s => `• ${s}`).join('\n')}`
@@ -9974,9 +9974,9 @@ ${reflection}`;
           let summaryText = '';
           if (AZURE_CHAT_READY) {
             try {
-              const sumPrompt = lang === 'en'
+              const sumPrompt = (lang !== 'nl'
                 ? `Summarise the following conversation with "${personaName}" in EXACTLY 4 short lines. Address the student as "you". Line 1: core question. Line 2: key insight. Line 3: open point or misconception. Line 4: next step. No bullet points, no heading, only four sentences on separate lines.\n\nConversation:\n${transcript}`
-                : `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`;
+                : `Vat het volgende gesprek met "${personaName}" samen in EXACT 4 korte regels. Spreek de student aan met "je"/"jij". Eerste regel: kernvraag. Tweede regel: belangrijkste inzicht. Derde regel: open punt of misvatting. Vierde regel: vervolgstap. Geen lijst-tekens, geen kop, alleen vier zinnen op aparte regels.\n\nGesprek:\n${transcript}`) + buildLanguageInstruction(lang);
               const sr = await openaiChatCompletion({
                 model: OPENAI_MODEL,
                 messages: [{ role: 'user', content: sumPrompt }],
@@ -11429,7 +11429,8 @@ app.post('/api/projects/:projectId/documents/:docId/reviews', async (req, res) =
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { projectId, docId } = req.params;
-  const { personaId, groupId } = req.body || {};
+  const { personaId, groupId, lang } = req.body || {};
+  const reviewLang = normalizeLang(lang);
   if (!personaId || !groupId) {
     return res.status(400).json({ error: 'personaId en groupId zijn vereist' });
   }
@@ -11535,7 +11536,7 @@ Geef nu je oordeel als JSON-object volgens het eerder beschreven schema.`;
     // retry met een striktere herinnering; daarna geven we netjes op.
     async function callModel(extraReminder) {
       const messages = [
-        { role: 'system', content: systemTemplate },
+        { role: 'system', content: systemTemplate + buildLanguageInstruction(reviewLang, { json: true }) },
         { role: 'user', content: userBlock + (extraReminder ? `\n\n${extraReminder}` : '') },
       ];
       const r = await openaiChatCompletion({
@@ -11762,7 +11763,7 @@ app.get('/api/projects/:projectId/groups/:groupId/relationships', async (req, re
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
   const { projectId, groupId } = req.params;
-  const lang = (req.query.lang === 'en') ? 'en' : 'nl';
+  const lang = normalizeLang(req.query.lang);
   try {
     const { data: project } = await supabaseAdmin
       .from('projects').select('id, course_id').eq('id', projectId).maybeSingle();
@@ -12293,7 +12294,7 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
   const { groupId } = req.params;
   const requestId = req.body?.requestId || null;
   const lang = req.body?.lang || 'nl';
-  const enMode = lang === 'en';
+  const enMode = lang !== 'nl';
   try {
     const { data: group } = await supabaseAdmin
       .from('project_groups').select('id, project_id, name').eq('id', groupId).maybeSingle();
@@ -12379,9 +12380,9 @@ app.post('/api/projects/groups/:groupId/evaluate', async (req, res) => {
         `[Rubric/criteria: ${d.filename}]\n${(d.content_text || '').slice(0, 8000)}`
       ).join('\n\n').slice(0, 30000);
 
-      const langInstruction = enMode
-        ? 'IMPORTANT: Respond entirely in English.'
-        : 'BELANGRIJK: Antwoord volledig in het Nederlands.';
+      const langInstruction = lang === 'nl'
+        ? 'BELANGRIJK: Antwoord volledig in het Nederlands.'
+        : `IMPORTANT: Respond entirely in ${languageEnglishName(lang)}.`;
       const defaultPersonaPrompt = enMode
         ? 'You are a formative assessor for a group of VU students (epi/biostat).'
         : 'Je bent een formatieve beoordelaar voor een groep VU-studenten epi/biostat.';
@@ -12447,7 +12448,7 @@ Sluit af met een kort kopje "Vervolgstappen" met 2-3 suggesties. Noem GEEN exact
       }
 
       const sourceRef = `group_evaluate:${groupId}:${evalPersona.id}${requestId ? ':' + requestId : ''}`;
-      const titleLabel = `${evalPersona.avatar_emoji || '🎓'} Beoordeling — ${evalPersona.name}`;
+      const titleLabel = `${evalPersona.avatar_emoji || '🎓'} ${lang === 'nl' ? 'Beoordeling' : 'Assessment'} — ${evalPersona.name}`;
       const rows = (members || []).map(m => ({
         user_id: m.user_id,
         title: titleLabel,

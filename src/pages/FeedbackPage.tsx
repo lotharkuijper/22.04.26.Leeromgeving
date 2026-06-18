@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
+import { intlLocale } from '../i18n/languages';
 import { supabase } from '../lib/supabase';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import {
@@ -264,7 +265,7 @@ export function FeedbackPage() {
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           console.error('Error updating entry:', err);
-          alert(lang === 'en' ? 'An error occurred while updating your journal.' : 'Er is een fout opgetreden bij het bijwerken van je dagboek');
+          alert(t('feedback.updateError'));
         } else {
           const focusId = editingEntry.id;
           resetForm();
@@ -279,7 +280,7 @@ export function FeedbackPage() {
 
         if (error) {
           console.error('Error creating entry:', error);
-          alert(lang === 'en' ? 'An error occurred while saving your journal.' : 'Er is een fout opgetreden bij het opslaan van je dagboek');
+          alert(t('feedback.saveError'));
         } else {
           const focusId = inserted?.id as string | undefined;
           resetForm();
@@ -316,7 +317,7 @@ export function FeedbackPage() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         console.error('Error deleting entry:', err);
-        setDeleteError(lang === 'en' ? 'Delete failed. Please try again.' : 'Verwijderen mislukt. Probeer het opnieuw.');
+        setDeleteError(t('feedback.deleteFailed'));
       } else {
         setDeleteConfirmId(null);
         setOpenEntryIds(prev => {
@@ -328,7 +329,7 @@ export function FeedbackPage() {
       }
     } catch (err) {
       console.error('Error deleting entry:', err);
-      setDeleteError(lang === 'en' ? 'Delete failed. Please try again.' : 'Verwijderen mislukt. Probeer het opnieuw.');
+      setDeleteError(t('feedback.deleteFailed'));
     }
   };
 
@@ -359,7 +360,7 @@ export function FeedbackPage() {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return new Intl.DateTimeFormat(lang === 'en' ? 'en-GB' : 'nl-NL', {
+    return new Intl.DateTimeFormat(intlLocale(lang), {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
@@ -396,7 +397,7 @@ export function FeedbackPage() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('feedback.title')}</h1>
           <p className="text-gray-600">
-            {lang === 'en' ? 'Track what you have learned and reflect on your learning activities.' : 'Houd bij wat je hebt geleerd en reflecteer op je leeractiviteiten.'}
+            {t('feedback.subtitle')}
           </p>
         </div>
         <button
@@ -426,14 +427,14 @@ export function FeedbackPage() {
                 onChange={(e) => setTitle(e.target.value)}
                 data-testid="input-title"
                 className="w-full px-4 py-2 chic-input"
-                placeholder={lang === 'en' ? 'E.g.: Learned about logistic regression' : 'Bijvoorbeeld: Geleerd over logistische regressie'}
+                placeholder={t('feedback.titlePlaceholder')}
                 required
               />
             </div>
 
             <div>
               <label htmlFor="activityType" className="block text-sm font-semibold text-gray-700 mb-2">
-                {lang === 'en' ? 'Section in your learning journal' : 'Vak in je leerdagboek'}
+                {t('feedback.sectionLabel')}
               </label>
               <select
                 id="activityType"
@@ -449,7 +450,7 @@ export function FeedbackPage() {
                 ))}
               </select>
               <p className="text-xs text-gray-500 mt-1">
-                {lang === 'en' ? 'Your note appears in the corresponding section. Choose "Other" for loose reflections.' : 'Je notitie verschijnt in het bijbehorende vakje. Kies "Overig" voor losse reflecties.'}
+                {t('feedback.sectionHint')}
               </p>
             </div>
 
@@ -464,7 +465,7 @@ export function FeedbackPage() {
                 data-testid="textarea-content"
                 rows={6}
                 className="w-full px-4 py-2 chic-input resize-none"
-                placeholder={lang === 'en' ? 'What did you learn? What have you been working on? What are your insights?' : 'Wat heb je geleerd? Waar ben je mee bezig geweest? Wat zijn je inzichten?'}
+                placeholder={t('feedback.contentPlaceholder')}
                 required
               />
             </div>
@@ -476,7 +477,7 @@ export function FeedbackPage() {
                 data-testid="btn-submit-entry"
                 className="px-6 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg disabled:opacity-50"
               >
-                {loading ? (lang === 'en' ? 'Saving...' : 'Opslaan...') : editingEntry ? (lang === 'en' ? 'Update' : 'Bijwerken') : t('feedback.save')}
+                {loading ? t('feedback.saving') : editingEntry ? t('feedback.update') : t('feedback.save')}
               </button>
               <button
                 type="button"
@@ -495,9 +496,7 @@ export function FeedbackPage() {
         <div className="bg-green-50 border border-green-200 rounded-2xl p-5 flex items-start gap-3" data-testid="empty-journal-banner">
           <BookText className="w-5 h-5 text-green-700 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-green-800">
-            {lang === 'en'
-              ? 'No notes yet. Complete a chat, explanation, quiz or project and let the learning assistant save a summary to your journal — or use "New note" for your own reflection. The sections below will fill up automatically once you get started.'
-              : 'Nog geen notities. Sluit een chat, uitleg, quiz of project af en laat de leerassistent een samenvatting in je leerdagboek zetten — of gebruik "Nieuwe Notitie" voor een eigen reflectie. De vakken hieronder vullen zich vanzelf zodra je begint.'}
+            {t('feedback.emptyBanner')}
           </p>
         </div>
       )}
@@ -534,7 +533,9 @@ export function FeedbackPage() {
                       className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${group.badgeBg} ${group.badgeText}`}
                       data-testid={`count-${group.key}`}
                     >
-                      {items.length} {lang === 'en' ? (items.length === 1 ? 'note' : 'notes') : (items.length === 1 ? 'notitie' : 'notities')}
+                      {items.length === 1
+                        ? t('feedback.noteCountSingular', { count: String(items.length) })
+                        : t('feedback.noteCountPlural', { count: String(items.length) })}
                     </span>
                     <button
                       type="button"
@@ -630,7 +631,7 @@ export function FeedbackPage() {
                                       onClick={() => handleEdit(entry)}
                                       data-testid={`btn-edit-${entry.id}`}
                                       className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                      title={lang === 'en' ? 'Edit' : 'Bewerken'}
+                                      title={t('feedback.editAction')}
                                     >
                                       <Edit2 className="w-4 h-4" />
                                     </button>
@@ -638,7 +639,7 @@ export function FeedbackPage() {
                                       onClick={() => { setDeleteConfirmId(entry.id); setDeleteError(null); }}
                                       data-testid={`btn-delete-${entry.id}`}
                                       className="p-2 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                      title={lang === 'en' ? 'Delete' : 'Verwijderen'}
+                                      title={t('feedback.deleteAction')}
                                     >
                                       <Trash2 className="w-4 h-4" />
                                     </button>
@@ -648,20 +649,20 @@ export function FeedbackPage() {
                                 {deleteConfirmId === entry.id && (
                                   <div className="flex flex-col items-start gap-1 mt-2" data-testid={`confirm-delete-${entry.id}`}>
                                     <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-                                      <span className="text-sm text-red-700 font-medium">{lang === 'en' ? 'Are you sure?' : 'Weet je het zeker?'}</span>
+                                      <span className="text-sm text-red-700 font-medium">{t('feedback.confirmDeleteQuestion')}</span>
                                       <button
                                         onClick={() => handleDelete(entry.id)}
                                         data-testid={`btn-confirm-delete-${entry.id}`}
                                         className="px-2.5 py-1 bg-red-600 text-white text-xs font-semibold rounded hover:bg-red-700 transition-colors"
                                       >
-                                        {lang === 'en' ? 'Delete' : 'Verwijderen'}
+                                        {t('feedback.deleteAction')}
                                       </button>
                                       <button
                                         onClick={() => { setDeleteConfirmId(null); setDeleteError(null); }}
                                         data-testid={`btn-cancel-delete-${entry.id}`}
                                         className="px-2.5 py-1 bg-white text-gray-600 text-xs font-semibold rounded border border-gray-300 hover:bg-gray-50 transition-colors"
                                       >
-                                        {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                                        {t('feedback.cancelAction')}
                                       </button>
                                     </div>
                                     {deleteError && (

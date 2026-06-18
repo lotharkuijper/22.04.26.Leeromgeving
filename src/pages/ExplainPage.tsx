@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLanguage } from '../i18n';
+import { intlLocale } from '../i18n/languages';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
@@ -122,7 +123,7 @@ function FeedbackBlock({
         onOpenChange={setSourcesOpen}
         idPrefix={idPrefix}
         onOpenSource={handleOpenSource}
-        slideWord={lang === 'en' ? 'slide' : 'dia'}
+        slideWord={t('quiz.slideWord')}
         evidenceLabel={t('explain.sources.evidenceBadge')}
         evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
         snippetToggleLabel={t('explain.sources.evidenceSnippetToggle')}
@@ -686,7 +687,7 @@ export function ExplainPage() {
 
             const total = concepts.length;
             const sortedAlpha = [...concepts].sort((a, b) =>
-              a.name.localeCompare(b.name, lang === 'nl' ? 'nl' : 'en', { sensitivity: 'base' })
+              a.name.localeCompare(b.name, intlLocale(lang), { sensitivity: 'base' })
             );
 
             if (searchTerm) {
@@ -991,7 +992,7 @@ export function ExplainPage() {
                       <SourceList
                         sources={retrievedSources}
                         showSimilarity={false}
-                        slideWord={lang === 'en' ? 'slide' : 'dia'}
+                        slideWord={t('quiz.slideWord')}
                         evidenceLabel={t('explain.sources.evidenceBadge')}
                         evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
                         snippetToggleLabel={t('explain.sources.evidenceSnippetToggle')}

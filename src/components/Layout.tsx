@@ -18,6 +18,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import ActiveCourseBadge from "./ActiveCourseBadge";
 import { useLanguage } from '../i18n';
+import { LanguageSelector } from './LanguageSelector';
 
 interface LayoutProps {
   children: ReactNode;
@@ -50,27 +51,12 @@ function NavItem({ to, icon: Icon, label, active, color, onClick }: NavItemProps
   );
 }
 
-function LanguageToggle() {
-  const { lang, setLang } = useLanguage();
-  return (
-    <button
-      data-testid="button-lang-toggle"
-      onClick={() => setLang(lang === 'nl' ? 'en' : 'nl')}
-      title={lang === 'nl' ? 'Switch to English' : 'Wissel naar Nederlands'}
-      className="hidden md:flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
-    >
-      <span className="text-base leading-none">{lang === 'nl' ? '🇳🇱' : '🇬🇧'}</span>
-      <span className="text-xs font-semibold">{lang === 'nl' ? 'NL' : 'EN'}</span>
-    </button>
-  );
-}
-
 export function Layout({ children }: LayoutProps) {
   const { profile, signOut, refreshProfile, isDocent, isAdmin } = useAuth();
   const { activeCourseId } = useActiveCourse();
   const location = useLocation();
   const navigate = useNavigate();
-  const { t, lang, setLang } = useLanguage();
+  const { t } = useLanguage();
 
   // De chat-met-document weergave krijgt iets meer horizontale ruimte (nog steeds
   // begrensd); andere pagina's houden de standaardbreedte zodat de algehele
@@ -95,7 +81,7 @@ export function Layout({ children }: LayoutProps) {
       items.push({ to: '/admin', icon: Settings, label: t('nav.admin'), color: 'from-slate-600 to-slate-700' });
     }
     return items;
-  }, [isDocent, isAdmin, lang]);
+  }, [isDocent, isAdmin, t]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -152,8 +138,8 @@ export function Layout({ children }: LayoutProps) {
                 <ActiveCourseBadge />
               </div>
 
-              {/* LANGUAGE TOGGLE */}
-              <LanguageToggle />
+              {/* LANGUAGE SELECTOR */}
+              <LanguageSelector />
 
               {/* REFRESH BUTTON */}
               <button
@@ -221,15 +207,9 @@ export function Layout({ children }: LayoutProps) {
               <span>{t('nav.switchCourse')}</span>
             </button>
 
-            {/* MOBILE ONLY: LANG TOGGLE + REFRESH + LOGOUT */}
+            {/* MOBILE ONLY: LANG SELECTOR + REFRESH + LOGOUT */}
             <div className="md:hidden pt-4 border-t border-gray-200 mt-4 space-y-2">
-              <button
-                onClick={() => { setLang(lang === 'nl' ? 'en' : 'nl'); setMobileMenuOpen(false); }}
-                className="flex items-center gap-3 px-4 py-3 rounded-xl text-gray-700 hover:bg-gray-100 transition-all font-medium w-full"
-              >
-                <span className="text-lg">{lang === 'nl' ? '🇳🇱' : '🇬🇧'}</span>
-                <span>{lang === 'nl' ? 'NL → EN' : 'EN → NL'}</span>
-              </button>
+              <LanguageSelector variant="mobile" onSelect={() => setMobileMenuOpen(false)} />
 
               <button
                 onClick={handleRefreshProfile}

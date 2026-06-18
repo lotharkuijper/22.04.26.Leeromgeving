@@ -23,6 +23,9 @@ export const TRANSLATION_LANGUAGES: TranslationLanguage[] = [
   { code: 'ar', native: 'العربية' },
   { code: 'hi', native: 'हिन्दी' },
   { code: 'id', native: 'Bahasa Indonesia' },
+  { code: 'ja', native: '日本語' },
+  { code: 'ko', native: '한국어' },
+  { code: 'hr', native: 'Hrvatski' },
 ];
 
 export const TRANSLATION_LANGUAGE_CODES = TRANSLATION_LANGUAGES.map((l) => l.code);

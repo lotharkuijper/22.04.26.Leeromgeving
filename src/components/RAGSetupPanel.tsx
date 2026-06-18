@@ -79,7 +79,7 @@ function formatBytes(bytes: number): string {
 
 export function RAGSetupPanel() {
   const { profile, session } = useAuth();
-  const { lang, t } = useLanguage();
+  const { t } = useLanguage();
   const { activeCourseId, activeCourse, activeCourseRagFolderIds, refreshActiveCourse, loading: courseLoading } = useActiveCourse();
 
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -389,7 +389,7 @@ export function RAGSetupPanel() {
             </div>
             <p className="text-xs text-gray-600 mt-0.5 mb-1">{t('admin.ragSetup.extract.desc')}</p>
             <div className="flex flex-wrap gap-3 text-xs text-gray-500 mb-3">
-              <span>{t('admin.ragSetup.extract.docCount', { count: String(processedDocs.length), s: processedDocs.length !== 1 ? (lang === 'en' ? 's' : 'en') : '' })}</span>
+              <span>{t(processedDocs.length === 1 ? 'admin.ragSetup.extract.docCountSingular' : 'admin.ragSetup.extract.docCountPlural', { count: String(processedDocs.length) })}</span>
               <span>·</span>
               <span>{t('admin.ragSetup.extract.conceptCount', { count: String(existingConceptCount) })}</span>
             </div>
@@ -586,9 +586,9 @@ export function RAGSetupPanel() {
                 {extracting ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> {t('admin.ragSetup.extract.extracting')}</>
                 ) : selectedDocIds.size > 0 && selectedDocIds.size < processedDocs.length ? (
-                  <><Sparkles className="w-4 h-4" /> {t('admin.ragSetup.extract.extractSelected', { count: String(selectedDocIds.size), s: selectedDocIds.size !== 1 ? (lang === 'en' ? 's' : 'en') : '' })}</>
+                  <><Sparkles className="w-4 h-4" /> {t(selectedDocIds.size === 1 ? 'admin.ragSetup.extract.extractSelectedSingular' : 'admin.ragSetup.extract.extractSelectedPlural', { count: String(selectedDocIds.size) })}</>
                 ) : (
-                  <><Sparkles className="w-4 h-4" /> {t('admin.ragSetup.extract.extractAll', { count: String(processedDocs.length), s: processedDocs.length !== 1 ? (lang === 'en' ? 's' : 'en') : '' })}</>
+                  <><Sparkles className="w-4 h-4" /> {t(processedDocs.length === 1 ? 'admin.ragSetup.extract.extractAllSingular' : 'admin.ragSetup.extract.extractAllPlural', { count: String(processedDocs.length) })}</>
                 )}
               </button>
               {selectedDocIds.size > 0 && (
@@ -634,7 +634,7 @@ export function RAGSetupPanel() {
 }
 
 function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: string; userId: string; courseId?: string; accessToken?: string }) {
-  const { t, lang } = useLanguage();
+  const { t } = useLanguage();
   const [items, setItems] = useState<FileUploadItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -810,7 +810,7 @@ function UploadSection({ folderId, userId, courseId, accessToken }: { folderId: 
               {isProcessing ? (
                 <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> {t('admin.ragSetup.upload.uploadingBtn')}</span>
               ) : (
-                t('admin.ragSetup.upload.uploadBtn', { count: String(pendingCount), s: pendingCount !== 1 ? (lang === 'en' ? 's' : 'en') : '' })
+                t(pendingCount === 1 ? 'admin.ragSetup.upload.uploadBtnSingular' : 'admin.ragSetup.upload.uploadBtnPlural', { count: String(pendingCount) })
               )}
             </button>
           </div>

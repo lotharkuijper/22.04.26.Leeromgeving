@@ -22,6 +22,9 @@ export const LANGUAGES = [
   { code: 'ar', native: 'العربية', promptName: 'Arabic' },
   { code: 'hi', native: 'हिन्दी', promptName: 'Hindi' },
   { code: 'id', native: 'Bahasa Indonesia', promptName: 'Indonesian' },
+  { code: 'ja', native: '日本語', promptName: 'Japanese' },
+  { code: 'ko', native: '한국어', promptName: 'Korean' },
+  { code: 'hr', native: 'Hrvatski', promptName: 'Croatian' },
 ];
 
 export const LANGUAGE_CODES = LANGUAGES.map((l) => l.code);

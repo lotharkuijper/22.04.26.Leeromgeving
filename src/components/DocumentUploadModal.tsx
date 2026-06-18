@@ -13,7 +13,7 @@ interface DocumentUploadModalProps {
 
 export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: DocumentUploadModalProps) {
   const { user } = useAuth();
-  const { lang } = useLanguage();
+  const { t } = useLanguage();
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -76,12 +76,12 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
     e.preventDefault();
 
     if (files.length === 0 || !user) {
-      setError(lang === 'en' ? 'Select at least one file' : 'Selecteer minstens één bestand');
+      setError(t('docUpload.errSelectFile'));
       return;
     }
 
     if (!folderId) {
-      setError(lang === 'en' ? 'No folder selected. Choose a folder to upload documents to.' : 'Geen folder geselecteerd. Kies een folder om documenten te uploaden.');
+      setError(t('docUpload.errNoFolder'));
       return;
     }
 
@@ -104,14 +104,14 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
       );
 
       if (results.failed.length > 0) {
-        setError(lang === 'en' ? `${results.successful.length} succeeded, ${results.failed.length} failed` : `${results.successful.length} succesvol, ${results.failed.length} mislukt`);
+        setError(t('docUpload.partialResult', { success: String(results.successful.length), failed: String(results.failed.length) }));
         setIsUploading(false);
       } else {
         onSuccess();
         onClose();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : (lang === 'en' ? 'Upload failed' : 'Upload mislukt'));
+      setError(err instanceof Error ? err.message : t('docUpload.uploadFailed'));
       setIsUploading(false);
     }
   };
@@ -120,12 +120,12 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
         <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-          <h2 className="text-xl font-semibold mb-4">{lang === 'en' ? 'Processing Documents' : 'Documenten Verwerken'}</h2>
+          <h2 className="text-xl font-semibold mb-4">{t('docUpload.processingTitle')}</h2>
 
           <div className="space-y-4">
             <div>
               <div className="text-sm text-gray-600 mb-2">
-                {lang === 'en' ? `File ${currentFileProgress.fileIndex + 1} of ${currentFileProgress.totalFiles}` : `Bestand ${currentFileProgress.fileIndex + 1} van ${currentFileProgress.totalFiles}`}
+                {t('docUpload.fileProgress', { current: String(currentFileProgress.fileIndex + 1), total: String(currentFileProgress.totalFiles) })}
               </div>
               <div className="font-medium mb-1">{currentFileProgress.fileName}</div>
               <div className="flex justify-between text-sm mb-2">
@@ -142,9 +142,7 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
 
             {currentFileProgress.progress.totalChunks && (
               <div className="text-sm text-gray-600">
-                {lang === 'en'
-                  ? `${currentFileProgress.progress.currentChunk} of ${currentFileProgress.progress.totalChunks} chunks processed`
-                  : `${currentFileProgress.progress.currentChunk} van ${currentFileProgress.progress.totalChunks} chunks verwerkt`}
+                {t('docUpload.chunksProcessed', { current: String(currentFileProgress.progress.currentChunk), total: String(currentFileProgress.progress.totalChunks) })}
               </div>
             )}
 
@@ -163,7 +161,7 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-6 border-b sticky top-0 bg-white">
-          <h2 className="text-xl font-semibold">{lang === 'en' ? 'Upload Document(s)' : 'Document(en) Uploaden'}</h2>
+          <h2 className="text-xl font-semibold">{t('docUpload.title')}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <X className="w-5 h-5" />
           </button>
@@ -191,10 +189,10 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
             <div className="space-y-2">
               <Upload className="w-12 h-12 text-gray-400 mx-auto" />
               <p className="text-gray-600">
-                {lang === 'en' ? 'Drag files here or click to select' : 'Sleep bestanden hierheen of klik om te selecteren'}
+                {t('docUpload.dragHint')}
               </p>
-              <p className="text-sm text-gray-500">{lang === 'en' ? 'PDF or DOCX, max 20MB per file' : 'PDF of DOCX, max 20MB per bestand'}</p>
-              <p className="text-sm font-medium text-blue-600">{lang === 'en' ? 'Multiple files allowed' : 'Meerdere bestanden toegestaan'}</p>
+              <p className="text-sm text-gray-500">{t('docUpload.fileTypeHint')}</p>
+              <p className="text-sm font-medium text-blue-600">{t('docUpload.multipleAllowed')}</p>
             </div>
           </div>
 
@@ -233,7 +231,7 @@ export function DocumentUploadModal({ onClose, onSuccess, folderId = null }: Doc
               onClick={onClose}
               className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
             >
-              {lang === 'en' ? 'Cancel' : 'Annuleren'}
+              {t('docUpload.cancel')}
             </button>
             <button
               type="submit"

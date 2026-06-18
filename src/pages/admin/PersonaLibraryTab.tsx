@@ -33,7 +33,7 @@ const EMPTY_FORM = {
 export function PersonaLibraryTab() {
   const { isAdmin, session } = useAuth();
   const { activeCourseId, activeCourse } = useActiveCourse();
-  const { lang, t } = useLanguage();
+  const { t } = useLanguage();
   const [personas, setPersonas] = useState<CoursePersona[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -73,9 +73,7 @@ export function PersonaLibraryTab() {
 
   const removePersona = async (p: CoursePersona) => {
     const confirmed = window.confirm(
-      lang === 'en'
-        ? `Remove "${p.name}" from the library? This cannot be undone.`
-        : `Verwijder "${p.name}" uit de bibliotheek? Dit kan niet ongedaan worden gemaakt.`
+      t('admin.personaLib.removeConfirm', { name: p.name })
     );
     if (!confirmed) return;
     setDeleting(p.id);
@@ -87,7 +85,7 @@ export function PersonaLibraryTab() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body.error || (lang === 'en' ? 'Could not delete persona' : 'Verwijderen mislukt'));
+        setError(body.error || t('admin.personaLib.err.deleteFailed'));
       } else {
         await load();
       }
@@ -120,7 +118,7 @@ export function PersonaLibraryTab() {
   const cancelEdit = () => { setEditingId(null); setError(null); };
 
   const savePersona = async () => {
-    if (!form.name.trim()) { setError(lang === 'en' ? 'Name is required' : 'Naam is verplicht'); return; }
+    if (!form.name.trim()) { setError(t('admin.personaLib.err.nameRequired')); return; }
     setSaving(true);
     setError(null);
     try {
@@ -134,7 +132,7 @@ export function PersonaLibraryTab() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setError(d.error || (lang === 'en' ? 'Save failed' : 'Opslaan mislukt'));
+        setError(d.error || t('admin.personaLib.err.saveFailed'));
       } else {
         setEditingId(null);
         await load();
@@ -173,9 +171,9 @@ export function PersonaLibraryTab() {
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setFetchMsg({ ok: false, text: d.error || (lang === 'en' ? 'Could not add persona' : 'Toevoegen mislukt') });
+        setFetchMsg({ ok: false, text: d.error || t('admin.personaLib.err.addFailed') });
       } else {
-        setFetchMsg({ ok: true, text: lang === 'en' ? `"${fetchTarget.name}" added to project.` : `"${fetchTarget.name}" is aan het project toegevoegd.` });
+        setFetchMsg({ ok: true, text: t('admin.personaLib.addedToProject', { name: fetchTarget.name }) });
       }
     } catch (err: any) {
       setFetchMsg({ ok: false, text: err.message });
@@ -208,7 +206,7 @@ export function PersonaLibraryTab() {
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-lg"
               data-testid="button-new-cp"
             >
-              <Plus className="w-4 h-4" />{lang === 'en' ? 'New template' : 'Nieuw sjabloon'}
+              <Plus className="w-4 h-4" />{t('admin.personaLib.newTemplate')}
             </button>
           )}
         </div>
@@ -245,14 +243,14 @@ export function PersonaLibraryTab() {
                     data-testid={`button-fetch-cp-${p.id}`}
                   >
                     <Download className="w-3 h-3" />
-                    {lang === 'en' ? 'Use in project' : 'Gebruik in project'}
+                    {t('admin.personaLib.useInProject')}
                   </button>
                   {isAdmin && (
                     <>
                       <button
                         onClick={() => startEdit(p)}
                         className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded"
-                        title={lang === 'en' ? 'Edit' : 'Bewerk'}
+                        title={t('common.edit')}
                         data-testid={`button-edit-cp-${p.id}`}
                       >
                         <Pencil className="w-4 h-4" />
@@ -261,7 +259,7 @@ export function PersonaLibraryTab() {
                         onClick={() => removePersona(p)}
                         disabled={deleting === p.id}
                         className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded disabled:opacity-40"
-                        title={lang === 'en' ? 'Remove from library' : 'Verwijder uit bibliotheek'}
+                        title={t('admin.personaLib.removeFromLibrary')}
                         data-testid={`button-delete-cp-${p.id}`}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -281,8 +279,8 @@ export function PersonaLibraryTab() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold">
                 {editingId === 'new'
-                  ? (lang === 'en' ? 'New library template' : 'Nieuw bibliotheek-sjabloon')
-                  : (lang === 'en' ? 'Edit library template' : 'Sjabloon bewerken')}
+                  ? t('admin.personaLib.modalNewTitle')
+                  : t('admin.personaLib.modalEditTitle')}
               </h3>
               <button onClick={cancelEdit} className="p-1 hover:bg-gray-100 rounded" data-testid="button-cancel-cp">
                 <X className="w-4 h-4" />
@@ -294,7 +292,7 @@ export function PersonaLibraryTab() {
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2">
-                  <label className="text-xs font-medium text-gray-700">{lang === 'en' ? 'Name' : 'Naam'}</label>
+                  <label className="text-xs font-medium text-gray-700">{t('admin.personaLib.nameLabel')}</label>
                   <input
                     value={form.name}
                     onChange={e => setForm({ ...form, name: e.target.value })}
@@ -320,8 +318,8 @@ export function PersonaLibraryTab() {
                   className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
                   data-testid="select-cp-type"
                 >
-                  <option value="conversational">{lang === 'en' ? 'Conversational partner — visible to students' : 'Gesprekspartner — zichtbaar voor studenten'}</option>
-                  <option value="evaluator">{lang === 'en' ? 'Evaluator — hidden, for formative assessment' : 'Beoordelaar — verborgen, formatieve beoordeling'}</option>
+                  <option value="conversational">{t('admin.personaLib.typeConversational')}</option>
+                  <option value="evaluator">{t('admin.personaLib.typeEvaluator')}</option>
                 </select>
               </div>
               <div>
@@ -346,7 +344,7 @@ export function PersonaLibraryTab() {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={cancelEdit} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">
-                {lang === 'en' ? 'Cancel' : 'Annuleren'}
+                {t('admin.personaLib.cancel')}
               </button>
               <button
                 onClick={savePersona}
@@ -355,7 +353,7 @@ export function PersonaLibraryTab() {
                 data-testid="button-save-cp"
               >
                 <Save className="w-4 h-4" />
-                {saving ? (lang === 'en' ? 'Saving…' : 'Opslaan…') : (lang === 'en' ? 'Save' : 'Opslaan')}
+                {saving ? t('admin.personaLib.saving') : t('common.save')}
               </button>
             </div>
           </div>
@@ -367,16 +365,14 @@ export function PersonaLibraryTab() {
           <div className="bg-white rounded-2xl max-w-md w-full p-6">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold">
-                {lang === 'en' ? 'Use in project' : 'Gebruik in project'}
+                {t('admin.personaLib.useInProject')}
               </h3>
               <button onClick={closeFetchModal} className="p-1 hover:bg-gray-100 rounded" data-testid="button-close-fetch">
                 <X className="w-4 h-4" />
               </button>
             </div>
             <p className="text-sm text-gray-600 mb-3">
-              {lang === 'en'
-                ? `Add "${fetchTarget.name}" as an independent copy to a project. The copy can be edited separately from this template.`
-                : `Voeg "${fetchTarget.name}" als onafhankelijke kopie toe aan een project. De kopie kan daarna vrij worden bewerkt, los van dit sjabloon.`}
+              {t('admin.personaLib.fetchDesc', { name: fetchTarget.name })}
             </p>
             {fetchMsg && (
               <div className={`px-3 py-2 rounded text-sm mb-3 ${fetchMsg.ok ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-700'}`}>
@@ -385,7 +381,7 @@ export function PersonaLibraryTab() {
             )}
             {projects.length === 0 ? (
               <p className="text-sm text-gray-500 mb-3">
-                {lang === 'en' ? 'No projects found in this course.' : 'Geen projecten gevonden in deze cursus.'}
+                {t('admin.personaLib.noProjects')}
               </p>
             ) : (
               <select
@@ -394,7 +390,7 @@ export function PersonaLibraryTab() {
                 className="w-full px-3 py-2 border border-gray-300 rounded text-sm mb-3"
                 data-testid="select-fetch-project"
               >
-                <option value="">{lang === 'en' ? '— Select a project —' : '— Kies een project —'}</option>
+                <option value="">{t('admin.personaLib.selectProjectOption')}</option>
                 {projects.map(pr => (
                   <option key={pr.id} value={pr.id}>{pr.title}</option>
                 ))}
@@ -402,7 +398,7 @@ export function PersonaLibraryTab() {
             )}
             <div className="flex justify-end gap-2">
               <button onClick={closeFetchModal} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg">
-                {lang === 'en' ? 'Close' : 'Sluiten'}
+                {t('common.close')}
               </button>
               {projects.length > 0 && !fetchMsg?.ok && (
                 <button
@@ -413,8 +409,8 @@ export function PersonaLibraryTab() {
                 >
                   <Download className="w-4 h-4" />
                   {fetching
-                    ? (lang === 'en' ? 'Adding…' : 'Toevoegen…')
-                    : (lang === 'en' ? 'Add to project' : 'Voeg toe aan project')}
+                    ? t('admin.personaLib.adding')
+                    : t('admin.personaLib.addToProject')}
                 </button>
               )}
             </div>

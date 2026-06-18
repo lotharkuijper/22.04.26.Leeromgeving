@@ -40,6 +40,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   try {
     localStorage.clear();
+    // Forceer Nederlands zodat de tekst-asserties tegen de nl-vertalingen
+    // kloppen; zonder voorkeur detecteert de provider de browsertaal (en in jsdom).
+    localStorage.setItem('lair-vu-lang', 'nl');
   } catch {}
 });
 

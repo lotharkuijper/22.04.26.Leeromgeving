@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { useLanguage } from '../i18n';
+import { intlLocale } from '../i18n/languages';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -1682,7 +1683,7 @@ const tabGroups = [
             {conceptsMeta.lastDocumentChange && (
               <span className="text-amber-700">
                 {t('admin.ragBeheer.lastDocChange')}{' '}
-                {new Date(conceptsMeta.lastDocumentChange).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                {new Date(conceptsMeta.lastDocumentChange).toLocaleString(intlLocale(lang), { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
           </span>
@@ -1740,7 +1741,7 @@ const tabGroups = [
                       </span>
                       <span className="text-xs text-gray-500" data-testid="text-last-extraction">
                         {conceptsMeta.lastExtraction
-                          ? `${t('admin.concepts.lastExtraction')} ${new Date(conceptsMeta.lastExtraction).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                          ? `${t('admin.concepts.lastExtraction')} ${new Date(conceptsMeta.lastExtraction).toLocaleString(intlLocale(lang), { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
                           : t('admin.concepts.neverRegenerated')}
                       </span>
                     </div>
@@ -1794,7 +1795,7 @@ const tabGroups = [
                       {conceptsMeta.lastDocumentChange && (
                         <span className="text-amber-700">
                           {t('admin.ragBeheer.lastDocChange')}{' '}
-                          {new Date(conceptsMeta.lastDocumentChange).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          {new Date(conceptsMeta.lastDocumentChange).toLocaleString(intlLocale(lang), { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </span>
                       )}
                     </span>

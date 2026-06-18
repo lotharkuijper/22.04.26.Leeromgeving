@@ -7,6 +7,7 @@ import { X, ChevronLeft, ChevronRight, Loader2, AlertCircle, Download, FileText,
 import { openRagDocument } from '../services/rag.service';
 import { TRANSLATION_LANGUAGES, TRANSLATION_LANGUAGE_CODES, nativeLangName } from '../lib/translationLanguages';
 import { MarkdownMessage } from './MarkdownMessage';
+import { useLanguage } from '../i18n';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -57,6 +58,7 @@ function segmentText(text: string, max = 5000): string[] {
 }
 
 export function DocumentViewer({ documentId, title, lang, onClose, onContextChange }: DocumentViewerProps) {
+  const { t } = useLanguage();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [meta, setMeta] = useState<{ title: string; sourceType: string } | null>(null);
@@ -95,10 +97,10 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
 
   const isSlides = meta?.sourceType === 'pptx';
   const pageWord = textPages
-    ? (lang === 'en' ? 'Section' : 'Sectie')
+    ? t('docViewer.section')
     : isSlides
-      ? (lang === 'en' ? 'Slide' : 'Dia')
-      : (lang === 'en' ? 'Page' : 'Pagina');
+      ? t('docViewer.slide')
+      : t('docViewer.page');
 
   // Layout-afgeleiden: side-by-side alleen in fullscreen op een breed scherm;
   // anders (smal paneel of niet-fullscreen) tabs.
@@ -178,7 +180,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
       await task.promise;
     } catch (err: any) {
       if (err?.name === 'RenderingCancelledException') return;
-      setError(lang === 'en' ? 'Could not render this page.' : 'Kon deze pagina niet weergeven.');
+      setError(t('docViewer.errRenderPage'));
     }
   }, [lang]);
 
@@ -234,7 +236,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
         if (!res.ok) {
           let detail = '';
           try { detail = (await res.json())?.error || ''; } catch { /* ignore */ }
-          throw new Error(detail || (lang === 'en' ? `Could not open document (${res.status}).` : `Kon document niet openen (${res.status}).`));
+          throw new Error(detail || t('docViewer.errOpenStatus', { status: String(res.status) }));
         }
         const data = (await res.json()) as ViewResponse;
         if (cancelled) return;
@@ -258,7 +260,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
         }
 
         const pdfRes = await fetch(data.url);
-        if (!pdfRes.ok) throw new Error(lang === 'en' ? 'Could not download the document.' : 'Kon het document niet ophalen.');
+        if (!pdfRes.ok) throw new Error(t('docViewer.errDownload'));
         const buffer = await pdfRes.arrayBuffer();
         if (cancelled) return;
         const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
@@ -270,7 +272,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
         // op false staat; geen aparte render hier (voorkomt dubbele render).
       } catch (err: any) {
         if (cancelled) return;
-        setError(err?.message || (lang === 'en' ? 'Could not open document.' : 'Kon document niet openen.'));
+        setError(err?.message || t('docViewer.errOpen'));
         setLoading(false);
       }
     })();
@@ -356,7 +358,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
         if (!res.ok) {
           let detail = '';
           try { detail = (await res.json())?.error || ''; } catch { /* ignore */ }
-          throw new Error(detail || (lang === 'en' ? 'Translation failed.' : 'Vertalen mislukt.'));
+          throw new Error(detail || t('docViewer.errTranslate'));
         }
         const data = await res.json();
         if (seq !== translateSeqRef.current) return;
@@ -365,7 +367,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
         setTranslatedText(translated);
       } catch (err: any) {
         if (seq !== translateSeqRef.current) return;
-        setTranslateError(err?.message || (lang === 'en' ? 'Translation failed.' : 'Vertalen mislukt.'));
+        setTranslateError(err?.message || t('docViewer.errTranslate'));
       } finally {
         if (seq === translateSeqRef.current) setTranslating(false);
       }
@@ -447,7 +449,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
           type="button"
           onClick={toggleTranslate}
           className={`rounded-md p-1.5 ${translateOpen ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-100 hover:text-gray-700'}`}
-          title={lang === 'en' ? 'Translate' : 'Vertalen'}
+          title={t('docViewer.translate')}
           aria-pressed={translateOpen}
           data-testid="btn-viewer-translate"
         >
@@ -457,7 +459,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
           type="button"
           onClick={() => openRagDocument(documentId).catch(() => {})}
           className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-          title={lang === 'en' ? 'Download' : 'Downloaden'}
+          title={t('docViewer.download')}
           data-testid="btn-viewer-download"
         >
           <Download className="h-4 w-4" />
@@ -466,7 +468,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
           type="button"
           onClick={onClose}
           className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-          title={lang === 'en' ? 'Close viewer' : 'Viewer sluiten'}
+          title={t('docViewer.closeViewer')}
           data-testid="btn-viewer-close"
         >
           <X className="h-4 w-4" />
@@ -477,7 +479,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
       {translateOpen && (
         <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-gray-50 px-3 py-2">
           <label className="sr-only" htmlFor="select-translate-lang">
-            {lang === 'en' ? 'Translation language' : 'Vertaaltaal'}
+            {t('docViewer.translationLanguage')}
           </label>
           <select
             id="select-translate-lang"
@@ -496,7 +498,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
               onClick={() => adjustFont(-FONT_SCALE_STEP)}
               disabled={fontScale <= FONT_SCALE_MIN}
               className="px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40"
-              title={lang === 'en' ? 'Smaller text' : 'Tekst kleiner'}
+              title={t('docViewer.smallerText')}
               data-testid="btn-translate-font-smaller"
             >
               A−
@@ -507,20 +509,20 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
               onClick={() => adjustFont(FONT_SCALE_STEP)}
               disabled={fontScale >= FONT_SCALE_MAX}
               className="px-2 py-1 text-base font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-40"
-              title={lang === 'en' ? 'Larger text' : 'Tekst groter'}
+              title={t('docViewer.largerText')}
               data-testid="btn-translate-font-larger"
             >
               A+
             </button>
           </div>
           <span className="ml-auto inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700" data-testid="label-machine-translated">
-            {lang === 'en' ? 'Machine-translated' : 'Automatisch vertaald'}
+            {t('docViewer.machineTranslated')}
           </span>
           <button
             type="button"
             onClick={() => setFullscreen((f) => !f)}
             className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-            title={fullscreen ? (lang === 'en' ? 'Shrink' : 'Verkleinen') : (lang === 'en' ? 'Expand' : 'Vergroten')}
+            title={fullscreen ? t('docViewer.shrink') : t('docViewer.expand')}
             data-testid="btn-translate-fullscreen"
           >
             {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
@@ -537,7 +539,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
             className={`px-4 py-2 ${activeTab === 'original' ? 'border-b-2 border-blue-600 font-medium text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
             data-testid="tab-viewer-original"
           >
-            {lang === 'en' ? 'Original' : 'Origineel'}
+            {t('docViewer.original')}
           </button>
           <button
             type="button"
@@ -545,7 +547,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
             className={`px-4 py-2 ${activeTab === 'translation' ? 'border-b-2 border-blue-600 font-medium text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
             data-testid="tab-viewer-translation"
           >
-            {lang === 'en' ? 'Translation' : 'Vertaling'}
+            {t('docViewer.translation')}
           </button>
         </div>
       )}
@@ -555,7 +557,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
         {loading && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gray-50 text-gray-500" data-testid="status-viewer-loading">
             <Loader2 className="h-6 w-6 animate-spin" />
-            <p className="text-sm">{lang === 'en' ? 'Preparing document…' : 'Document wordt voorbereid…'}</p>
+            <p className="text-sm">{t('docViewer.preparing')}</p>
           </div>
         )}
         {error && !loading && (
@@ -569,7 +571,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
               data-testid="btn-viewer-download-fallback"
             >
               <Download className="h-4 w-4" />
-              {lang === 'en' ? 'Download instead' : 'In plaats daarvan downloaden'}
+              {t('docViewer.downloadInstead')}
             </button>
           </div>
         )}
@@ -616,7 +618,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
               {translating && (
                 <div className="flex flex-col items-center justify-center gap-2 py-10 text-gray-500" data-testid="status-translate-loading">
                   <Loader2 className="h-5 w-5 animate-spin" />
-                  <p className="text-sm">{lang === 'en' ? 'Translating…' : 'Bezig met vertalen…'}</p>
+                  <p className="text-sm">{t('docViewer.translating')}</p>
                 </div>
               )}
               {!translating && translateError && (
@@ -629,13 +631,13 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
                     className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
                     data-testid="btn-translate-retry"
                   >
-                    {lang === 'en' ? 'Try again' : 'Opnieuw proberen'}
+                    {t('common.retry')}
                   </button>
                 </div>
               )}
               {!translating && !translateError && translatedText === '' && (
                 <p className="py-10 text-center text-sm text-gray-500" data-testid="status-translate-empty">
-                  {lang === 'en' ? 'No text on this page to translate.' : 'Geen tekst op deze pagina om te vertalen.'}
+                  {t('docViewer.noTextToTranslate')}
                 </p>
               )}
               {!translating && !translateError && translatedText !== null && translatedText !== '' && (
@@ -657,7 +659,7 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
               )}
             </div>
             <div className="border-t border-gray-100 px-4 py-1.5 text-[11px] text-gray-400" data-testid="text-translation-footer">
-              {(lang === 'en' ? 'Machine-translated to ' : 'Automatisch vertaald naar ')}{nativeLangName(targetLang)}
+              {t('docViewer.machineTranslatedTo', { lang: nativeLangName(targetLang) })}
             </div>
           </div>
         )}

@@ -76,7 +76,7 @@ export function buildRelationshipPromptBlock(score, history, lang = 'nl', maxRec
   const s = clampScore(score);
   const label = scoreToLabel(s, lang);
   const recent = Array.isArray(history) ? history.slice(-maxRecent).reverse() : [];
-  if (lang === 'en') {
+  if (lang !== 'nl') {
     const lines = [
       '',
       'Your current relationship with this group:',
@@ -125,7 +125,7 @@ export function sanitizeEventNote(note) {
 function formatEvent(e, lang) {
   const delta = Number(e?.delta);
   const deltaStr = Number.isFinite(delta) ? (delta >= 0 ? `+${delta}` : `${delta}`) : '0';
-  const src = e?.source || (lang === 'en' ? 'unknown' : 'onbekend');
+  const src = e?.source || (lang !== 'nl' ? 'unknown' : 'onbekend');
   const safeNote = sanitizeEventNote(e?.note);
   const note = safeNote ? ` — "${safeNote}"` : '';
   return `${deltaStr} (${src})${note}`;
@@ -211,7 +211,7 @@ export function validateCueResponse(input, { emissionEnabled = true, maxDelta = 
 export function buildCueInstructionBlock(lang = 'nl', maxDelta = CUE_DELTA_MAX) {
   const max = clampCueDeltaMax(maxDelta);
   const min = -max;
-  if (lang === 'en') {
+  if (lang !== 'nl') {
     return [
       '',
       'CONVERSATION CLOSE — RELATIONSHIP CUE EMISSION',
@@ -238,7 +238,7 @@ export function buildCueInstructionBlock(lang = 'nl', maxDelta = CUE_DELTA_MAX) 
 export function cueJsonInstruction(lang = 'nl', maxDelta = CUE_DELTA_MAX) {
   const max = clampCueDeltaMax(maxDelta);
   const min = -max;
-  if (lang === 'en') {
+  if (lang !== 'nl') {
     return `- "relationship_delta": integer in ${min}..${max} (default 0).
 - "relationship_reason": short sentence motivating the delta (empty when delta = 0).`;
   }

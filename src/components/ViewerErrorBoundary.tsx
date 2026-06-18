@@ -4,7 +4,11 @@ import { openRagDocument } from '../services/rag.service';
 
 interface Props {
   documentId: string;
-  lang: 'nl' | 'en';
+  labels: {
+    closeViewer: string;
+    cannotDisplay: string;
+    downloadInstead: string;
+  };
   onClose: () => void;
   children: ReactNode;
 }
@@ -36,7 +40,7 @@ export class ViewerErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.hasError) return this.props.children;
-    const { lang, documentId, onClose } = this.props;
+    const { labels, documentId, onClose } = this.props;
     return (
       <div className="flex h-full flex-col" data-testid="viewer-error-boundary">
         <div className="flex items-center justify-end border-b border-gray-200 px-3 py-2">
@@ -44,7 +48,7 @@ export class ViewerErrorBoundary extends Component<Props, State> {
             type="button"
             onClick={onClose}
             className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-            title={lang === 'en' ? 'Close viewer' : 'Viewer sluiten'}
+            title={labels.closeViewer}
             data-testid="btn-viewer-boundary-close"
           >
             <X className="h-4 w-4" />
@@ -53,9 +57,7 @@ export class ViewerErrorBoundary extends Component<Props, State> {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <AlertCircle className="h-8 w-8 text-amber-500" />
           <p className="text-sm text-gray-700">
-            {lang === 'en'
-              ? 'This document could not be displayed in the viewer.'
-              : 'Dit document kon niet in de viewer worden getoond.'}
+            {labels.cannotDisplay}
           </p>
           <button
             type="button"
@@ -64,7 +66,7 @@ export class ViewerErrorBoundary extends Component<Props, State> {
             data-testid="btn-viewer-boundary-download"
           >
             <Download className="h-4 w-4" />
-            {lang === 'en' ? 'Download instead' : 'In plaats daarvan downloaden'}
+            {labels.downloadInstead}
           </button>
         </div>
       </div>

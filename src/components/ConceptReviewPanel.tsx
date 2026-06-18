@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Eye, FileText, Loader2 } from 'lucide-react';
 import { useLanguage } from '../i18n';
+import { intlLocale } from '../i18n/languages';
 import {
   getExtractedConceptsForReview,
   approveExtractedConcept,
@@ -15,7 +16,7 @@ import { NoticeBanner, ConfirmDialog, useNotice } from './Notice';
 
 export function ConceptReviewPanel() {
   const { profile } = useAuth();
-  const { lang } = useLanguage();
+  const { t, lang } = useLanguage();
   const [concepts, setConcepts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [extracting, setExtracting] = useState(false);
@@ -58,7 +59,7 @@ export function ConceptReviewPanel() {
       loadConcepts();
     } catch (error) {
       console.error('Error approving concept:', error);
-      setNotice({ kind: 'error', message: lang === 'en' ? 'Approval failed. Please try again.' : 'Goedkeuren mislukt. Probeer het opnieuw.' });
+      setNotice({ kind: 'error', message: t('concepts.approveFailed') });
     }
   };
 
@@ -69,7 +70,7 @@ export function ConceptReviewPanel() {
       loadConcepts();
     } catch (error) {
       console.error('Error rejecting concept:', error);
-      setNotice({ kind: 'error', message: lang === 'en' ? 'Rejection failed. Please try again.' : 'Afwijzen mislukt. Probeer het opnieuw.' });
+      setNotice({ kind: 'error', message: t('concepts.rejectFailed') });
     }
   };
 
@@ -80,10 +81,10 @@ export function ConceptReviewPanel() {
       await extractConceptsFromDocument(selectedDocument, profile.id, setExtractionProgress);
       loadConcepts();
       setSelectedDocument(null);
-      setNotice({ kind: 'success', message: lang === 'en' ? 'Concept extraction completed for the selected document.' : 'Begrippen-extractie voltooid voor het geselecteerde document.' });
+      setNotice({ kind: 'success', message: t('concepts.extractDocSuccess') });
     } catch (error) {
       console.error('Error extracting concepts:', error);
-      setNotice({ kind: 'error', message: lang === 'en' ? 'Concept extraction failed. Please try again later.' : 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
+      setNotice({ kind: 'error', message: t('concepts.extractFailed') });
     }
     setExtracting(false);
     setExtractionProgress(null);
@@ -99,14 +100,15 @@ export function ConceptReviewPanel() {
       });
       setNotice({
         kind: 'success',
-        message: lang === 'en'
-          ? `${result.totalConcepts} concepts extracted from ${result.processedDocuments} documents.`
-          : `${result.totalConcepts} begrippen geëxtraheerd uit ${result.processedDocuments} documenten.`,
+        message: t('concepts.extractAllSuccess', {
+          concepts: String(result.totalConcepts),
+          documents: String(result.processedDocuments),
+        }),
       });
       loadConcepts();
     } catch (error) {
       console.error('Error extracting concepts:', error);
-      setNotice({ kind: 'error', message: lang === 'en' ? 'Concept extraction failed. Please try again later.' : 'Begrippen-extractie mislukt. Probeer het later opnieuw.' });
+      setNotice({ kind: 'error', message: t('concepts.extractFailed') });
     }
     setExtracting(false);
     setExtractionProgress(null);
@@ -117,13 +119,13 @@ export function ConceptReviewPanel() {
       <NoticeBanner notice={notice} onDismiss={clearNotice} />
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <h3 className="font-semibold text-gray-900 mb-3">{lang === 'en' ? 'Concept Extraction' : 'Begrippen Extractie'}</h3>
+        <h3 className="font-semibold text-gray-900 mb-3">{t('concepts.extractionTitle')}</h3>
 
         <div className="space-y-3">
           <div className="flex items-end gap-3">
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                {lang === 'en' ? 'Select document' : 'Document selecteren'}
+                {t('concepts.selectDocument')}
               </label>
               <select
                 value={selectedDocument || ''}
@@ -132,7 +134,7 @@ export function ConceptReviewPanel() {
                 disabled={extracting}
                 data-testid="select-extract-document"
               >
-                <option value="">{lang === 'en' ? 'Choose a document...' : 'Kies een document...'}</option>
+                <option value="">{t('concepts.chooseDocument')}</option>
                 {documents.map((doc) => (
                   <option key={doc.id} value={doc.id}>
                     {doc.title} ({doc.total_chunks} chunks)
@@ -147,7 +149,7 @@ export function ConceptReviewPanel() {
               data-testid="button-extract-document"
             >
               <FileText className="w-4 h-4" />
-              {lang === 'en' ? 'Extract' : 'Extracteer'}
+              {t('concepts.extractBtn')}
             </button>
           </div>
 
@@ -157,7 +159,7 @@ export function ConceptReviewPanel() {
             className="w-full px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="button-extract-all"
           >
-            {lang === 'en' ? 'Extract Concepts from All Documents' : 'Extracteer Begrippen uit Alle Documenten'}
+            {t('concepts.extractAllBtn')}
           </button>
         </div>
 
@@ -175,7 +177,7 @@ export function ConceptReviewPanel() {
             </div>
             {extractionProgress.conceptsFound !== undefined && (
               <p className="text-sm text-gray-600 mt-2">
-                {lang === 'en' ? `${extractionProgress.conceptsFound} concepts found` : `${extractionProgress.conceptsFound} begrippen gevonden`}
+                {t('concepts.conceptsFound', { count: String(extractionProgress.conceptsFound) })}
               </p>
             )}
           </div>
@@ -184,7 +186,7 @@ export function ConceptReviewPanel() {
 
       <div>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
-          {lang === 'en' ? `Concepts to Review (${concepts.length})` : `Te Reviewen Begrippen (${concepts.length})`}
+          {t('concepts.toReviewCount', { count: String(concepts.length) })}
         </h3>
 
         {loading && (
@@ -196,7 +198,7 @@ export function ConceptReviewPanel() {
         {!loading && concepts.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             <Eye className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-            <p>{lang === 'en' ? 'No concepts to review' : 'Geen begrippen te reviewen'}</p>
+            <p>{t('concepts.noConceptsToReview')}</p>
           </div>
         )}
 
@@ -223,7 +225,7 @@ export function ConceptReviewPanel() {
 
                   {concept.key_points && concept.key_points.length > 0 && (
                     <div className="mt-2">
-                      <p className="text-xs font-medium text-gray-700 mb-1">{lang === 'en' ? 'Key points:' : 'Kernpunten:'}</p>
+                      <p className="text-xs font-medium text-gray-700 mb-1">{t('concepts.keyPointsLabel')}</p>
                       <ul className="list-disc list-inside space-y-1">
                         {concept.key_points.map((point: string, idx: number) => (
                           <li key={idx} className="text-xs text-gray-600">{point}</li>
@@ -234,7 +236,7 @@ export function ConceptReviewPanel() {
 
                   {concept.examples && concept.examples.length > 0 && (
                     <div className="mt-2">
-                      <p className="text-xs font-medium text-gray-700 mb-1">{lang === 'en' ? 'Examples:' : 'Voorbeelden:'}</p>
+                      <p className="text-xs font-medium text-gray-700 mb-1">{t('concepts.examplesLabel')}</p>
                       <ul className="list-disc list-inside space-y-1">
                         {concept.examples.map((example: string, idx: number) => (
                           <li key={idx} className="text-xs text-gray-600">{example}</li>
@@ -244,7 +246,7 @@ export function ConceptReviewPanel() {
                   )}
 
                   <p className="text-xs text-gray-500 mt-2">
-                    {lang === 'en' ? 'Extracted' : 'Geëxtraheerd'}: {new Date(concept.extracted_at).toLocaleString(lang === 'en' ? 'en-GB' : 'nl-NL')}
+                    {t('concepts.extractedLabel')}: {new Date(concept.extracted_at).toLocaleString(intlLocale(lang))}
                   </p>
                 </div>
 
@@ -252,7 +254,7 @@ export function ConceptReviewPanel() {
                   <button
                     onClick={() => handleApprove(concept.id)}
                     className="p-2 text-green-700 bg-green-100 rounded-lg hover:bg-green-200 transition-colors"
-                    title={lang === 'en' ? 'Approve' : 'Goedkeuren'}
+                    title={t('concepts.approve')}
                     data-testid={`button-approve-concept-${concept.id}`}
                   >
                     <CheckCircle className="w-5 h-5" />
@@ -260,7 +262,7 @@ export function ConceptReviewPanel() {
                   <button
                     onClick={() => handleReject(concept.id)}
                     className="p-2 text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
-                    title={lang === 'en' ? 'Reject' : 'Afwijzen'}
+                    title={t('concepts.reject')}
                     data-testid={`button-reject-concept-${concept.id}`}
                   >
                     <XCircle className="w-5 h-5" />
@@ -274,9 +276,9 @@ export function ConceptReviewPanel() {
 
       <ConfirmDialog
         open={confirmExtractAll}
-        title={lang === 'en' ? 'Extract concepts from all documents?' : 'Begrippen extraheren uit alle documenten?'}
-        description={lang === 'en' ? 'Extracting concepts from all documents may take a while. Do you want to continue?' : 'Begrippen-extractie uit alle documenten kan lang duren. Wil je doorgaan?'}
-        confirmLabel={lang === 'en' ? 'Continue' : 'Doorgaan'}
+        title={t('concepts.extractAllConfirmTitle')}
+        description={t('concepts.extractAllConfirmDesc')}
+        confirmLabel={t('chooseCourse.continue')}
         onConfirm={() => { void runExtractFromAll(); }}
         onCancel={() => setConfirmExtractAll(false)}
       />

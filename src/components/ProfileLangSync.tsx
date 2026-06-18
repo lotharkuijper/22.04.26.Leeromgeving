@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
+import { isSupportedLang } from '../i18n/languages';
 import type { Lang } from '../i18n/translations';
 
 export function ProfileLangSync() {
@@ -17,7 +18,7 @@ export function ProfileLangSync() {
     if (initialSyncDone.current) return;
 
     const profileLang = profile.preferred_lang;
-    if (profileLang === 'nl' || profileLang === 'en') {
+    if (isSupportedLang(profileLang)) {
       setLang(profileLang as Lang);
     }
     initialSyncDone.current = true;

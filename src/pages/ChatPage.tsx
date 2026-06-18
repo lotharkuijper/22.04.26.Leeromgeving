@@ -52,15 +52,14 @@ function AssistantMessageBody({
   messageId,
   content,
   retrievedContext,
-  lang,
   onRequestSource,
 }: {
   messageId: string;
   content: string;
   retrievedContext?: any;
-  lang: 'nl' | 'en';
   onRequestSource: (s: { documentId?: string; title: string }) => void;
 }) {
+  const { t } = useLanguage();
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const dispRaw: SourceItem[] = (retrievedContext?.displaySources as SourceItem[] | undefined)
     ?? (retrievedContext?.chunks
@@ -100,14 +99,14 @@ function AssistantMessageBody({
       {dispRaw.length > 0 && (
         <SourceList
           sources={dispRaw}
-          label={lang === 'en' ? 'Sources from course material' : 'Bronnen uit cursusmateriaal'}
+          label={t('chat.sourcesFromMaterial')}
           showSimilarity={false}
           open={sourcesOpen}
           onOpenChange={setSourcesOpen}
           idPrefix={messageId}
           onOpenSource={handleOpenSource}
-          uniqueLabel={lang === 'en' ? 'unique' : 'uniek'}
-          slideWord={lang === 'en' ? 'slide' : 'dia'}
+          uniqueLabel={t('chat.uniqueWord')}
+          slideWord={t('quiz.slideWord')}
         />
       )}
     </>
@@ -278,7 +277,7 @@ export function ChatPage() {
         console.error('[CHAT] Error loading conversations:', error);
         setPageNotice({
           kind: 'error',
-          message: lang === 'en' ? 'Could not load conversations. Try refreshing the page.' : 'Kon conversaties niet laden. Probeer de pagina te vernieuwen.',
+          message: t('chat.loadConversationsError'),
         });
         return;
       }
@@ -302,7 +301,7 @@ export function ChatPage() {
       console.error('[CHAT] Unexpected error loading conversations:', error);
       setPageNotice({
         kind: 'error',
-        message: lang === 'en' ? 'An unexpected error occurred while loading conversations.' : 'Er is een onverwachte fout opgetreden bij het laden van conversaties.',
+        message: t('chat.loadConversationsUnexpected'),
       });
     }
   };
@@ -333,7 +332,7 @@ export function ChatPage() {
       console.error('No profile found');
       setPageNotice({
         kind: 'error',
-        message: lang === 'en' ? 'Your profile could not be loaded. Please try logging in again.' : 'Je profiel is niet geladen. Probeer opnieuw in te loggen.',
+        message: t('chat.profileNotLoadedRelogin'),
       });
       return;
     }
@@ -342,7 +341,7 @@ export function ChatPage() {
     if (!activeCourse) {
       setPageNotice({
         kind: 'error',
-        message: lang === 'en' ? 'Select a course first to start a conversation.' : 'Kies eerst een cursus om een gesprek te starten.',
+        message: t('chat.selectCourseFirst'),
       });
       return;
     }
@@ -353,7 +352,7 @@ export function ChatPage() {
       .from('conversations')
       .insert({
         user_id: profile.id,
-        title: lang === 'en' ? 'New conversation' : 'Nieuwe conversatie',
+        title: t('chat.newConversationTitle'),
         module_type: 'general',
         course_id: activeCourse,
       })
@@ -364,7 +363,7 @@ export function ChatPage() {
       console.error('Error creating conversation:', error);
       setPageNotice({
         kind: 'error',
-        message: lang === 'en' ? `Could not create conversation: ${error.message}` : `Kon geen conversatie aanmaken: ${error.message}`,
+        message: t('chat.createConversationFailed', { error: error.message }),
       });
       return;
     }
@@ -389,7 +388,7 @@ export function ChatPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || (lang === 'en' ? `Delete failed (${res.status})` : `Verwijderen mislukt (${res.status})`));
+        throw new Error(err.error || t('chat.deleteFailedStatus', { status: String(res.status) }));
       }
 
       const result = await res.json();
@@ -405,11 +404,11 @@ export function ChatPage() {
       if (generateSummary && result.summaryFailed) {
         setPageNotice({
           kind: 'warning',
-          message: lang === 'en' ? 'The conversation was deleted, but the summary could not be saved to your learning journal. Please try again later.' : 'Het gesprek is verwijderd, maar de samenvatting kon niet worden opgeslagen in je leerdagboek. Probeer het later opnieuw.',
+          message: t('chat.deleteSummaryFailed'),
         });
       }
     } catch (err: any) {
-      setPageNotice({ kind: 'error', message: lang === 'en' ? `Delete error: ${err.message}` : `Fout bij verwijderen: ${err.message}` });
+      setPageNotice({ kind: 'error', message: t('chat.deleteError', { error: String(err.message) }) });
     } finally {
       setDeleting(false);
     }
@@ -426,7 +425,7 @@ export function ChatPage() {
     const { documentId } = sourceChoice;
     setSourceChoice(null);
     openRagDocument(documentId).catch((err) => {
-      setDownloadError(err?.message || (lang === 'en' ? 'Could not open source.' : 'Kon bron niet openen.'));
+      setDownloadError(err?.message || t('chat.openSourceFailed'));
     });
   };
 
@@ -580,7 +579,7 @@ export function ChatPage() {
     } catch (error: any) {
       console.error('[CHAT] Error sending message:', error);
       setFeedbackError({
-        title: lang === 'en' ? 'An error occurred while sending the message.' : 'Er is een fout opgetreden bij het versturen van het bericht.',
+        title: t('chat.sendMessageError'),
         detail: error?.message || undefined,
       });
       setPendingRetry({ history, isFirstMessage });
@@ -714,7 +713,7 @@ export function ChatPage() {
               <button
                 data-testid={`btn-delete-${conv.id}`}
                 onClick={(e) => { e.stopPropagation(); setDeleteDialog({ conversationId: conv.id, title: conv.title }); }}
-                title={lang === 'en' ? 'Delete conversation' : 'Gesprek verwijderen'}
+                title={t('chat.deleteTitle')}
                 className="absolute right-2 top-2.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-100 text-red-600"
               >
                 <Trash2 className="w-4 h-4" />
@@ -760,7 +759,6 @@ export function ChatPage() {
                         messageId={msg.id}
                         content={msg.content}
                         retrievedContext={msg.retrievedContext}
-                        lang={lang}
                         onRequestSource={handleRequestSource}
                       />
                     ) : (
@@ -837,16 +835,10 @@ export function ChatPage() {
                           data-testid="text-chat-context-stats-error"
                         >
                           {contextStats.used < contextStats.total
-                            ? (lang === 'en'
-                              ? `${contextStats.used} of ${contextStats.total} found passages were included (the rest were skipped to keep the prompt within the limit).`
-                              : `${contextStats.used} van ${contextStats.total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).`)
+                            ? t('chat.contextStatsPartialError', { used: String(contextStats.used), total: String(contextStats.total) })
                             : contextStats.charTrimmed
-                              ? (lang === 'en'
-                                  ? `All ${contextStats.total} found passages were included, but one passage was truncated to keep the prompt within the limit.`
-                                  : `Alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`)
-                              : (lang === 'en'
-                                  ? `All ${contextStats.total} found passages were available to the language model.`
-                                  : `Alle ${contextStats.total} gevonden passages waren beschikbaar voor het taalmodel.`)}
+                              ? t('chat.contextStatsTrimmedError', { total: String(contextStats.total) })
+                              : t('chat.contextStatsAllError', { total: String(contextStats.total) })}
                         </p>
                       )}
                       <button
@@ -870,12 +862,8 @@ export function ChatPage() {
                     data-testid="text-chat-context-stats"
                   >
                     {contextStats.used < contextStats.total
-                      ? (lang === 'en'
-                        ? `Note: ${contextStats.used} of ${contextStats.total} found passages were sent to the language model (highest-scoring first). The rest were skipped to keep the prompt within the limit.`
-                        : `Let op: ${contextStats.used} van ${contextStats.total} gevonden passages zijn meegestuurd naar het taalmodel (de hoogst-scorende eerst). De overige zijn overgeslagen om de prompt onder de limiet te houden.`)
-                      : (lang === 'en'
-                          ? `Note: all ${contextStats.total} found passages were included, but one passage was truncated to keep the prompt within the limit.`
-                          : `Let op: alle ${contextStats.total} gevonden passages zijn meegestuurd, maar de inhoud van een passage is ingekort om de prompt onder de limiet te houden.`)}
+                      ? t('chat.contextStatsPartialNote', { used: String(contextStats.used), total: String(contextStats.total) })
+                      : t('chat.contextStatsTrimmedNote', { total: String(contextStats.total) })}
                   </p>
                 </div>
               )}
@@ -931,7 +919,7 @@ export function ChatPage() {
           onDoubleClick={() => setViewerWidth(VIEWER_DEFAULT_PX)}
           role="separator"
           aria-orientation="vertical"
-          title={lang === 'en' ? 'Drag to resize · double-click to reset' : 'Sleep om te verbreden · dubbelklik om te herstellen'}
+          title={t('chat.viewerResizeHint')}
           className="hidden md:flex w-2 shrink-0 cursor-col-resize items-center justify-center group touch-none"
           data-testid="divider-document-viewer"
         >
@@ -948,7 +936,11 @@ export function ChatPage() {
           <ViewerErrorBoundary
             key={viewerDoc.documentId}
             documentId={viewerDoc.documentId}
-            lang={lang}
+            labels={{
+              closeViewer: t('docViewer.closeViewer'),
+              cannotDisplay: t('docViewer.cannotDisplay'),
+              downloadInstead: t('docViewer.downloadInstead'),
+            }}
             onClose={() => { setViewerDoc(null); setViewerContext(null); }}
           >
             <DocumentViewer
@@ -990,7 +982,7 @@ export function ChatPage() {
               <FileText className="w-5 h-5 text-blue-700" />
             </div>
             <h2 className="text-lg font-semibold text-gray-900">
-              {lang === 'en' ? 'Open source' : 'Bron openen'}
+              {t('chat.openSourceTitle')}
             </h2>
             <button
               onClick={() => setSourceChoice(null)}
@@ -1002,9 +994,7 @@ export function ChatPage() {
           </div>
 
           <p className="text-sm text-gray-600 mb-1">
-            {lang === 'en'
-              ? 'How would you like to open this source?'
-              : 'Hoe wil je deze bron openen?'}
+            {t('chat.openSourceQuestion')}
           </p>
           <p className="text-sm font-medium text-gray-800 mb-5 truncate" title={sourceChoice.title}>
             {sourceChoice.title}
@@ -1017,7 +1007,7 @@ export function ChatPage() {
               className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-semibold rounded-xl hover:from-blue-600 hover:to-indigo-700 transition-all shadow-md"
             >
               <Eye className="w-4 h-4" />
-              {lang === 'en' ? 'View in chat' : 'Bekijken in de chat'}
+              {t('chat.viewInChat')}
             </button>
             <button
               data-testid="btn-source-choice-download"
@@ -1025,7 +1015,7 @@ export function ChatPage() {
               className="flex items-center justify-center gap-2 w-full px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-all"
             >
               <Download className="w-4 h-4" />
-              {lang === 'en' ? 'Download' : 'Downloaden'}
+              {t('chat.download')}
             </button>
           </div>
         </div>

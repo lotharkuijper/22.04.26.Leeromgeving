@@ -593,7 +593,7 @@ export function ProjectRoomPage() {
       const r = await fetch(`/api/projects/${projectId}/documents/${docId}/reviews`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ personaId: persona.id, groupId }),
+        body: JSON.stringify({ personaId: persona.id, groupId, lang }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || t('room.review.failed'));
@@ -715,7 +715,8 @@ export function ProjectRoomPage() {
       if (!r.ok) throw new Error(data.error || t('room.personaChatFailed'));
       if (data.threadId) setActiveThreadId(data.threadId);
       setPersonaMessages(prev => [...prev, {
-        id: `reply-${Date.now()}`, role: 'assistant', content: data.reply,
+        id: `reply-${Date.now()}`, role: 'assistant',
+        content: data.relationshipBlocked ? t('room.relationship.blockedBanner') : data.reply,
         created_at: new Date().toISOString(), user_id: null,
       }]);
       // Task #167: server kan een blokkade signaleren — herlaad relaties zodat
@@ -1136,7 +1137,7 @@ export function ProjectRoomPage() {
                 {personas.length === 0 && <option value="">{t('room.noPersonas')}</option>}
                 {personas.map(p => {
                   const rel = relationships.find(r => r.personaId === p.id);
-                  const labelSuffix = rel ? ` • ${rel.label}${rel.blocked ? ' ⛔' : ''}` : '';
+                  const labelSuffix = rel ? ` • ${t(`room.relationship.label.${rel.bucket}`)}${rel.blocked ? ' ⛔' : ''}` : '';
                   return (
                     <option key={p.id} value={p.id} data-testid={`option-persona-${p.id}`}>
                       {(p.avatar_emoji || '🤖')} {p.name}{labelSuffix}
@@ -1161,11 +1162,11 @@ export function ProjectRoomPage() {
                 return (
                   <span
                     className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[10px] font-medium shrink-0 ${bucketCls[rel.bucket]}`}
-                    title={isStaff && rel.score !== null ? `score ${rel.score}` : rel.label}
+                    title={isStaff && rel.score !== null ? `score ${rel.score}` : t(`room.relationship.label.${rel.bucket}`)}
                     data-testid={`badge-relationship-${rel.personaId}`}
                   >
                     <span className={`inline-block w-1.5 h-1.5 rounded-full ${bucketDot[rel.bucket]}`} />
-                    {rel.label}
+                    {t(`room.relationship.label.${rel.bucket}`)}
                     {isStaff && rel.score !== null && (
                       <span className="text-gray-500 ml-1">({rel.score >= 0 ? '+' : ''}{rel.score})</span>
                     )}
@@ -1844,7 +1845,7 @@ export function ProjectRoomPage() {
                                 {rel.score === null ? '—' : (rel.score >= 0 ? `+${rel.score}` : rel.score)}
                               </td>
                               <td className={`py-1 pr-2 ${bucketCls[rel.bucket]}`}>
-                                {rel.label}{rel.blocked && <span className="ml-1 text-red-600">⛔</span>}
+                                {t(`room.relationship.label.${rel.bucket}`)}{rel.blocked && <span className="ml-1 text-red-600">⛔</span>}
                               </td>
                               <td className="py-1 pr-2">
                                 {rel.history.length === 0 ? (
