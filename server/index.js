@@ -74,6 +74,8 @@ import {
   isTranslatableText,
   buildContentTranslationPrompt,
   buildContentBatchPrompt,
+  CONTENT_TRANSLATE_MAX_TOTAL_CHARS,
+  createSlidingWindowLimiter,
 } from './documentTranslation.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
@@ -1701,6 +1703,21 @@ const CONTENT_BATCH_INLINE_MAX_CHARS = 1500; // langer dan dit → eigen LLM-cal
 const CONTENT_BATCH_MAX_ITEMS = 25;          // max korte fragmenten per JSON-call
 const CONTENT_BATCH_MAX_CHARS = 6000;        // max totale bron-tekens per JSON-call
 
+// Per-gebruiker rate limit (Task #289): bescherming tegen een ingelogde
+// gebruiker die het endpoint in een lus aanroept met willekeurige tekst en zo
+// de Azure-kosten opdrijft + de gedeelde cache opblaast. Ruim genoeg voor
+// normale paginanavigatie (elke pagina bundelt al tot 50 fragmenten in één
+// call), maar een strakke lus loopt snel tegen de limiet aan. In-memory →
+// per Express-proces; bij horizontale schaling is een gedeelde store nodig.
+const CONTENT_TRANSLATE_RATE_WINDOW_MS = 60_000;
+const CONTENT_TRANSLATE_RATE_MAX = 60;
+const contentTranslateLimiter = createSlidingWindowLimiter({
+  windowMs: CONTENT_TRANSLATE_RATE_WINDOW_MS,
+  max: CONTENT_TRANSLATE_RATE_MAX,
+});
+// Periodieke opschoning van inactieve sleutels (voorkomt geheugengroei).
+setInterval(() => contentTranslateLimiter.sweep(), CONTENT_TRANSLATE_RATE_WINDOW_MS).unref?.();
+
 // Vertaal één content-fragment (markdown of lange plain) in een losse call.
 async function translateContentOne(text, targetLang, format) {
   const body = {
@@ -1768,6 +1785,15 @@ app.post('/api/translate-content', async (req, res) => {
   const auth = await requireAuthUser(req, res);
   if (!auth) return; // requireAuthUser stuurde zelf al 401/503
 
+  // Per-gebruiker rate limit: stopt een lus met willekeurige tekst voordat hij
+  // Azure-kosten maakt of cache-rijen aanmaakt.
+  const rl = contentTranslateLimiter.check(auth.user.id);
+  if (!rl.allowed) {
+    const retryAfter = Math.ceil(rl.retryAfterMs / 1000);
+    res.set('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Te veel vertaalverzoeken. Probeer het zo opnieuw.' });
+  }
+
   const targetLang = normalizeTargetLang(req.body?.targetLang);
   if (!targetLang) return res.status(400).json({ error: 'Onbekende doeltaal.' });
 
@@ -1783,6 +1809,7 @@ app.post('/api/translate-content', async (req, res) => {
   // nl-gebruiker nooit een 503 krijgt.
   const translations = {};
   const needs = [];
+  let totalChars = 0;
   for (const raw of rawItems) {
     const key = typeof raw?.key === 'string' ? raw.key : null;
     if (!key) continue;
@@ -1791,6 +1818,12 @@ app.post('/api/translate-content', async (req, res) => {
     if (targetLang === 'nl') continue;
     if (!isTranslatableText(text)) continue;
     if (text.length > TRANSLATION_MAX_SOURCE_CHARS) continue;
+    // Totale-tekens-cap: voorkomt dat één call tientallen maximale fragmenten
+    // bundelt en zo de Azure-kosten opdrijft.
+    totalChars += text.length;
+    if (totalChars > CONTENT_TRANSLATE_MAX_TOTAL_CHARS) {
+      return res.status(413).json({ error: 'Te veel tekst in één aanvraag.' });
+    }
     needs.push({ key, format, text, hash: hashContentSource(text, format) });
   }
   if (needs.length === 0) return res.json({ translations });

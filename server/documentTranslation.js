@@ -188,3 +188,44 @@ export function buildContentBatchPrompt(targetCode) {
     '- Preserve any line breaks inside a value.',
   ].join('\n');
 }
+
+// ── Misbruik-/kostenbescherming voor /api/translate-content (Task #289) ──────
+// Naast de bestaande per-item- en per-batch-caps begrenzen we ook de TOTALE
+// bron-tekens per aanvraag, zodat één call niet tientallen maximale fragmenten
+// kan bundelen en zo de Azure-kosten kan opdrijven.
+export const CONTENT_TRANSLATE_MAX_TOTAL_CHARS = 24000;
+
+// Pure, in-memory sliding-window rate limiter. Bewust zonder timers (de tijd
+// gaat via `now`), zodat hij deterministisch te testen is. Per sleutel (= user)
+// houden we de timestamps van recente toegestane aanvragen bij; oude vallen uit
+// het venster. Geschikt voor één Express-proces; bij meerdere instances zou een
+// gedeelde store nodig zijn. Geeft { allowed, retryAfterMs, remaining } terug.
+export function createSlidingWindowLimiter({ windowMs, max }) {
+  const hits = new Map(); // key -> number[] (oplopende timestamps)
+  return {
+    check(key, now = Date.now()) {
+      const cutoff = now - windowMs;
+      const recent = (hits.get(key) || []).filter((ts) => ts > cutoff);
+      if (recent.length >= max) {
+        hits.set(key, recent);
+        const retryAfterMs = Math.max(0, recent[0] + windowMs - now);
+        return { allowed: false, retryAfterMs, remaining: 0 };
+      }
+      recent.push(now);
+      hits.set(key, recent);
+      return { allowed: true, retryAfterMs: 0, remaining: max - recent.length };
+    },
+    // Verwijder sleutels zonder recente activiteit (voorkomt onbegrensde groei).
+    sweep(now = Date.now()) {
+      const cutoff = now - windowMs;
+      for (const [key, arr] of hits) {
+        const recent = arr.filter((ts) => ts > cutoff);
+        if (recent.length === 0) hits.delete(key);
+        else hits.set(key, recent);
+      }
+    },
+    _size() {
+      return hits.size;
+    },
+  };
+}

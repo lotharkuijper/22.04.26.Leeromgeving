@@ -7,6 +7,8 @@ import {
   isTranslatableText,
   buildContentTranslationPrompt,
   buildContentBatchPrompt,
+  CONTENT_TRANSLATE_MAX_TOTAL_CHARS,
+  createSlidingWindowLimiter,
 } from '../documentTranslation.js';
 
 describe('content-translation helpers (Task #288)', () => {
@@ -90,6 +92,55 @@ describe('content-translation helpers (Task #288)', () => {
       expect(p).toContain('German');
       expect(p).toMatch(/JSON object/i);
       expect(p).toMatch(/same keys/i);
+    });
+  });
+});
+
+describe('translate-content abuse protection (Task #289)', () => {
+  it('exposes a sane total-character cap', () => {
+    expect(typeof CONTENT_TRANSLATE_MAX_TOTAL_CHARS).toBe('number');
+    expect(CONTENT_TRANSLATE_MAX_TOTAL_CHARS).toBeGreaterThan(0);
+  });
+
+  describe('createSlidingWindowLimiter', () => {
+    it('allows up to max requests then blocks within the window', () => {
+      const lim = createSlidingWindowLimiter({ windowMs: 1000, max: 3 });
+      expect(lim.check('u1', 0).allowed).toBe(true);
+      expect(lim.check('u1', 100).allowed).toBe(true);
+      expect(lim.check('u1', 200).allowed).toBe(true);
+      const blocked = lim.check('u1', 300);
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.remaining).toBe(0);
+      expect(blocked.retryAfterMs).toBe(700); // first hit (t=0) + 1000 - 300
+    });
+
+    it('isolates counts per key', () => {
+      const lim = createSlidingWindowLimiter({ windowMs: 1000, max: 1 });
+      expect(lim.check('a', 0).allowed).toBe(true);
+      expect(lim.check('a', 10).allowed).toBe(false);
+      expect(lim.check('b', 10).allowed).toBe(true); // different user unaffected
+    });
+
+    it('frees capacity once old hits leave the window', () => {
+      const lim = createSlidingWindowLimiter({ windowMs: 1000, max: 1 });
+      expect(lim.check('u1', 0).allowed).toBe(true);
+      expect(lim.check('u1', 500).allowed).toBe(false);
+      expect(lim.check('u1', 1001).allowed).toBe(true); // first hit expired
+    });
+
+    it('reports decreasing remaining capacity', () => {
+      const lim = createSlidingWindowLimiter({ windowMs: 1000, max: 2 });
+      expect(lim.check('u1', 0).remaining).toBe(1);
+      expect(lim.check('u1', 1).remaining).toBe(0);
+    });
+
+    it('sweep removes inactive keys but keeps active ones', () => {
+      const lim = createSlidingWindowLimiter({ windowMs: 1000, max: 5 });
+      lim.check('stale', 0);
+      lim.check('fresh', 900);
+      expect(lim._size()).toBe(2);
+      lim.sweep(1500); // 'stale' (t=0) now outside window, 'fresh' (t=900) still in
+      expect(lim._size()).toBe(1);
     });
   });
 });
