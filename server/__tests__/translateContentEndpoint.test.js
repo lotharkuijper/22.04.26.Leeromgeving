@@ -196,7 +196,9 @@ function post(server, body, { auth = true } = {}) {
       (res) => {
         let raw = '';
         res.on('data', (c) => (raw += c));
-        res.on('end', () => resolve({ status: res.statusCode, body: raw ? JSON.parse(raw) : null }));
+        res.on('end', () =>
+          resolve({ status: res.statusCode, headers: res.headers, body: raw ? JSON.parse(raw) : null }),
+        );
       },
     );
     req.on('error', reject);
@@ -528,5 +530,77 @@ describe('POST /api/translate-content — invoervalidatie', () => {
     const res = await post(serverAzure, { items: [], targetLang: 'en' });
     expect(res.status).toBe(200);
     expect(res.body.translations).toEqual({});
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Per-gebruiker rate limit (Task #294). De endpoint heeft een sliding-window
+// limiter (CONTENT_TRANSLATE_RATE_MAX=60 per 60s) die een lus met willekeurige
+// tekst tegenhoudt vóór hij Azure-kosten maakt. We draaien deze tests op een
+// VERSE app-instance (eigen limiter-Map) zodat het budget niet vervuild is door
+// de andere tests, die óók serverAzure raken. We vullen het venster met
+// nl-aanvragen (200, geen Azure-call, maar tellen wél mee voor de limiet) en
+// controleren dat de aanvraag erná 429 + Retry-After krijgt zonder Azure-call.
+// ───────────────────────────────────────────────────────────────────────────
+describe('POST /api/translate-content — per-user rate limit', () => {
+  const RATE_MAX = 60; // = CONTENT_TRANSLATE_RATE_MAX in server/index.js
+  let appRate;
+  let serverRate;
+
+  beforeEach(async () => {
+    setSharedEnv();
+    process.env.AZURE_OPENAI_ENDPOINT = 'https://leap-openai-vu.openai.azure.com';
+    process.env.AZURE_OPENAI_API_KEY = 'test-azure-key';
+    process.env.AZURE_OPENAI_DEPLOYMENT = 'gpt-5.2';
+    vi.resetModules();
+    appRate = (await import('../index.js')).app;
+    serverRate = appRate.listen(0);
+    await new Promise((resolve) => serverRate.once('listening', resolve));
+  });
+
+  afterEach(async () => {
+    if (serverRate) await new Promise((resolve) => serverRate.close(resolve));
+  });
+
+  it('staat aanvragen ONDER de limiet toe (geen 429)', async () => {
+    const fetchMock = mockFetch(async () => makeResp(200, chatCompletion('niet gebruiken')));
+    // nl-doeltaal → 200 zonder Azure, maar telt mee voor de limiet.
+    for (let i = 0; i < RATE_MAX; i += 1) {
+      const res = await post(serverRate, {
+        items: [{ key: 'titel', text: 'Onderzoeksvraag' }],
+        targetLang: 'nl',
+      });
+      expect(res.status).toBe(200);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('blokkeert de aanvraag BOVEN de limiet met 429 + Retry-After en doet geen Azure-call', async () => {
+    const fetchMock = mockFetch(async () => makeResp(200, batchCompletion({ t0: 'Research question' })));
+
+    // Vul het venster tot exact de limiet met nl-aanvragen (geen Azure-call).
+    for (let i = 0; i < RATE_MAX; i += 1) {
+      const res = await post(serverRate, {
+        items: [{ key: 'titel', text: 'Onderzoeksvraag' }],
+        targetLang: 'nl',
+      });
+      expect(res.status).toBe(200);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // De aanvraag erná zou normaal een verse miss naar Azure sturen, maar moet
+    // door de limiter worden geblokkeerd VÓÓR die call.
+    const blocked = await post(serverRate, {
+      items: [{ key: 'titel', text: 'Onderzoeksvraag', format: 'plain' }],
+      targetLang: 'en',
+    });
+
+    expect(blocked.status).toBe(429);
+    const retryAfter = Number(blocked.headers['retry-after']);
+    expect(Number.isInteger(retryAfter)).toBe(true);
+    expect(retryAfter).toBeGreaterThan(0);
+    // De limiter blokkeert vóór Azure: geen enkele call ondanks de translatable miss.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.state.upserts).toHaveLength(0);
   });
 });
