@@ -482,6 +482,42 @@ describe('POST /api/translate-content — batching/chunking limieten', () => {
   });
 });
 
+describe('POST /api/translate-content — totale-tekens-cap (kostenbescherming)', () => {
+  it('geeft 413 wanneer de gecombineerde brontekst CONTENT_TRANSLATE_MAX_TOTAL_CHARS overschrijdt, zonder Azure-call', async () => {
+    const fetchMock = mockFetch(async () => makeResp(200, batchCompletion({ t0: 'niet gebruiken' })));
+    // 3 fragmenten van 9000 tekens (elk < per-item-cap van 12000) → 27000 totaal
+    // > CONTENT_TRANSLATE_MAX_TOTAL_CHARS=24000 → 413 vóórdat Azure wordt geraakt.
+    const items = Array.from({ length: 3 }, (_, i) => ({
+      key: `k${i}`,
+      text: `f${i} ${'x'.repeat(8996)}`,
+      format: 'plain',
+    }));
+
+    const res = await post(serverAzure, { items, targetLang: 'en' });
+
+    expect(res.status).toBe(413);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('verwerkt een aanvraag net onder de totale-tekens-cap normaal', async () => {
+    const fetchMock = smartBatchFetch();
+    // 23 unieke fragmenten van ~1000 tekens → ~23000 totaal (< 24000), elk een
+    // korte plain-miss → gebundelde batch-calls; alles komt door met 200.
+    const items = Array.from({ length: 23 }, (_, i) => ({
+      key: `k${i}`,
+      text: `f${i} ${'x'.repeat(996)}`,
+      format: 'plain',
+    }));
+
+    const res = await post(serverAzure, { items, targetLang: 'en' });
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.translations)).toHaveLength(23);
+    expect(res.body.translations.k0).toBe(`f0 ${'x'.repeat(996)} [en]`);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/translate-content — invoervalidatie', () => {
   it('geeft 400 bij een onbekende doeltaal', async () => {
     const res = await post(serverAzure, { items: [{ key: 'a', text: 'Onderzoeksvraag' }], targetLang: 'xx' });
