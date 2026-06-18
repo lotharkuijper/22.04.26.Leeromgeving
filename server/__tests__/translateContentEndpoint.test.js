@@ -393,6 +393,95 @@ describe('POST /api/translate-content — 503 alleen bij echte misses', () => {
   });
 });
 
+// Echo-mock voor batch-calls: leest de JSON-payload uit de user-message en geeft
+// per t-key dezelfde tekst met een " [en]"-suffix terug. Zo kunnen we tellen
+// hoeveel losse batch-calls de chunk/flush-lus maakt zonder de inhoud te raken.
+function smartBatchFetch() {
+  return mockFetch(async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    const userMsg = body.messages.find((m) => m.role === 'user').content;
+    const payload = JSON.parse(userMsg);
+    const out = {};
+    for (const k of Object.keys(payload)) out[k] = `${payload[k]} [en]`;
+    return makeResp(200, batchCompletion(out));
+  });
+}
+
+describe('POST /api/translate-content — batching/chunking limieten', () => {
+  it('splitst >25 korte fragmenten over meerdere JSON-batch-calls (chunk op aantal)', async () => {
+    const fetchMock = smartBatchFetch();
+    // 26 unieke, korte plain-fragmenten → CONTENT_BATCH_MAX_ITEMS=25 dwingt 2 calls af.
+    const items = Array.from({ length: 26 }, (_, i) => ({
+      key: `k${i}`,
+      text: `Fragment nummer ${i}`,
+      format: 'plain',
+    }));
+
+    const res = await post(serverAzure, { items, targetLang: 'en' });
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.translations)).toHaveLength(26);
+    expect(res.body.translations.k0).toBe('Fragment nummer 0 [en]');
+    expect(res.body.translations.k25).toBe('Fragment nummer 25 [en]');
+    // 26 items → eerste chunk 25, tweede chunk 1 → precies 2 batch-calls.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('splitst op totale bron-tekens >6000 (chunk op tekenbudget)', async () => {
+    const fetchMock = smartBatchFetch();
+    // 6 unieke fragmenten van ~1103 tekens (≤1500 inline-max, plain) → 6×1103=6618
+    // > CONTENT_BATCH_MAX_CHARS=6000 dwingt een tweede call af, terwijl het
+    // aantal (6) ruim onder CONTENT_BATCH_MAX_ITEMS=25 blijft.
+    const items = Array.from({ length: 6 }, (_, i) => ({
+      key: `k${i}`,
+      text: `f${i} ${'x'.repeat(1100)}`,
+      format: 'plain',
+    }));
+
+    const res = await post(serverAzure, { items, targetLang: 'en' });
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.translations)).toHaveLength(6);
+    // 5 fragmenten passen (5×1103=5515 ≤ 6000); het 6e tikt over → flush + extra call.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('geeft 413 bij meer dan 50 fragmenten in één aanvraag, zonder Azure-call', async () => {
+    const fetchMock = mockFetch(async () => makeResp(200, batchCompletion({ t0: 'niet gebruiken' })));
+    const items = Array.from({ length: 51 }, (_, i) => ({
+      key: `k${i}`,
+      text: `Fragment ${i}`,
+      format: 'plain',
+    }));
+
+    const res = await post(serverAzure, { items, targetLang: 'en' });
+
+    expect(res.status).toBe(413);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('herstelt de batch-call na een ongeldige JSON-respons via één retry', async () => {
+    let calls = 0;
+    const fetchMock = mockFetch(async () => {
+      calls += 1;
+      // Eerste respons: kapotte JSON → translateContentBatch probeert 1× opnieuw.
+      if (calls === 1) return makeResp(200, chatCompletion('dit is geen json {'));
+      return makeResp(200, batchCompletion({ t0: 'Research question' }));
+    });
+
+    const res = await post(serverAzure, {
+      items: [{ key: 'titel', text: 'Onderzoeksvraag', format: 'plain' }],
+      targetLang: 'en',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.translations).toEqual({ titel: 'Research question' });
+    expect(fetchMock).toHaveBeenCalledTimes(2); // mislukte parse + geslaagde retry
+    expect(h.state.upserts[0]).toHaveLength(1);
+    expect(h.state.upserts[0][0].translated_text).toBe('Research question');
+  });
+});
+
 describe('POST /api/translate-content — invoervalidatie', () => {
   it('geeft 400 bij een onbekende doeltaal', async () => {
     const res = await post(serverAzure, { items: [{ key: 'a', text: 'Onderzoeksvraag' }], targetLang: 'xx' });
