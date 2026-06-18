@@ -3,6 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useLanguage } from '../i18n';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
+import { useContentTranslation, type TranslatableItem } from '../hooks/useContentTranslation';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
   Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database, EyeOff,
@@ -1024,6 +1026,21 @@ export function ProjectRoomPage() {
   const activePersona = personas.find(p => p.id === activePersonaId);
   const isFinalized = group?.status === 'finalized';
 
+  // Vertaal docent-content (briefing, persona-namen, rubric-criteria) naar de
+  // actieve taal (Task #288). Hooks vóór de early-returns zodat de volgorde
+  // stabiel blijft.
+  const roomItems: Record<string, TranslatableItem> = {};
+  if (project?.briefing_markdown) roomItems.briefing = { text: project.briefing_markdown, format: 'plain' };
+  for (const p of personas) roomItems[`persona:${p.id}`] = { text: p.name, format: 'plain' };
+  if (project && Array.isArray(project.rubric_criteria)) {
+    project.rubric_criteria.forEach((c: any, i: number) => {
+      if (typeof c === 'string') roomItems[`rubric:${i}`] = { text: c, format: 'plain' };
+    });
+  }
+  const roomT = useContentTranslation(roomItems);
+  const personaName = (p: { id: string; name: string }) => roomT.values[`persona:${p.id}`] || p.name;
+  const activePersonaName = activePersona ? personaName(activePersona) : '';
+
   if (loadingRoom && !project) {
     return <div className="p-12 text-center text-gray-500">{t('room.loading')}</div>;
   }
@@ -1140,7 +1157,7 @@ export function ProjectRoomPage() {
                   const labelSuffix = rel ? ` • ${t(`room.relationship.label.${rel.bucket}`)}${rel.blocked ? ' ⛔' : ''}` : '';
                   return (
                     <option key={p.id} value={p.id} data-testid={`option-persona-${p.id}`}>
-                      {(p.avatar_emoji || '🤖')} {p.name}{labelSuffix}
+                      {(p.avatar_emoji || '🤖')} {personaName(p)}{labelSuffix}
                     </option>
                   );
                 })}
@@ -1234,7 +1251,7 @@ export function ProjectRoomPage() {
             {personaMessages.length === 0 && activePersona && (
               <div className="text-center text-gray-500 text-sm py-8">
                 <Bot className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-                <>{t('room.chatStartPromptBefore')} <strong>{activePersona.name}</strong>{t('room.chatStartPromptAfter')}</>  
+                <>{t('room.chatStartPromptBefore')} <strong>{activePersonaName}</strong>{t('room.chatStartPromptAfter')}</>  
               </div>
             )}
             {personaMessages.map(m => (
@@ -1296,7 +1313,7 @@ export function ProjectRoomPage() {
                     sendPersona();
                   }
                 }}
-                placeholder={activePersona ? t('room.chatPlaceholderWith', { name: activePersona.name }) : t('room.chatPlaceholderNoPersona')}
+                placeholder={activePersona ? t('room.chatPlaceholderWith', { name: activePersonaName }) : t('room.chatPlaceholderNoPersona')}
                 disabled={
                   !activePersona || personaLoading || isFinalized
                   || !!relationships.find(r => r.personaId === activePersonaId && r.blocked)
@@ -1567,8 +1584,17 @@ export function ProjectRoomPage() {
             {rightPanelTab === 'briefing' && (
             <div>
             {project.briefing_markdown ? (
-              <div className="text-xs text-gray-700 whitespace-pre-wrap" data-testid="text-briefing">
-                {project.briefing_markdown}
+              <div>
+                <div className="text-xs text-gray-700 whitespace-pre-wrap" data-testid="text-briefing">
+                  {roomT.values.briefing || project.briefing_markdown}
+                </div>
+                <AutoTranslatedNotice
+                  isTranslating={roomT.isTranslating}
+                  isTranslated={roomT.isTranslated}
+                  showOriginal={roomT.showOriginal}
+                  onToggle={roomT.setShowOriginal}
+                  className="mt-1"
+                />
               </div>
             ) : (
               <p className="text-xs text-gray-400 italic">{t('room.noBriefing')}</p>
@@ -1770,7 +1796,7 @@ export function ProjectRoomPage() {
                 <div className="text-xs font-semibold text-gray-700 mb-1">{t('room.rubric')}</div>
                 <ul className="text-xs text-gray-600 list-disc list-inside space-y-0.5">
                   {project.rubric_criteria.map((c, i) => (
-                    <li key={i}>{typeof c === 'string' ? c : (c.title || c.name || JSON.stringify(c))}</li>
+                    <li key={i}>{typeof c === 'string' ? (roomT.values[`rubric:${i}`] || c) : (c.title || c.name || JSON.stringify(c))}</li>
                   ))}
                 </ul>
               </div>

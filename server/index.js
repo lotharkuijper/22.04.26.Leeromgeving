@@ -69,6 +69,11 @@ import {
   hashSource,
   buildTranslationPrompt,
   MAX_SOURCE_CHARS as TRANSLATION_MAX_SOURCE_CHARS,
+  normalizeContentFormat,
+  hashContentSource,
+  isTranslatableText,
+  buildContentTranslationPrompt,
+  buildContentBatchPrompt,
 } from './documentTranslation.js';
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
@@ -1680,6 +1685,194 @@ app.post('/api/rag/documents/:documentId/translate', async (req, res) => {
   } catch (err) {
     console.error('[translate] vertaling mislukt:', err);
     return res.status(500).json({ error: 'Kon de vertaling niet maken.' });
+  }
+});
+
+// POST /api/translate-content — generieke vertaling van door docenten/admins
+// geschreven, student-zichtbare DB-tekst (cursusinfo-body, projectbriefing,
+// persona-namen, begrip-namen/categorieën, …). Content-agnostisch: cachet per
+// (bron-hash, doeltaal) in content_translations zodat identieke tekst over
+// schermen heen één keer per taal wordt betaald. Vereist een ingelogde gebruiker.
+// Body: { items: [{ key, text, format? }], targetLang }. Antwoord:
+// { translations: { [key]: vertaalde_tekst } } — alleen succesvol vertaalde keys.
+// Per-item falen → key weggelaten (client valt stil terug op het origineel).
+const CONTENT_TRANSLATE_MAX_ITEMS = 50;
+const CONTENT_BATCH_INLINE_MAX_CHARS = 1500; // langer dan dit → eigen LLM-call
+const CONTENT_BATCH_MAX_ITEMS = 25;          // max korte fragmenten per JSON-call
+const CONTENT_BATCH_MAX_CHARS = 6000;        // max totale bron-tekens per JSON-call
+
+// Vertaal één content-fragment (markdown of lange plain) in een losse call.
+async function translateContentOne(text, targetLang, format) {
+  const body = {
+    model: OPENAI_MODEL,
+    messages: [
+      { role: 'system', content: buildContentTranslationPrompt(targetLang, format) },
+      { role: 'user', content: text },
+    ],
+    ...chatModelParams({ temperature: 0.2, maxTokens: 4000 }),
+  };
+  const resp = await openaiChatCompletion(body);
+  const data = await resp.json();
+  if (!resp.ok) {
+    console.warn(`[translate-content] LLM-status ${resp.status} (${format}->${targetLang})`);
+    return null;
+  }
+  const out = data?.choices?.[0]?.message?.content?.trim();
+  return out || null;
+}
+
+// Vertaal een groepje korte plain-fragmenten in één JSON-mode call.
+// `items` = [{ hash, text }] (uniek per hash). Geeft Map hash->vertaling.
+async function translateContentBatch(items, targetLang) {
+  const out = new Map();
+  if (!items.length) return out;
+  const idToHash = new Map();
+  const payload = {};
+  items.forEach((it, i) => {
+    const id = `t${i}`;
+    idToHash.set(id, it.hash);
+    payload[id] = it.text;
+  });
+  const callOnce = async () => {
+    const body = {
+      model: OPENAI_MODEL,
+      messages: [
+        { role: 'system', content: buildContentBatchPrompt(targetLang) },
+        { role: 'user', content: JSON.stringify(payload) },
+      ],
+      response_format: { type: 'json_object' },
+      ...chatModelParams({ temperature: 0.2, maxTokens: 4000 }),
+    };
+    const resp = await openaiChatCompletion(body);
+    const data = await resp.json();
+    if (!resp.ok) {
+      console.warn(`[translate-content] batch LLM-status ${resp.status} (->${targetLang})`);
+      return null;
+    }
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) return null;
+    try { return JSON.parse(content); } catch { return null; }
+  };
+  let parsed = await callOnce();
+  if (!parsed || typeof parsed !== 'object') parsed = await callOnce(); // 1 retry
+  if (!parsed || typeof parsed !== 'object') return out;
+  for (const [id, hash] of idToHash) {
+    const v = parsed[id];
+    if (typeof v === 'string' && v.trim()) out.set(hash, v.trim());
+  }
+  return out;
+}
+
+app.post('/api/translate-content', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return; // requireAuthUser stuurde zelf al 401/503
+
+  const targetLang = normalizeTargetLang(req.body?.targetLang);
+  if (!targetLang) return res.status(400).json({ error: 'Onbekende doeltaal.' });
+
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (rawItems.length === 0) return res.json({ translations: {} });
+  if (rawItems.length > CONTENT_TRANSLATE_MAX_ITEMS) {
+    return res.status(413).json({ error: 'Te veel fragmenten in één aanvraag.' });
+  }
+
+  // Normaliseer items en bepaal wat daadwerkelijk vertaald moet worden.
+  // nl-doeltaal en niet-vertaalbare/te lange tekst → overslaan (key weggelaten,
+  // client toont origineel). Dit gebeurt VÓÓR de Azure-check, zodat een
+  // nl-gebruiker nooit een 503 krijgt.
+  const translations = {};
+  const needs = [];
+  for (const raw of rawItems) {
+    const key = typeof raw?.key === 'string' ? raw.key : null;
+    if (!key) continue;
+    const format = normalizeContentFormat(raw?.format);
+    const text = normalizeSourceText(typeof raw?.text === 'string' ? raw.text : '');
+    if (targetLang === 'nl') continue;
+    if (!isTranslatableText(text)) continue;
+    if (text.length > TRANSLATION_MAX_SOURCE_CHARS) continue;
+    needs.push({ key, format, text, hash: hashContentSource(text, format) });
+  }
+  if (needs.length === 0) return res.json({ translations });
+
+  try {
+    // Cache-first (service-role; tabel heeft bewust geen client-leesbeleid).
+    const hashes = [...new Set(needs.map(n => n.hash))];
+    const { data: cachedRows } = await supabaseAdmin
+      .from('content_translations')
+      .select('source_hash, translated_text')
+      .in('source_hash', hashes)
+      .eq('target_lang', targetLang);
+    const cacheMap = new Map((cachedRows || []).map(r => [r.source_hash, r.translated_text]));
+    const misses = [];
+    for (const n of needs) {
+      const hit = cacheMap.get(n.hash);
+      if (hit != null) translations[n.key] = hit;
+      else misses.push(n);
+    }
+    if (misses.length === 0) return res.json({ translations });
+
+    // Vertaalde misses moeten via Azure. Ontbreekt die config, dan is dit een
+    // endpoint-brede afhankelijkheidsfout → 503 (client valt stil terug).
+    if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });
+
+    // Dedupe op hash: dezelfde tekst maar één keer vertalen, ook bij meerdere keys.
+    const byHash = new Map();
+    for (const m of misses) if (!byHash.has(m.hash)) byHash.set(m.hash, m);
+    const uniques = [...byHash.values()];
+
+    // Lange/markdown-fragmenten: losse call. Korte plain: gebundelde JSON-call.
+    const singles = uniques.filter(u => u.format === 'markdown' || u.text.length > CONTENT_BATCH_INLINE_MAX_CHARS);
+    const shorts = uniques.filter(u => u.format === 'plain' && u.text.length <= CONTENT_BATCH_INLINE_MAX_CHARS);
+
+    const resultByHash = new Map();
+    for (const u of singles) {
+      const t = await translateContentOne(u.text, targetLang, u.format);
+      if (t) resultByHash.set(u.hash, t);
+    }
+    // Chunk de korte fragmenten op aantal + totale tekens.
+    let chunk = [];
+    let chunkChars = 0;
+    const flush = async () => {
+      if (!chunk.length) return;
+      const m = await translateContentBatch(chunk, targetLang);
+      for (const [h, v] of m) resultByHash.set(h, v);
+      chunk = [];
+      chunkChars = 0;
+    };
+    for (const u of shorts) {
+      if (chunk.length >= CONTENT_BATCH_MAX_ITEMS || (chunkChars + u.text.length) > CONTENT_BATCH_MAX_CHARS) {
+        await flush();
+      }
+      chunk.push(u);
+      chunkChars += u.text.length;
+    }
+    await flush();
+
+    // Persist (idempotent op unique(source_hash,target_lang)) en map terug op keys.
+    const toUpsert = [];
+    for (const u of uniques) {
+      const v = resultByHash.get(u.hash);
+      if (v != null) toUpsert.push({ source_hash: u.hash, target_lang: targetLang, translated_text: v });
+    }
+    if (toUpsert.length) {
+      try {
+        await supabaseAdmin
+          .from('content_translations')
+          .upsert(toUpsert, { onConflict: 'source_hash,target_lang' });
+      } catch (e) {
+        console.warn('[translate-content] cache-write mislukt (niet-fataal):', e?.message || e);
+      }
+    }
+    for (const m of misses) {
+      const v = resultByHash.get(m.hash);
+      if (v != null) translations[m.key] = v;
+    }
+    return res.json({ translations });
+  } catch (err) {
+    console.error('[translate-content] vertaling mislukt:', err);
+    // Geef terug wat we hebben; de client valt voor de rest terug op origineel.
+    return res.json({ translations });
   }
 });
 

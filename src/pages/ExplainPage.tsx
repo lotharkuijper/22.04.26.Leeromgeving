@@ -14,6 +14,8 @@ import { PromptDebugBadge } from '../components/PromptDebugBadge';
 import type { Database } from '../lib/database.types';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { NoticeBanner, useNotice } from '../components/Notice';
+import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
+import { useContentTranslation, type TranslatableItem } from '../hooks/useContentTranslation';
 
 type Concept = Database['public']['Tables']['concepts']['Row'];
 
@@ -167,6 +169,19 @@ export function ExplainPage() {
   } | null>(null);
   const [conceptSource, setConceptSource] = useState<'course' | 'global' | 'empty' | null>(null);
   const [conceptsLoading, setConceptsLoading] = useState(false);
+  // Vertaal begrip-namen + categorieën naar de actieve taal (Task #288). De
+  // definities worden bewust niet getoond (de oefening is juist uitleggen zonder
+  // voorkennis), dus alleen de zichtbare naam + categorie gaan mee.
+  const conceptItems: Record<string, TranslatableItem> = {};
+  for (const c of concepts) {
+    if (c?.id) {
+      conceptItems[`name:${c.id}`] = { text: c.name, format: 'plain' };
+      if (c.category) conceptItems[`cat:${c.id}`] = { text: c.category, format: 'plain' };
+    }
+  }
+  const conceptT = useContentTranslation(conceptItems);
+  const conceptName = (c: Concept) => conceptT.values[`name:${c.id}`] || c.name;
+  const conceptCategory = (c: Concept) => (c.category ? conceptT.values[`cat:${c.id}`] || c.category : c.category);
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
   const [explainSystemPrompt, setExplainSystemPrompt] = useState<string | null>(null);
   const [history, setHistory] = useState<ExplanationHistoryItem[]>([]);
@@ -652,13 +667,13 @@ export function ExplainPage() {
                 >
                   <div className="flex items-center gap-2">
                     <BookOpen className="w-4 h-4 flex-shrink-0" />
-                    <span className="text-sm flex-1 truncate">{concept.name}</span>
+                    <span className="text-sm flex-1 truncate">{conceptName(concept)}</span>
                     {isRagExtracted && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium shrink-0">AI</span>
                     )}
                     {concept.category && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium shrink-0 max-w-[8rem] truncate" title={concept.category}>
-                        {concept.category}
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium shrink-0 max-w-[8rem] truncate" title={conceptCategory(concept)}>
+                        {conceptCategory(concept)}
                       </span>
                     )}
                   </div>
@@ -902,10 +917,17 @@ export function ExplainPage() {
           ) : (
             <>
               <div className="chic-card p-6">
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">{selectedConcept.name}</h2>
-                <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 mb-4">
-                  {selectedConcept.category}
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">{conceptName(selectedConcept)}</h2>
+                <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 mb-2">
+                  {conceptCategory(selectedConcept)}
                 </span>
+                <AutoTranslatedNotice
+                  isTranslating={conceptT.isTranslating}
+                  isTranslated={conceptT.isTranslated}
+                  showOriginal={conceptT.showOriginal}
+                  onToggle={conceptT.setShowOriginal}
+                  className="mb-4"
+                />
 
                 <div className="space-y-4">
                   <div className="mb-4">

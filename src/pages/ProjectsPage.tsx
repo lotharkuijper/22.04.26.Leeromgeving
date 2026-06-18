@@ -7,6 +7,8 @@ import {
   PlayCircle, RefreshCw, ArrowRight, FolderOpen, BookOpen, Loader2,
   AlertCircle, Users,
 } from 'lucide-react';
+import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
+import { useContentTranslation, type TranslatableItem } from '../hooks/useContentTranslation';
 
 interface OverviewProject {
   id: string;
@@ -132,10 +134,6 @@ export function ProjectsPage() {
     }
   };
 
-  if (loading) {
-    return <div className="p-12 text-center text-gray-500"><Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" /> {t('common.loading')}</div>;
-  }
-
   // Toon alleen projecten van de actieve cursus. Een project hoort bij precies
   // één cursus; staat de actieve cursus op iets anders, dan mag dat project
   // hier niet verschijnen.
@@ -143,12 +141,35 @@ export function ProjectsPage() {
     ? overview.filter(c => c.course.id === activeCourseId)
     : overview;
 
+  // Vertaal projecttitels + onderzoeksvragen naar de actieve taal (Task #288).
+  // De hook MOET vóór elke early-return staan zodat de hook-volgorde tussen
+  // renders stabiel blijft (tijdens loading is overview leeg → projectItems leeg).
+  const projectItems: Record<string, TranslatableItem> = {};
+  for (const c of visibleCourses) {
+    for (const p of c.projects) {
+      projectItems[`title:${p.id}`] = { text: p.title, format: 'plain' };
+      projectItems[`rq:${p.id}`] = { text: p.research_question, format: 'plain' };
+    }
+  }
+  const projT = useContentTranslation(projectItems);
+
+  if (loading) {
+    return <div className="p-12 text-center text-gray-500"><Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" /> {t('common.loading')}</div>;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-1">{t('projects.title')}</h1>
           <p className="text-gray-600">{t('projects.subtitle')}</p>
+          <AutoTranslatedNotice
+            isTranslating={projT.isTranslating}
+            isTranslated={projT.isTranslated}
+            showOriginal={projT.showOriginal}
+            onToggle={projT.setShowOriginal}
+            className="mt-1"
+          />
         </div>
         <button onClick={() => setJoinDialog(true)} className="btn-secondary text-sm" data-testid="button-open-join">
           <Users className="w-4 h-4" /> {t('projects.joinWithCode')}
@@ -189,8 +210,8 @@ export function ProjectsPage() {
                     return (
                       <div key={p.id} className="border border-gray-200 rounded-xl p-5 flex flex-col gap-3" data-testid={`overview-project-${p.id}`}>
                         <div>
-                          <div className="font-bold text-gray-900">{p.title}</div>
-                          <p className="text-xs text-gray-500 line-clamp-2 mt-1">{p.research_question}</p>
+                          <div className="font-bold text-gray-900">{projT.values[`title:${p.id}`] || p.title}</div>
+                          <p className="text-xs text-gray-500 line-clamp-2 mt-1">{projT.values[`rq:${p.id}`] || p.research_question}</p>
                           <div className="text-[10px] text-gray-400 mt-1">
                             {t('projects.groupSize', { min: String(p.min_group_size ?? 1), max: String(p.max_group_size ?? 5) })}
                             {inProgress && <span className="ml-2 inline-block px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{t('projects.inProgress')}</span>}

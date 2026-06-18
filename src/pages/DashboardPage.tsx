@@ -17,6 +17,8 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../i18n';
 import { MarkdownMessage } from '../components/MarkdownMessage';
+import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
+import { useContentTranslation } from '../hooks/useContentTranslation';
 
 type TileKey = 'chat' | 'explain' | 'quiz' | 'project';
 
@@ -136,6 +138,9 @@ export function DashboardPage() {
     journal: null,
   });
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
+  const courseBodyT = useContentTranslation({
+    body: { text: courseInfo?.body || '', format: 'markdown' },
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -423,7 +428,14 @@ export function DashboardPage() {
           </div>
           {courseInfo.body.trim() && (
             <div data-testid="text-course-info-body">
-              <MarkdownMessage content={courseInfo.body} />
+              <MarkdownMessage content={courseBodyT.values.body || courseInfo.body} />
+              <AutoTranslatedNotice
+                isTranslating={courseBodyT.isTranslating}
+                isTranslated={courseBodyT.isTranslated}
+                showOriginal={courseBodyT.showOriginal}
+                onToggle={courseBodyT.setShowOriginal}
+                className="mt-2"
+              />
             </div>
           )}
           {courseInfo.documents.length > 0 && (
