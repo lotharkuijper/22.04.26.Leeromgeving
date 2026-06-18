@@ -22,3 +22,4 @@
 - [Global admin settings enforcement](global-admin-settings.md) — global chat/explain/project prompts + ItemBank config writes guarded by chatbot_prompts RLS (profiles.role='admin'); global RAG defaults guarded server-side; UI must gate global editors to isAdmin, leave per-course overrides for teachers.
 - [Test env flakiness](test-env-flakiness.md) — sandbox vitest timeouts/partial userEvent input = env starvation not regressions; re-run via test workflow; app-boot suites need big hookTimeout.
 - [Multilingual JSON-mode key/enum preservation](multilingual-json-mode.md) — any json_object call with a "respond in lang X" instruction must preserve JSON keys+enums (only translate values), else non-NL/EN parsing silently degrades; NL/EN tests hide it.
+- [Language bootstrap](language-bootstrap.md) — active UI/AI lang resolves via one holder (set->stored->browser->en); never default preferred_lang to 'nl' in DB or add a 2nd localStorage default.

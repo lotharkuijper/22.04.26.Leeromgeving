@@ -19,7 +19,21 @@ export function ProfileLangSync() {
 
     const profileLang = profile.preferred_lang;
     if (isSupportedLang(profileLang)) {
+      // Opgeslagen, expliciete keuze wint (synct over apparaten).
       setLang(profileLang as Lang);
+    } else if (user) {
+      // Geen opgeslagen voorkeur (nieuw account): leg de nu actieve —
+      // browsergedetecteerde of Engelse terugval — taal eenmalig vast, zodat
+      // de oude DB-default 'nl' de browserkeuze niet overschrijft.
+      supabase
+        .from('profiles')
+        .update({ preferred_lang: lang })
+        .eq('id', user.id)
+        .then(({ error }) => {
+          if (error) {
+            console.error('[LANG] Taalvoorkeur initialiseren mislukt:', error.message);
+          }
+        });
     }
     initialSyncDone.current = true;
   }, [profile, lang, setLang]);

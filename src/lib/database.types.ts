@@ -41,7 +41,7 @@ export type Database = {
           university: string | null
           study_year: number | null
           avatar_url: string | null
-          preferred_lang: 'nl' | 'en' | null
+          preferred_lang: 'nl' | 'en' | 'yue' | 'zh' | 'de' | 'fr' | 'es' | 'it' | 'pt' | 'pl' | 'uk' | 'ro' | 'tr' | 'ar' | 'hi' | 'id' | 'ja' | 'ko' | 'hr' | null
           created_at: string
           updated_at: string
         }
@@ -53,7 +53,7 @@ export type Database = {
           university?: string | null
           study_year?: number | null
           avatar_url?: string | null
-          preferred_lang?: 'nl' | 'en' | null
+          preferred_lang?: 'nl' | 'en' | 'yue' | 'zh' | 'de' | 'fr' | 'es' | 'it' | 'pt' | 'pl' | 'uk' | 'ro' | 'tr' | 'ar' | 'hi' | 'id' | 'ja' | 'ko' | 'hr' | null
           created_at?: string
           updated_at?: string
         }
@@ -65,7 +65,7 @@ export type Database = {
           university?: string | null
           study_year?: number | null
           avatar_url?: string | null
-          preferred_lang?: 'nl' | 'en' | null
+          preferred_lang?: 'nl' | 'en' | 'yue' | 'zh' | 'de' | 'fr' | 'es' | 'it' | 'pt' | 'pl' | 'uk' | 'ro' | 'tr' | 'ar' | 'hi' | 'id' | 'ja' | 'ko' | 'hr' | null
           created_at?: string
           updated_at?: string
         }

@@ -1,8 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { eagerDicts, loadDict, type Lang, type TranslationKey, type Dict } from './translations';
-import { isSupportedLang, detectBrowserLang, getLanguageMeta, FALLBACK_LANG } from './languages';
-
-const STORAGE_KEY = 'lair-vu-lang';
+import { isSupportedLang, getLanguageMeta } from './languages';
+import { getActiveLang, setActiveLang } from './activeLang';
 
 interface LanguageContextValue {
   lang: Lang;
@@ -16,16 +15,6 @@ const LanguageContext = createContext<LanguageContextValue>({
   t: (key) => key as string,
 });
 
-function detectInitialLang(): Lang {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (isSupportedLang(stored)) return stored;
-  } catch {}
-  const browser = detectBrowserLang();
-  if (browser) return browser;
-  return FALLBACK_LANG;
-}
-
 function applyHtmlLang(lang: Lang) {
   if (typeof document === 'undefined') return;
   document.documentElement.lang = lang;
@@ -33,13 +22,16 @@ function applyHtmlLang(lang: Lang) {
 }
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [lang, setLangState] = useState<Lang>(detectInitialLang);
+  const [lang, setLangState] = useState<Lang>(getActiveLang);
   const [dicts, setDicts] = useState<Record<string, Dict>>(() => ({ ...eagerDicts }));
 
   // Zet <html lang/dir> direct bij elke wijziging (en bij eerste render), zodat
   // de leesrichting (RTL voor Arabisch) klopt vóór het locale-dict geladen is.
+  // Leg de actieve taal meteen vast (localStorage + gedeelde bron), zodat AI-
+  // calls dezelfde — browsergedetecteerde — taal gebruiken, ook vóór een keuze.
   useEffect(() => {
     applyHtmlLang(lang);
+    setActiveLang(lang);
   }, [lang]);
 
   // Laad het actieve woordenboek lazy als het er nog niet is.
@@ -59,10 +51,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const setLang = useCallback((l: Lang) => {
     if (!isSupportedLang(l)) return;
     applyHtmlLang(l);
+    setActiveLang(l);
     setLangState(l);
-    try {
-      localStorage.setItem(STORAGE_KEY, l);
-    } catch {}
   }, []);
 
   const t = useCallback(

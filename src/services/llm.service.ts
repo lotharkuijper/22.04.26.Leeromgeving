@@ -1,4 +1,5 @@
-import { isSupportedLang, getLanguageMeta, type Lang } from '../i18n/languages';
+import { getLanguageMeta, type Lang } from '../i18n/languages';
+import { getActiveLang } from '../i18n/activeLang';
 import { tStatic } from '../i18n/translations';
 
 export interface Message {
@@ -135,12 +136,12 @@ export function llmErrorToDutch(err: unknown, lang: LlmErrLang = 'nl'): { title:
   return { title: nl ? 'Er ging iets mis bij het taalmodel.' : 'Something went wrong with the language model.' };
 }
 
+// Eén bron van waarheid: de AI-client gebruikt exact de actieve UI-taal
+// (gedeeld via i18n/activeLang). Geen eigen localStorage-default meer, dus
+// nooit stilletjes terugvallen op Nederlands wanneer de UI een andere
+// (browsergedetecteerde) taal toont.
 function _getLang(): Lang {
-  try {
-    const v = localStorage.getItem('lair-vu-lang');
-    if (isSupportedLang(v)) return v;
-  } catch {}
-  return 'nl';
+  return getActiveLang();
 }
 
 async function callChatAPI(body: object): Promise<any> {
