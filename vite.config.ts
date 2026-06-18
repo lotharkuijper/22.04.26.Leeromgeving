@@ -62,5 +62,13 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Ruimere timeouts: in de gedeelde/CI-omgeving lopen de userEvent-zware
+    // component-tests (jsdom) onder belasting soms over de standaard 5s heen,
+    // ondanks correct gedrag. 15s geeft voldoende marge zonder echte bugs te maskeren.
+    testTimeout: 15000,
+    // De endpoint-suites booten in `beforeAll` de volledige Express-app
+    // (`await import('../index.js')` + `app.listen`); dat duurt onder belasting
+    // langer dan de standaard 10s. 30s voorkomt valse hook-timeouts.
+    hookTimeout: 30000,
   },
 });
