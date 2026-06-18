@@ -137,6 +137,23 @@ export function ChatPage() {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const splitRef = useRef<HTMLDivElement>(null);
+  const draggingViewerRef = useRef(false);
+  const VIEWER_MIN_PX = 340;
+  const VIEWER_DEFAULT_PX = 480;
+  // Ruimte die NIET naar het documentpaneel mag: gespreks-zijbalk (256px) +
+  // flex-gaps + sleep-handvat + een minimale chatbreedte (480px). Zo kan het
+  // chatvenster nooit te smal worden, ongeacht hoe ver je het paneel versleept.
+  const VIEWER_RESERVED_PX = 792;
+  const [isDraggingViewer, setIsDraggingViewer] = useState(false);
+  const [viewerWidth, setViewerWidth] = useState<number>(() => {
+    try {
+      const stored = Number(localStorage.getItem('leap-chat-viewer-width'));
+      return Number.isFinite(stored) && stored >= VIEWER_MIN_PX ? stored : VIEWER_DEFAULT_PX;
+    } catch {
+      return VIEWER_DEFAULT_PX;
+    }
+  });
 
   // Auto-resize van het chat-invoerveld: groeit mee met de tekst tot ~8 regels
   // (max 200px) en gaat daarna scrollen, zodat langere vragen comfortabel passen.
@@ -146,6 +163,45 @@ export function ChatPage() {
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
   }, [input]);
+
+  // Bewaar de gekozen breedte van het documentpaneel tussen sessies.
+  useEffect(() => {
+    try { localStorage.setItem('leap-chat-viewer-width', String(Math.round(viewerWidth))); } catch { /* localStorage kan geblokkeerd zijn */ }
+  }, [viewerWidth]);
+
+  // Sleep-logica voor de scheiding tussen chat en documentpaneel. De globale
+  // luisteraars doen niets tenzij er actief gesleept wordt (draggingViewerRef).
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!draggingViewerRef.current) return;
+      const cont = splitRef.current;
+      if (!cont) return;
+      const rect = cont.getBoundingClientRect();
+      const raw = rect.right - e.clientX;
+      const max = Math.max(VIEWER_MIN_PX, rect.width - VIEWER_RESERVED_PX);
+      setViewerWidth(Math.min(Math.max(raw, VIEWER_MIN_PX), max));
+    };
+    const stop = () => {
+      if (!draggingViewerRef.current) return;
+      draggingViewerRef.current = false;
+      setIsDraggingViewer(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+    window.addEventListener('blur', stop);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+      window.removeEventListener('blur', stop);
+      // Veiligheidsreset als de component tijdens het slepen verdwijnt.
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, []);
   const { notice: pageNotice, setNotice: setPageNotice, clearNotice: clearPageNotice } = useNotice();
 
   useEffect(() => {
@@ -620,7 +676,7 @@ export function ChatPage() {
         <NoticeBanner notice={pageNotice} onDismiss={clearPageNotice} />
       </div>
     )}
-    <div className="h-[calc(100vh-8rem)] flex gap-4">
+    <div ref={splitRef} className="h-[calc(100vh-8rem)] flex gap-4">
       <div className="w-64 chic-card p-4 flex flex-col">
         <button
           onClick={createNewConversation}
@@ -865,7 +921,28 @@ export function ChatPage() {
 
       {viewerDoc && (
         <div
-          className="flex w-[44%] min-w-[340px] chic-card flex-col overflow-hidden p-0"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            draggingViewerRef.current = true;
+            setIsDraggingViewer(true);
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'col-resize';
+          }}
+          onDoubleClick={() => setViewerWidth(VIEWER_DEFAULT_PX)}
+          role="separator"
+          aria-orientation="vertical"
+          title={lang === 'en' ? 'Drag to resize · double-click to reset' : 'Sleep om te verbreden · dubbelklik om te herstellen'}
+          className="hidden md:flex w-2 shrink-0 cursor-col-resize items-center justify-center group touch-none"
+          data-testid="divider-document-viewer"
+        >
+          <div className="h-16 w-1 rounded-full bg-gray-300 group-hover:bg-green-500 transition-colors" />
+        </div>
+      )}
+
+      {viewerDoc && (
+        <div
+          className="flex shrink-0 chic-card flex-col overflow-hidden p-0"
+          style={{ width: viewerWidth, minWidth: VIEWER_MIN_PX, maxWidth: `calc(100% - ${VIEWER_RESERVED_PX}px)` }}
           data-testid="panel-document-viewer"
         >
           <ViewerErrorBoundary
@@ -885,6 +962,10 @@ export function ChatPage() {
         </div>
       )}
     </div>
+
+    {isDraggingViewer && (
+      <div className="fixed inset-0 z-[60] cursor-col-resize" data-testid="overlay-viewer-resize" />
+    )}
 
     {downloadError && (
       <div className="fixed bottom-4 right-4 z-50 flex max-w-sm items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-lg" data-testid="alert-download-error">

@@ -72,6 +72,12 @@ export function Layout({ children }: LayoutProps) {
   const navigate = useNavigate();
   const { t, lang, setLang } = useLanguage();
 
+  // De chat-met-document weergave krijgt iets meer horizontale ruimte (nog steeds
+  // begrensd); andere pagina's houden de standaardbreedte zodat de algehele
+  // opmaak consistent blijft.
+  const wideLayout = location.pathname === '/chat';
+  const shellMaxWidth = wideLayout ? 'max-w-[1800px]' : 'max-w-7xl';
+
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -119,7 +125,7 @@ export function Layout({ children }: LayoutProps) {
   return (
     <div className="min-h-screen">
       <nav className="bg-white/75 backdrop-blur-md border-b border-slate-200/70 sticky top-0 z-50 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ring-1 ring-slate-100/40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className={`${shellMaxWidth} mx-auto px-4 sm:px-6 lg:px-8`}>
           <div className="flex items-center justify-between h-16">
 
             {/* LEFT SIDE: LOGO + TITLE */}
@@ -181,7 +187,7 @@ export function Layout({ children }: LayoutProps) {
       </nav>
 
       {/* SIDEBAR + MAIN */}
-      <div className="flex max-w-7xl mx-auto">
+      <div className={`flex ${shellMaxWidth} mx-auto`}>
 
         {/* SIDEBAR */}
         <aside className={`
