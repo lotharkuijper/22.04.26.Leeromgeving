@@ -178,6 +178,21 @@ interface ConsultationInfo {
   hasOpenThread?: boolean;
   autoCloseHours: number | null;
 }
+// Task #252/#296: pure beslissing of een bericht een NIEUWE raadpleging start
+// terwijl er een eindige limiet geldt — dan moet eerst worden bevestigd. Los
+// gehouden van de component zodat de regressie (o.a. de readiness-knop die via
+// requestSendPersona door deze poort moet) los testbaar is.
+export function startsNewConsultation(
+  consult: ConsultationInfo | undefined | null,
+  hasActiveThread: boolean,
+): boolean {
+  return !!(
+    consult &&
+    consult.limit !== null &&
+    !hasActiveThread &&
+    !consult.hasOpenThread
+  );
+}
 interface ClosedConversation {
   threadId: string;
   personaId: string;
@@ -695,11 +710,7 @@ export function ProjectRoomPage() {
     if (!trimmed || !activePersonaId || !groupId || !token) return;
     const consult = consultations.find(c => c.personaId === activePersonaId);
     if (consult?.blocked) return; // input is dan toch al uitgeschakeld
-    const startsNewConsultation = consult
-      && consult.limit !== null
-      && !activeThreadId
-      && !consult.hasOpenThread;
-    if (startsNewConsultation) {
+    if (startsNewConsultation(consult, !!activeThreadId)) {
       setPendingPersonaText(trimmed);
       setConfirmConsult(consult!);
       return;
