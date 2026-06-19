@@ -15,6 +15,7 @@ import { QuizSourcesAdminPanel } from '../components/QuizSourcesAdminPanel';
 import CursusInfoTab from '../components/CursusInfoTab';
 import { PersonaLibraryTab } from './admin/PersonaLibraryTab';
 import { ProjectsAdminTab } from './admin/ProjectsAdminTab';
+import { LearningLevelsAdminTab } from './admin/LearningLevelsAdminTab';
 import { AddUsersTab } from './admin/AddUsersTab';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 
@@ -47,7 +48,7 @@ interface ChatbotPrompt {
   updated_at: string;
 }
 
-type TabType = 'users' | 'add_users' | 'documents' | 'rag_beheer' | 'concepts' | 'imports' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin' | 'course_info';
+type TabType = 'users' | 'add_users' | 'documents' | 'rag_beheer' | 'concepts' | 'imports' | 'quiz_sources' | 'prompts' | 'rag_settings' | 'settings' | 'personas' | 'projects_admin' | 'course_info' | 'learning_levels';
 
 interface RagModuleSettings {
   similarity_threshold: number;
@@ -210,7 +211,7 @@ export function AdminPage() {
     let t = searchParams.get('tab') as TabType | null;
     // Backward-compat: oude deep-links naar de losse ShareStats-tab komen nu op de Imports-hub.
     if ((t as string | null) === 'sharestats_import') t = 'imports';
-    const allowed: TabType[] = ['users','add_users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
+    const allowed: TabType[] = ['users','add_users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info','learning_levels'];
     if (t && allowed.includes(t)) return t;
     return isAdmin ? 'users' : 'documents';
   })();
@@ -236,7 +237,7 @@ export function AdminPage() {
     }
     const t = raw as TabType | null;
     if (t && t !== activeTab) {
-      const allowed: TabType[] = ['users','add_users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info'];
+      const allowed: TabType[] = ['users','add_users','documents','rag_beheer','concepts','imports','quiz_sources','prompts','rag_settings','settings','personas','projects_admin','course_info','learning_levels'];
       if (allowed.includes(t)) setActiveTabState(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1203,13 +1204,14 @@ const tabs = [
   { id: 'rag_settings' as TabType, label: t('admin.tabs.ragSettings'), icon: SlidersHorizontal, show: isAdmin || isDocent },
   { id: 'projects_admin' as TabType, label: t('admin.tabs.projects'), icon: FolderTree, show: isAdmin || isDocent },
   { id: 'course_info' as TabType, label: t('admin.tabs.courseInfo'), icon: BookText, show: isAdmin || isDocent },
+  { id: 'learning_levels' as TabType, label: t('admin.tabs.learningLevels'), icon: GraduationCap, show: isAdmin || isDocent },
   { id: 'personas' as TabType, label: t('admin.tabs.personas'), icon: MessageSquareText, show: isAdmin || isDocent },
   { id: 'settings' as TabType, label: t('admin.tabs.settings'), icon: Settings, show: isAdmin },
 ].filter(tab => tab.show);
 
 const tabGroups = [
   { label: t('admin.tabGroups.courseContent'), ids: ['documents', 'rag_beheer', 'rag_settings', 'concepts', 'course_info'] },
-  { label: t('admin.tabGroups.learningEnv'), ids: ['prompts', 'quiz_sources', 'projects_admin', 'personas'] },
+  { label: t('admin.tabGroups.learningEnv'), ids: ['prompts', 'quiz_sources', 'projects_admin', 'personas', 'learning_levels'] },
   { label: t('admin.tabGroups.system'), ids: ['users', 'imports', 'settings'] },
 ].map(g => ({ label: g.label, items: tabs.filter(tab => g.ids.includes(tab.id)) }))
  .filter(g => g.items.length > 0);
@@ -2071,6 +2073,7 @@ const tabGroups = [
 
           {activeTab === 'quiz_sources' && <QuizSourcesAdminPanel />}
           {activeTab === 'course_info' && <CursusInfoTab />}
+          {activeTab === 'learning_levels' && <LearningLevelsAdminTab />}
 
           {activeTab === 'prompts' && (
             <div className="space-y-6">

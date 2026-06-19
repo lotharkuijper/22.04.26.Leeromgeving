@@ -34,7 +34,7 @@ import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normal
 import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse, canAccessCourseContent } from './courseAvailability.js';
 import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
 import { buildLanguageInstruction, localizePrompt, languageEnglishName, normalizeLang } from './languages.js';
-import { buildLevelInstructionBlock } from './learningLevel.js';
+import { buildLevelInstructionBlock, LEVEL_LABELS, LEVEL_MIN, LEVEL_MAX, LEVEL_DEFAULT } from './learningLevel.js';
 import {
   extractEmails,
   dedupeEmails,
@@ -12439,6 +12439,86 @@ app.get('/api/admin/courses/:courseId/submissions', async (req, res) => {
           created_at: s.created_at,
         };
       }),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/courses/:courseId/learning-levels — staff-inzicht (Task #297):
+// toont per student het zelfgekozen leerniveau (1..5) voor deze cursus + een
+// geaggregeerde verdeling. READ-ONLY: docenten kunnen het niveau NIET wijzigen
+// (de student blijft de baas, kernprincipe van Task #296). Toegang via service-
+// role zodat de eigen-rij-RLS op student_course_levels niet versoepeld hoeft te
+// worden; gegate op admin/superuser of docent van déze cursus.
+app.get('/api/admin/courses/:courseId/learning-levels', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { courseId } = req.params;
+  const lang = String(req.query.lang || 'nl').toLowerCase() === 'nl' ? 'nl' : 'en';
+  try {
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('role, email').eq('id', auth.user.id).maybeSingle();
+    const isAdmin = profile && (profile.role === 'admin' || profile.email === SUPERUSER_EMAIL);
+    const isCourseStaff = isAdmin || (await isCourseTeacher(auth.user.id, courseId));
+    if (!isCourseStaff) return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+
+    const emptyDistribution = () => {
+      const d = {};
+      for (let l = LEVEL_MIN; l <= LEVEL_MAX; l++) d[l] = 0;
+      return d;
+    };
+
+    const { data: rows, error: e } = await supabaseAdmin
+      .from('student_course_levels')
+      .select('user_id, level, updated_at')
+      .eq('course_id', courseId)
+      .order('updated_at', { ascending: false });
+    if (e) {
+      // Tabel ontbreekt nog (migratie niet uitgevoerd): geef leeg + waarschuwing
+      // i.p.v. een 500, zodat het paneel netjes laadt op een oude DB.
+      if (e.code === '42P01') {
+        return res.json({
+          levels: [],
+          distribution: emptyDistribution(),
+          total: 0,
+          defaultLevel: LEVEL_DEFAULT,
+          warning: 'student_course_levels ontbreekt — voer de migratie uit.',
+        });
+      }
+      return res.status(500).json({ error: e.message });
+    }
+
+    const userIds = Array.from(new Set((rows || []).map(r => r.user_id).filter(Boolean)));
+    let profMap = new Map();
+    if (userIds.length) {
+      const { data: profs } = await supabaseAdmin
+        .from('profiles').select('id, full_name, email').in('id', userIds);
+      profMap = new Map((profs || []).map(p => [p.id, p]));
+    }
+
+    const labels = LEVEL_LABELS[lang] || LEVEL_LABELS.nl;
+    const distribution = emptyDistribution();
+    const levels = (rows || []).map(r => {
+      const lvl = r.level;
+      if (lvl >= LEVEL_MIN && lvl <= LEVEL_MAX) distribution[lvl] += 1;
+      const p = profMap.get(r.user_id);
+      return {
+        user_id: r.user_id,
+        name: p?.full_name || p?.email || null,
+        email: p?.email || null,
+        level: lvl,
+        label: labels[lvl] || null,
+        updated_at: r.updated_at,
+      };
+    });
+
+    return res.json({
+      levels,
+      distribution,
+      total: levels.length,
+      defaultLevel: LEVEL_DEFAULT,
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
