@@ -8,12 +8,14 @@ import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocu
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
-import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, Trash2, X, Loader2, Eye, Download, FileText } from 'lucide-react';
+import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, Trash2, X, Loader2, Eye, Download, FileText, TrendingUp } from 'lucide-react';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { DocumentViewer, type ViewerContext } from '../components/DocumentViewer';
 import { ViewerErrorBoundary } from '../components/ViewerErrorBoundary';
 import { NoticeBanner, useNotice } from '../components/Notice';
 import { PromptDebugBadge } from '../components/PromptDebugBadge';
+import { useLearningLevel } from '../hooks/useLearningLevel';
+import { LearningLevelSelector } from '../components/LearningLevelSelector';
 
 
 interface ChatMessage extends Message {
@@ -116,6 +118,7 @@ function AssistantMessageBody({
 export function ChatPage() {
   const { profile, signOut } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
+  const { level: learningLevel, setLevel: setLearningLevel } = useLearningLevel(activeCourse);
   const { t, lang } = useLanguage();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
@@ -529,7 +532,8 @@ export function ChatPage() {
           history,
           context,
           ragSettings.chat.rag_strict_mode,
-          displaySources.length > 0 ? displaySources : undefined
+          displaySources.length > 0 ? displaySources : undefined,
+          learningLevel
         );
       } catch (llmErr) {
         console.error('[CHAT] LLM call failed:', llmErr);
@@ -588,13 +592,14 @@ export function ChatPage() {
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!input.trim() || !currentConversationId || !profile) return;
+  const handleSendMessage = async (overrideText?: string) => {
+    const text = (typeof overrideText === 'string' ? overrideText : input).trim();
+    if (!text || !currentConversationId || !profile) return;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
-      content: input,
+      content: text,
       timestamp: new Date().toISOString()
     };
 
@@ -624,6 +629,13 @@ export function ChatPage() {
     if (pendingRetry) {
       sendToAssistant(pendingRetry.history, pendingRetry.isFirstMessage);
     }
+  };
+
+  // Task #296: vraag de tutor expliciet om een eerlijk "klaar voor een hoger
+  // niveau?"-oordeel. De student initieert dit; de bot doet het nooit uit zichzelf.
+  const askReadiness = () => {
+    if (loading) return;
+    handleSendMessage(t('learningLevel.readinessPrompt'));
   };
 
   if (!profile) {
@@ -872,8 +884,27 @@ export function ChatPage() {
             </div>
 
             <div className="border-t border-gray-200 p-4">
-              <div className="mb-3">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
                 <RAGStatusIndicator strictMode={ragSettings.chat.rag_strict_mode} />
+                <div className="flex items-end gap-2 ml-auto">
+                  <LearningLevelSelector
+                    value={learningLevel}
+                    onChange={setLearningLevel}
+                    compact
+                    className="min-w-[240px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={askReadiness}
+                    disabled={loading}
+                    title={t('learningLevel.readinessHint')}
+                    className="px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 flex items-center gap-1.5 whitespace-nowrap"
+                    data-testid="button-readiness-chat"
+                  >
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    {t('learningLevel.readinessButton')}
+                  </button>
+                </div>
               </div>
               <div className="flex gap-3 items-end">
                 <textarea
@@ -895,7 +926,7 @@ export function ChatPage() {
                   data-testid="input-chat-message"
                 />
                 <button
-                  onClick={handleSendMessage}
+                  onClick={() => handleSendMessage()}
                   disabled={loading || !input.trim()}
                   className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >

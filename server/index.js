@@ -34,6 +34,7 @@ import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normal
 import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse, canAccessCourseContent } from './courseAvailability.js';
 import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
 import { buildLanguageInstruction, localizePrompt, languageEnglishName, normalizeLang } from './languages.js';
+import { buildLevelInstructionBlock } from './learningLevel.js';
 import {
   extractEmails,
   dedupeEmails,
@@ -439,7 +440,11 @@ app.post('/api/chat', async (req, res) => {
     systemPromptOverride,
     sources,
     lang = 'nl',
+    learningLevel,
   } = req.body;
+
+  // Task #296: parametrisch leerniveau-blok (leeg bij ontbrekend/ongeldig niveau).
+  const levelBlock = buildLevelInstructionBlock(learningLevel, lang);
 
   // Bouw bron-instructieblok voor [1]/[2]/... citaten in chat-antwoorden.
   // Spiegel van buildSourcesBlock in src/services/llm.service.ts (Ik Leg Uit).
@@ -457,9 +462,9 @@ app.post('/api/chat', async (req, res) => {
   let finalMessages;
   if (skipSystemPrompt) {
     if (systemPromptOverride) {
-      finalMessages = [{ role: 'system', content: `${systemPromptOverride}${buildLanguageInstruction(lang)}` }, ...userMessages];
+      finalMessages = [{ role: 'system', content: `${systemPromptOverride}${levelBlock}${buildLanguageInstruction(lang)}` }, ...userMessages];
     } else {
-      const langOnly = buildLanguageInstruction(lang).trim();
+      const langOnly = `${levelBlock}${buildLanguageInstruction(lang)}`.trim();
       finalMessages = langOnly ? [{ role: 'system', content: langOnly }, ...userMessages] : userMessages;
     }
   } else {
@@ -494,20 +499,24 @@ app.post('/api/chat', async (req, res) => {
         console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
       }
     }
-    const langSuffix = buildLanguageInstruction(lang);
+    // Task #296: leerniveau-blok + taal-instructie als langSuffix. Dit suffix
+    // wordt als ALLERLAATSTE toegevoegd (ná de bronnen-/verwijsregels) zodat de
+    // taal-eis dominant blijft voor de uitvoertaal, ook wanneer er bronnen zijn.
+    const langSuffix = `${levelBlock}${buildLanguageInstruction(lang)}`;
     let systemContent;
     if (ragStrictMode) {
       if (context) {
-        systemContent = `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${RAG_STRICT_INSTRUCTION}${langSuffix}`;
+        systemContent = `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${RAG_STRICT_INSTRUCTION}`;
       } else {
-        systemContent = `${systemPromptContent}${RAG_STRICT_INSTRUCTION}\n\nEr zijn geen relevante cursusteksten gevonden voor deze vraag. Informeer de student hierover.${langSuffix}`;
+        systemContent = `${systemPromptContent}${RAG_STRICT_INSTRUCTION}\n\nEr zijn geen relevante cursusteksten gevonden voor deze vraag. Informeer de student hierover.`;
       }
     } else {
       systemContent = context
-        ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}${langSuffix}`
-        : `${systemPromptContent}${langSuffix}`;
+        ? `${systemPromptContent}\n\nContext uit cursusmateriaal:\n${context}`
+        : `${systemPromptContent}`;
     }
     if (chatSourcesBlock) systemContent += chatSourcesBlock;
+    systemContent += langSuffix;
     finalMessages = [{ role: 'system', content: systemContent }, ...userMessages];
   }
 
@@ -8923,7 +8932,7 @@ app.post('/api/projects/persona-chat', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
   const auth = await authUser(req);
   if (auth.error) return res.status(auth.error.status).json(auth.error.body);
-  const { groupId, personaId, message, lang = 'nl' } = req.body || {};
+  const { groupId, personaId, message, lang = 'nl', learningLevel } = req.body || {};
   if (!groupId || !personaId || !message) {
     return res.status(400).json({ error: 'groupId, personaId, message vereist' });
   }
@@ -9188,7 +9197,9 @@ app.post('/api/projects/persona-chat', async (req, res) => {
     const relationshipBlock = persona.id !== '__default__'
       ? relBuildPromptBlock(relationship.score, relationship.history, lang, 3)
       : '';
-    const systemContent = `${persona.system_prompt}${relationshipBlock}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}${langSuffix}`;
+    // Task #296: leerniveau-blok vóór de taal-instructie (laatste blok blijft taal).
+    const levelBlock = buildLevelInstructionBlock(learningLevel, lang);
+    const systemContent = `${persona.system_prompt}${relationshipBlock}${agreementsBlock}${ragBlock}${projectDocBlock}${docBlock}${levelBlock}${langSuffix}`;
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!AZURE_CHAT_READY) return res.status(503).json({ error: LLM_NOT_CONFIGURED_MSG });

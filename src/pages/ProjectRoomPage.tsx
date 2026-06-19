@@ -5,11 +5,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
 import { useContentTranslation, type TranslatableItem } from '../hooks/useContentTranslation';
+import { useLearningLevel } from '../hooks/useLearningLevel';
+import { LearningLevelSelector } from '../components/LearningLevelSelector';
 import {
   ArrowLeft, Send, Users, MessageCircle, Bot, CheckCircle2,
   Flag, Clipboard, Copy, Loader2, BookOpen, Paperclip, Trash2, FileText, ShieldAlert, Download, Database, EyeOff,
   LogOut, ScrollText, ChevronDown, ChevronRight, UploadCloud,
-  Gavel, XCircle, AlertTriangle,
+  Gavel, XCircle, AlertTriangle, TrendingUp,
 } from 'lucide-react';
 
 interface Persona {
@@ -34,6 +36,7 @@ interface Project {
   rubric_criteria: any[];
   research_question: string;
   submissions_enabled?: boolean | null;
+  course_id?: string | null;
 }
 interface Submission {
   id: string;
@@ -196,6 +199,7 @@ export function ProjectRoomPage() {
   const isStaff = isAdmin || isDocent;
 
   const [project, setProject] = useState<Project | null>(null);
+  const { level: learningLevel, setLevel: setLearningLevel } = useLearningLevel(project?.course_id ?? null);
   const [group, setGroup] = useState<ProjectGroup | null>(null);
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -244,6 +248,9 @@ export function ProjectRoomPage() {
   const [grantSaving, setGrantSaving] = useState(false);
   const [grantError, setGrantError] = useState<string | null>(null);
   const [confirmConsult, setConfirmConsult] = useState<ConsultationInfo | null>(null);
+  // Task #296: tekst die wacht op bevestiging van een nieuwe raadpleging (kan de
+  // gewone invoer zijn of een quick-prompt zoals de readiness-vraag).
+  const [pendingPersonaText, setPendingPersonaText] = useState<string | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -683,8 +690,9 @@ export function ProjectRoomPage() {
 
   // Task #252: bepaalt of dit bericht een NIEUWE raadpleging start (geen open
   // thread) terwijl er een eindige limiet geldt — dan eerst bevestigen.
-  const sendPersona = () => {
-    if (!personaInput.trim() || !activePersonaId || !groupId || !token) return;
+  const requestSendPersona = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || !activePersonaId || !groupId || !token) return;
     const consult = consultations.find(c => c.personaId === activePersonaId);
     if (consult?.blocked) return; // input is dan toch al uitgeschakeld
     const startsNewConsultation = consult
@@ -692,11 +700,14 @@ export function ProjectRoomPage() {
       && !activeThreadId
       && !consult.hasOpenThread;
     if (startsNewConsultation) {
+      setPendingPersonaText(trimmed);
       setConfirmConsult(consult!);
       return;
     }
-    doSendPersona(personaInput.trim());
+    doSendPersona(trimmed);
   };
+
+  const sendPersona = () => requestSendPersona(personaInput);
 
   const doSendPersona = async (text: string) => {
     if (!text || !activePersonaId || !groupId || !token) return;
@@ -711,7 +722,7 @@ export function ProjectRoomPage() {
       const r = await fetch('/api/projects/persona-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ groupId, personaId: activePersonaId, message: text, lang }),
+        body: JSON.stringify({ groupId, personaId: activePersonaId, message: text, lang, learningLevel }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || t('room.personaChatFailed'));
@@ -1302,6 +1313,29 @@ export function ProjectRoomPage() {
                 </div>
               );
             })()}
+            <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+              <LearningLevelSelector
+                value={learningLevel}
+                onChange={setLearningLevel}
+                compact
+                className="min-w-[240px]"
+              />
+              <button
+                type="button"
+                onClick={() => requestSendPersona(t('learningLevel.readinessPrompt'))}
+                disabled={
+                  !activePersona || personaLoading || isFinalized
+                  || !!relationships.find(r => r.personaId === activePersonaId && r.blocked)
+                  || !!consultations.find(c => c.personaId === activePersonaId && c.blocked)
+                }
+                title={t('learningLevel.readinessHint')}
+                className="px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 flex items-center gap-1.5 whitespace-nowrap"
+                data-testid="button-readiness-persona"
+              >
+                <TrendingUp className="w-3.5 h-3.5" />
+                {t('learningLevel.readinessButton')}
+              </button>
+            </div>
             <div className="flex gap-2 items-end">
               <textarea
                 ref={personaInputRef}
@@ -2169,14 +2203,14 @@ export function ProjectRoomPage() {
             </p>
             <div className="flex gap-2 justify-end mt-5">
               <button
-                onClick={() => setConfirmConsult(null)}
+                onClick={() => { setConfirmConsult(null); setPendingPersonaText(null); }}
                 className="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
                 data-testid="button-cancel-consultation"
               >
                 {t('common.cancel')}
               </button>
               <button
-                onClick={() => { setConfirmConsult(null); doSendPersona(personaInput.trim()); }}
+                onClick={() => { const txt = pendingPersonaText ?? personaInput.trim(); setConfirmConsult(null); setPendingPersonaText(null); doSendPersona(txt); }}
                 className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
                 data-testid="button-confirm-consultation"
               >

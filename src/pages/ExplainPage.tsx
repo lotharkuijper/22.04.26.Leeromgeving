@@ -11,6 +11,8 @@ import { SourceList } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
 import { PromptDebugBadge } from '../components/PromptDebugBadge';
+import { useLearningLevel } from '../hooks/useLearningLevel';
+import { LearningLevelSelector } from '../components/LearningLevelSelector';
 import type { Database } from '../lib/database.types';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { NoticeBanner, useNotice } from '../components/Notice';
@@ -150,6 +152,7 @@ export function ExplainPage() {
   const { t, lang } = useLanguage();
   const { profile, signOut } = useAuth();
   const { activeCourseId: activeCourse } = useActiveCourse();
+  const { level: learningLevel, setLevel: setLearningLevel } = useLearningLevel(activeCourse);
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [filteredConcepts, setFilteredConcepts] = useState<Concept[]>([]);
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null);
@@ -511,7 +514,8 @@ export function ExplainPage() {
           context,
           displaySources,
           ragSettings.explain.rag_strict_mode,
-          explainSystemPrompt ?? undefined
+          explainSystemPrompt ?? undefined,
+          learningLevel
         );
       } catch (llmErr) {
         console.error('[EXPLAIN] LLM evaluation failed:', llmErr);
@@ -950,6 +954,12 @@ export function ExplainPage() {
                       </span>
                     </div>
                   </div>
+
+                  <LearningLevelSelector
+                    value={learningLevel}
+                    onChange={setLearningLevel}
+                    className="pt-1"
+                  />
 
                   <button
                     onClick={handleSubmitExplanation}

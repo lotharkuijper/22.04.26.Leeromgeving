@@ -17,3 +17,5 @@ Course **content** access (projects list/start/join/restart, course-info, itemba
 - `student-overview` resolves its course set as the union of all active(+visible) courses and member courses that pass the same predicate — never just `course_members`. Frontend `ProjectsPage` filters by the active course, so returning all open courses is fine and matches `ChooseCoursePage` (which also uses `.eq('is_active', true)`).
 - Keep the `coursesHasStudentVisible`/42703 defensive handling: when the column is missing, treat every course as visible.
 - Staff/write endpoints (role changes, availability, bulk provision, admin downloads) still gate on `isCourseTeacher`/`isStaffForCourse`/admin — that is unchanged and must stay strict.
+
+**Corollary — per-student-per-course preferences:** because students often have NO `course_members` row, any *per-student, per-course* setting must live in its own table keyed on `(user_id, course_id)` with own-row RLS (`auth.uid() = user_id`), NOT in `course_members` and NOT in `profiles` (which is global per-user only, e.g. language/last-active-course).

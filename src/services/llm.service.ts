@@ -172,7 +172,8 @@ export async function sendChatMessage(
   messages: Message[],
   context?: string,
   ragStrictMode?: boolean,
-  sources?: Array<{ title: string; similarity: number }>
+  sources?: Array<{ title: string; similarity: number }>,
+  learningLevel?: number
 ): Promise<LLMResponse> {
   try {
     const userMessages = messages.filter(m => m.role !== 'system');
@@ -186,6 +187,7 @@ export async function sendChatMessage(
       stream: false,
       ragStrictMode: ragStrictMode ?? false,
       sources: sources && sources.length > 0 ? sources : undefined,
+      learningLevel,
     });
 
     const content = data.choices[0]?.message?.content;
@@ -219,7 +221,8 @@ export async function evaluateExplanation(
   ragContext?: string,
   retrievedSources?: Array<{ title: string; similarity: number }>,
   ragStrictMode?: boolean,
-  systemPrompt?: string
+  systemPrompt?: string,
+  learningLevel?: number
 ): Promise<LLMResponse> {
   let evaluationPrompt: string;
 
@@ -312,6 +315,7 @@ Geef gestructureerde feedback met:
     max_tokens: 4000,
     skipSystemPrompt: true,
     ...(systemPrompt ? { systemPromptOverride: systemPrompt } : {}),
+    learningLevel,
   });
 
   const content = data.choices[0]?.message?.content;
