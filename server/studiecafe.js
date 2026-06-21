@@ -15,7 +15,7 @@
 // server/__tests__/studiecafe.test.js.
 // ───────────────────────────────────────────────────────────────────────────
 
-export const STUDIECAFE_CATEGORIES = ['vraag', 'discussie', 'tip'];
+export const STUDIECAFE_CATEGORIES = ['vraag', 'discussie', 'samenwerken'];
 // Bewuste allowlist: voorkomt willekeurige/agressieve emoji-payloads.
 export const ALLOWED_REACTION_EMOJI = ['👍', '❤️', '🎉', '🤔', '✅', '🙌'];
 export const MAX_TITLE_LEN = 200;
@@ -95,6 +95,8 @@ export function summarizeReactions(reactions, userId) {
 export function canModerate({ isStaff } = {}) { return !!isStaff; }
 // Verwijderen van een post = auteur of staff.
 export function canDeletePost({ isStaff, isAuthor } = {}) { return !!isStaff || !!isAuthor; }
+// Bewerken van een post (titel/body/categorie) = auteur of staff.
+export function canEditPost({ isStaff, isAuthor } = {}) { return !!isStaff || !!isAuthor; }
 // "Opgelost"-markering = auteur (eigen vraag) of staff.
 export function canSetResolved({ isStaff, isAuthor } = {}) { return !!isStaff || !!isAuthor; }
 // Reageren op een gesloten thread mag alleen staff; open threads iedereen.
@@ -401,12 +403,60 @@ export function registerStudiecafeRoutes(app, deps) {
         return res.status(403).json({ error: 'Je mag deze post niet verwijderen' });
       }
       const ts = await nowIso();
+      // Beveiligingskritisch: de thread én al zijn child-replies moeten ATOMAIR
+      // geredigeerd worden. De SELECT-RLS laat cursusgenoten studiecafe_replies
+      // RECHTSTREEKS lezen (buiten de server-shape om), dus als de thread wél maar
+      // de replies NIET geredigeerd worden, blijft de inhoud van een verwijderde
+      // thread via zijn reacties cursus-breed leesbaar. Met pgPool draaien beide
+      // updates in één transactie; faalt er iets, dan rollt alles terug.
+      if (pgPool) {
+        const client = await pgPool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(
+            `UPDATE studiecafe_threads
+               SET deleted_at = $2, deleted_by = $3, body = '', title = '',
+                   author_id = NULL, kudos_by = NULL, kudos_at = NULL,
+                   reactions = '{}'::jsonb, updated_at = $2
+             WHERE id = $1`,
+            [threadId, ts, auth.user.id],
+          );
+          await client.query(
+            `UPDATE studiecafe_replies
+               SET deleted_at = $2, deleted_by = $3, body = '',
+                   author_id = NULL, kudos_by = NULL, kudos_at = NULL,
+                   reactions = '{}'::jsonb
+             WHERE thread_id = $1 AND deleted_at IS NULL`,
+            [threadId, ts, auth.user.id],
+          );
+          await client.query('COMMIT');
+        } catch (txErr) {
+          await client.query('ROLLBACK').catch(() => {});
+          console.error('[studiecafe] delete thread tx error:', txErr.message);
+          return res.status(500).json({ error: txErr.message });
+        } finally {
+          client.release();
+        }
+        return res.json({ ok: true });
+      }
+      // Fallback zonder pgPool (bv. testomgeving): redigeer EERST de replies en pas
+      // dáárna de thread. Faalt de reply-cascade, dan is de thread nog NIET
+      // verwijderd → geen leesbare replies onder een verwijderde thread (fail-closed).
+      // Reeds verwijderde replies slaan we over zodat hun audit intact blijft.
+      const { error: cascadeErr } = await supabaseAdmin
+        .from('studiecafe_replies')
+        .update(buildSoftDeleteRedaction({ ts, userId: auth.user.id, isThread: false }))
+        .eq('thread_id', threadId)
+        .is('deleted_at', null);
+      if (cascadeErr) {
+        console.error('[studiecafe] delete thread reply-cascade error:', cascadeErr.message);
+        return res.status(500).json({ error: cascadeErr.message });
+      }
       const { error: delErr } = await supabaseAdmin
         .from('studiecafe_threads')
         .update(buildSoftDeleteRedaction({ ts, userId: auth.user.id, isThread: true }))
         .eq('id', threadId);
       if (delErr) {
-        // Beveiligingskritisch: een stil falen zou de inhoud NIET redigeren.
         console.error('[studiecafe] delete thread error:', delErr.message);
         return res.status(500).json({ error: delErr.message });
       }
@@ -470,7 +520,50 @@ export function registerStudiecafeRoutes(app, deps) {
     }
   });
 
-  // PATCH thread — moderatie. pin/lock = staff; resolved = auteur of staff.
+  // PATCH reply — inhoud bewerken; auteur of staff.
+  app.patch('/api/studiecafe/:courseId/replies/:replyId', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId, replyId } = req.params;
+    if (!(await userHasCourseAccess(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+    const v = validateReplyInput(req.body || {});
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    try {
+      const { data: reply } = await supabaseAdmin
+        .from('studiecafe_replies')
+        .select('id, course_id, author_id, deleted_at')
+        .eq('id', replyId)
+        .maybeSingle();
+      if (!reply || reply.course_id !== courseId || reply.deleted_at) {
+        return res.status(404).json({ error: 'Reactie niet gevonden' });
+      }
+      const isStaff = await isStaffForCourse(auth.user, auth.profile, courseId);
+      const isAuthor = reply.author_id === auth.user.id;
+      if (!canEditPost({ isStaff, isAuthor })) {
+        return res.status(403).json({ error: 'Je mag deze reactie niet bewerken' });
+      }
+      const { data, error } = await supabaseAdmin
+        .from('studiecafe_replies')
+        .update({ body: v.value.body })
+        .eq('id', replyId)
+        .select(REPLY_COLS)
+        .single();
+      if (error) {
+        console.error('[studiecafe] patch reply error:', error.message);
+        return res.status(500).json({ error: error.message });
+      }
+      const nameFor = await buildNameResolver([data.author_id, data.kudos_by]);
+      return res.json({ reply: shapeReply(data, nameFor, auth.user.id) });
+    } catch (err) {
+      console.error('[studiecafe] patch reply unexpected:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // PATCH thread — moderatie + bewerken. pin/lock/aankondiging = staff;
+  // resolved + inhoud (titel/body/categorie) = auteur of staff.
   app.patch('/api/studiecafe/:courseId/threads/:threadId', async (req, res) => {
     const auth = await requireAuthUser(req, res);
     if (!auth) return;
@@ -491,6 +584,19 @@ export function registerStudiecafeRoutes(app, deps) {
       const isAuthor = thread.author_id === auth.user.id;
       const b = req.body || {};
       const update = {};
+      // Inhoud bewerken (titel/body/categorie) — auteur of staff.
+      const wantsEdit =
+        typeof b.title === 'string' || typeof b.body === 'string' || typeof b.category === 'string';
+      if (wantsEdit) {
+        if (!canEditPost({ isStaff, isAuthor })) {
+          return res.status(403).json({ error: 'Je mag deze post niet bewerken' });
+        }
+        const v = validateThreadInput({ title: b.title, body: b.body });
+        if (!v.ok) return res.status(400).json({ error: v.error });
+        update.title = v.value.title;
+        update.body = v.value.body;
+        if (typeof b.category === 'string') update.category = sanitizeCategory(b.category);
+      }
       if (typeof b.isPinned === 'boolean') {
         if (!canModerate({ isStaff })) return res.status(403).json({ error: 'Alleen docenten mogen pinnen' });
         update.is_pinned = b.isPinned;
@@ -498,6 +604,10 @@ export function registerStudiecafeRoutes(app, deps) {
       if (typeof b.isLocked === 'boolean') {
         if (!canModerate({ isStaff })) return res.status(403).json({ error: 'Alleen docenten mogen sluiten' });
         update.is_locked = b.isLocked;
+      }
+      if (typeof b.isAnnouncement === 'boolean') {
+        if (!canModerate({ isStaff })) return res.status(403).json({ error: 'Alleen docenten mogen aankondigingen beheren' });
+        update.is_announcement = b.isAnnouncement;
       }
       if (typeof b.isResolved === 'boolean') {
         if (!canSetResolved({ isStaff, isAuthor })) return res.status(403).json({ error: 'Je mag dit niet markeren' });

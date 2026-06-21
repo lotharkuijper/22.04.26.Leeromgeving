@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Coffee, Send, Loader2, Pin, PinOff, Lock, Unlock, Trash2, CheckCircle2,
-  Award, Megaphone, Smile, MessageCircle, HelpCircle, MessagesSquare, Lightbulb,
+  Award, Megaphone, Smile, MessageCircle, HelpCircle, MessagesSquare, Users,
+  Pencil, X, Search,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -9,14 +10,16 @@ import { useLanguage } from '../i18n';
 import { supabase } from '../lib/supabase';
 import { useContentTranslation, type TranslatableItem } from '../hooks/useContentTranslation';
 import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
+import { MarkdownMessage } from '../components/MarkdownMessage';
 
 // Studiecafé (Task #304) — per-cursus discussieforum. Studenten posten vragen/
 // discussies/tips, reageren, reageren met emoji en markeren vragen als opgelost.
 // Docenten modereren volledig (pinnen, sluiten, verwijderen), geven een pluim en
 // plaatsen aankondigingen. Realtime via Supabase; auto-vertaling per lezer (#288).
 
-type Category = 'vraag' | 'discussie' | 'tip';
+type Category = 'vraag' | 'discussie' | 'samenwerken';
 type FilterKey = 'all' | Category | 'announcement';
+type SortKey = 'recent' | 'newest' | 'active';
 
 const ALLOWED_REACTION_EMOJI = ['👍', '❤️', '🎉', '🤔', '✅', '🙌'];
 
@@ -76,7 +79,7 @@ function formatWhen(iso: string, lang: string): string {
 const CATEGORY_META: Record<Category, { icon: typeof HelpCircle; classes: string }> = {
   vraag: { icon: HelpCircle, classes: 'bg-blue-50 text-blue-700 ring-blue-200' },
   discussie: { icon: MessagesSquare, classes: 'bg-purple-50 text-purple-700 ring-purple-200' },
-  tip: { icon: Lightbulb, classes: 'bg-green-50 text-green-700 ring-green-200' },
+  samenwerken: { icon: Users, classes: 'bg-green-50 text-green-700 ring-green-200' },
 };
 
 export function StudiecafePage() {
@@ -91,7 +94,14 @@ export function StudiecafePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('all');
+  const [sort, setSort] = useState<SortKey>('recent');
+  const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Inline bewerken (auteur of staff).
+  const [editingThread, setEditingThread] = useState<{ id: string; title: string; body: string; category: Category } | null>(null);
+  const [editingReply, setEditingReply] = useState<{ id: string; body: string } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Composer (nieuwe thread).
   const [showComposer, setShowComposer] = useState(false);
@@ -188,11 +198,11 @@ export function StudiecafePage() {
     const items: Record<string, TranslatableItem> = {};
     for (const th of threads) {
       items[`t:${th.id}:title`] = { text: th.title, format: 'plain' };
-      items[`t:${th.id}:body`] = { text: th.body, format: 'plain' };
+      items[`t:${th.id}:body`] = { text: th.body, format: 'markdown' };
     }
     for (const [tid, reps] of Object.entries(repliesByThread)) {
       for (const r of reps) {
-        if (!r.deleted && r.body) items[`r:${tid}:${r.id}:body`] = { text: r.body, format: 'plain' };
+        if (!r.deleted && r.body) items[`r:${tid}:${r.id}:body`] = { text: r.body, format: 'markdown' };
       }
     }
     return items;
@@ -288,13 +298,60 @@ export function StudiecafePage() {
     }
   };
 
-  const patchThread = async (threadId: string, patch: { isPinned?: boolean; isLocked?: boolean; isResolved?: boolean }) => {
+  const patchThread = async (
+    threadId: string,
+    patch: { isPinned?: boolean; isLocked?: boolean; isResolved?: boolean; isAnnouncement?: boolean; title?: string; body?: string; category?: Category },
+  ) => {
     if (!courseId) return;
     const r = await apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     });
     if (r.ok) await loadThreads();
+  };
+
+  const startEditThread = (th: Thread) => {
+    setEditingReply(null);
+    setEditingThread({ id: th.id, title: th.title, body: th.body, category: th.category });
+  };
+
+  const saveEditThread = async () => {
+    if (!courseId || !editingThread) return;
+    const { id, title, body, category } = editingThread;
+    if (!title.trim() || !body.trim()) return;
+    setSavingEdit(true);
+    try {
+      const r = await apiFetch(`/api/studiecafe/${courseId}/threads/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title, body, category }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { setEditingThread(null); await loadThreads(); }
+      else setError(d.error || t('studiecafe.postError'));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const startEditReply = (rp: Reply) => {
+    setEditingThread(null);
+    setEditingReply({ id: rp.id, body: rp.body });
+  };
+
+  const saveEditReply = async (threadId: string) => {
+    if (!courseId || !editingReply || !editingReply.body.trim()) return;
+    setSavingEdit(true);
+    try {
+      const r = await apiFetch(`/api/studiecafe/${courseId}/replies/${editingReply.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ body: editingReply.body }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { setEditingReply(null); await loadReplies(threadId); }
+      else setError(d.error || t('studiecafe.postError'));
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const deleteThread = async (threadId: string) => {
@@ -310,17 +367,41 @@ export function StudiecafePage() {
   };
 
   const filtered = useMemo(() => {
-    if (filter === 'all') return threads;
-    if (filter === 'announcement') return threads.filter((x) => x.isAnnouncement);
-    return threads.filter((x) => x.category === filter && !x.isAnnouncement);
-  }, [threads, filter]);
+    let list = threads;
+    if (filter === 'announcement') list = list.filter((x) => x.isAnnouncement);
+    else if (filter !== 'all') list = list.filter((x) => x.category === filter && !x.isAnnouncement);
+    const q = search.trim().toLowerCase();
+    if (q) list = list.filter((x) => x.title.toLowerCase().includes(q) || x.body.toLowerCase().includes(q));
+    return list;
+  }, [threads, filter, search]);
+
+  // Sorteren op de geladen set (≤200 threads). Vastgezet + aankondigingen blijven
+  // bovenaan; daarbinnen geldt de gekozen sortering. ISO-timestamps sorteren
+  // lexicografisch correct.
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+      if (a.isAnnouncement !== b.isAnnouncement) return a.isAnnouncement ? -1 : 1;
+      if (sort === 'newest') return b.createdAt.localeCompare(a.createdAt);
+      if (sort === 'active') return (b.replyCount - a.replyCount) || b.lastActivityAt.localeCompare(a.lastActivityAt);
+      return b.lastActivityAt.localeCompare(a.lastActivityAt);
+    });
+    return arr;
+  }, [filtered, sort]);
 
   const filterChips: { key: FilterKey; label: string }[] = [
     { key: 'all', label: t('studiecafe.filter.all') },
     { key: 'vraag', label: t('studiecafe.filter.vraag') },
     { key: 'discussie', label: t('studiecafe.filter.discussie') },
-    { key: 'tip', label: t('studiecafe.filter.tip') },
+    { key: 'samenwerken', label: t('studiecafe.filter.samenwerken') },
     { key: 'announcement', label: t('studiecafe.filter.announcement') },
+  ];
+
+  const sortOptions: { key: SortKey; label: string }[] = [
+    { key: 'recent', label: t('studiecafe.sort.recent') },
+    { key: 'newest', label: t('studiecafe.sort.newest') },
+    { key: 'active', label: t('studiecafe.sort.active') },
   ];
 
   if (!courseId) {
@@ -423,7 +504,7 @@ export function StudiecafePage() {
               data-testid="input-thread-body"
             />
             <div className="flex flex-wrap items-center gap-2">
-              {(['vraag', 'discussie', 'tip'] as Category[]).map((c) => {
+              {(['vraag', 'discussie', 'samenwerken'] as Category[]).map((c) => {
                 const Icon = CATEGORY_META[c].icon;
                 return (
                   <button
@@ -468,7 +549,7 @@ export function StudiecafePage() {
       </div>
 
       {/* FILTERS + VERTAAL-NOTICE */}
-      <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           {filterChips.map((c) => (
             <button
@@ -489,6 +570,33 @@ export function StudiecafePage() {
         />
       </div>
 
+      {/* ZOEKEN + SORTEREN */}
+      <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <div className="relative flex-1 min-w-[12rem]">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('studiecafe.search.placeholder')}
+            className="w-full pl-9 pr-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none text-sm bg-white"
+            data-testid="input-search"
+          />
+        </div>
+        <label className="inline-flex items-center gap-2 text-sm text-slate-500">
+          {t('studiecafe.sort.label')}
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            className="px-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none text-sm bg-white text-slate-700"
+            data-testid="select-sort"
+          >
+            {sortOptions.map((o) => (
+              <option key={o.key} value={o.key}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
       {error && (
         <div className="mb-4 px-4 py-3 rounded-xl bg-red-50 text-red-700 ring-1 ring-red-200 text-sm" data-testid="text-error">{error}</div>
       )}
@@ -496,14 +604,14 @@ export function StudiecafePage() {
       {/* FEED */}
       {loading ? (
         <div className="flex justify-center py-16 text-slate-400"><Loader2 className="w-6 h-6 animate-spin" /></div>
-      ) : filtered.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <div className="text-center py-16 text-slate-400" data-testid="text-empty">
           <Coffee className="w-10 h-10 mx-auto mb-3 text-slate-300" />
-          <p>{t('studiecafe.empty')}</p>
+          <p>{search.trim() ? t('studiecafe.noResults') : t('studiecafe.empty')}</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {filtered.map((th) => {
+          {sorted.map((th) => {
             const CatIcon = CATEGORY_META[th.category].icon;
             const replies = repliesByThread[th.id] || [];
             const expanded = expandedId === th.id;
@@ -532,9 +640,67 @@ export function StudiecafePage() {
                     <span className="text-slate-400">{th.authorName} · {formatWhen(th.lastActivityAt, lang)}</span>
                   </div>
 
-                  {/* TITEL + BODY */}
-                  <h3 className="font-semibold text-slate-900 mb-1" data-testid={`text-thread-title-${th.id}`}>{tr(`t:${th.id}:title`, th.title)}</h3>
-                  <p className="text-slate-700 whitespace-pre-wrap text-sm">{tr(`t:${th.id}:body`, th.body)}</p>
+                  {/* TITEL + BODY (of inline-bewerken) */}
+                  {editingThread?.id === th.id ? (
+                    <div className="space-y-2 mb-2" data-testid={`edit-thread-${th.id}`}>
+                      <input
+                        value={editingThread.title}
+                        onChange={(e) => setEditingThread((s) => (s ? { ...s, title: e.target.value } : s))}
+                        maxLength={200}
+                        className="w-full px-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none text-sm"
+                        data-testid={`input-edit-thread-title-${th.id}`}
+                      />
+                      <textarea
+                        value={editingThread.body}
+                        onChange={(e) => setEditingThread((s) => (s ? { ...s, body: e.target.value } : s))}
+                        maxLength={8000}
+                        rows={4}
+                        className="w-full px-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none resize-y text-sm"
+                        data-testid={`input-edit-thread-body-${th.id}`}
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(['vraag', 'discussie', 'samenwerken'] as Category[]).map((c) => {
+                          const Icon = CATEGORY_META[c].icon;
+                          return (
+                            <button
+                              key={c}
+                              onClick={() => setEditingThread((s) => (s ? { ...s, category: c } : s))}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs ring-1 transition-colors ${editingThread.category === c ? CATEGORY_META[c].classes + ' ring-2' : 'bg-white text-slate-500 ring-slate-200 hover:bg-slate-50'}`}
+                              data-testid={`select-edit-category-${th.id}-${c}`}
+                            >
+                              <Icon className="w-3.5 h-3.5" />
+                              {t(`studiecafe.category.${c}` as any)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => setEditingThread(null)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors text-sm"
+                          data-testid={`button-cancel-edit-thread-${th.id}`}
+                        >
+                          <X className="w-3.5 h-3.5" />{t('studiecafe.edit.cancel')}
+                        </button>
+                        <button
+                          onClick={saveEditThread}
+                          disabled={savingEdit || !editingThread.title.trim() || !editingThread.body.trim()}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors"
+                          data-testid={`button-save-edit-thread-${th.id}`}
+                        >
+                          {savingEdit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}{t('studiecafe.edit.save')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <h3 className="font-semibold text-slate-900 mb-1" data-testid={`text-thread-title-${th.id}`}>{tr(`t:${th.id}:title`, th.title)}</h3>
+                      <MarkdownMessage
+                        content={tr(`t:${th.id}:body`, th.body)}
+                        className="prose prose-sm max-w-none text-slate-700 prose-p:my-1.5"
+                      />
+                    </>
+                  )}
 
                   {th.kudos && (
                     <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 text-xs ring-1 ring-rose-200" data-testid={`kudos-thread-${th.id}`}>
@@ -565,10 +731,18 @@ export function StudiecafePage() {
                           <CheckCircle2 className="w-4 h-4" />
                         </button>
                       )}
+                      {(th.isMine || isStaff) && editingThread?.id !== th.id && (
+                        <button onClick={() => startEditThread(th)} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors" title={t('studiecafe.actions.edit')} data-testid={`button-edit-thread-${th.id}`}>
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      )}
                       {isStaff && (
                         <>
                           <button onClick={() => toggleKudos('thread', th.id)} className={`p-1.5 rounded-lg transition-colors ${th.kudos ? 'text-rose-500 hover:bg-rose-50' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-500'}`} title={th.kudos ? t('studiecafe.actions.removeKudos') : t('studiecafe.actions.kudos')} data-testid={`button-kudos-${th.id}`}>
                             <Award className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => patchThread(th.id, { isAnnouncement: !th.isAnnouncement })} className={`p-1.5 rounded-lg transition-colors ${th.isAnnouncement ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-400 hover:bg-amber-50 hover:text-amber-600'}`} title={th.isAnnouncement ? t('studiecafe.actions.unannounce') : t('studiecafe.actions.announce')} data-testid={`button-announce-${th.id}`}>
+                            <Megaphone className="w-4 h-4" />
                           </button>
                           <button onClick={() => patchThread(th.id, { isPinned: !th.isPinned })} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 transition-colors" title={th.isPinned ? t('studiecafe.actions.unpin') : t('studiecafe.actions.pin')} data-testid={`button-pin-${th.id}`}>
                             {th.isPinned ? <PinOff className="w-4 h-4" /> : <Pin className="w-4 h-4" />}
@@ -599,10 +773,42 @@ export function StudiecafePage() {
                         <div className="flex-1 min-w-0">
                           {rp.deleted ? (
                             <p className="text-sm italic text-slate-400">{t('studiecafe.deletedReply')}</p>
+                          ) : editingReply?.id === rp.id ? (
+                            <div className="space-y-2" data-testid={`edit-reply-${rp.id}`}>
+                              <div className="text-xs text-slate-400 mb-0.5">{rp.authorName} · {formatWhen(rp.createdAt, lang)}</div>
+                              <textarea
+                                value={editingReply.body}
+                                onChange={(e) => setEditingReply((s) => (s ? { ...s, body: e.target.value } : s))}
+                                maxLength={8000}
+                                rows={3}
+                                className="w-full px-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none resize-y text-sm bg-white"
+                                data-testid={`input-edit-reply-${rp.id}`}
+                              />
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={() => setEditingReply(null)}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors text-xs"
+                                  data-testid={`button-cancel-edit-reply-${rp.id}`}
+                                >
+                                  <X className="w-3.5 h-3.5" />{t('studiecafe.edit.cancel')}
+                                </button>
+                                <button
+                                  onClick={() => saveEditReply(th.id)}
+                                  disabled={savingEdit || !editingReply.body.trim()}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors"
+                                  data-testid={`button-save-edit-reply-${rp.id}`}
+                                >
+                                  {savingEdit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}{t('studiecafe.edit.save')}
+                                </button>
+                              </div>
+                            </div>
                           ) : (
                             <>
                               <div className="text-xs text-slate-400 mb-0.5">{rp.authorName} · {formatWhen(rp.createdAt, lang)}</div>
-                              <p className="text-sm text-slate-700 whitespace-pre-wrap">{tr(`r:${th.id}:${rp.id}:body`, rp.body)}</p>
+                              <MarkdownMessage
+                                content={tr(`r:${th.id}:${rp.id}:body`, rp.body)}
+                                className="prose prose-sm max-w-none text-slate-700 prose-p:my-1"
+                              />
                               {rp.kudos && (
                                 <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 text-[11px] ring-1 ring-rose-200" data-testid={`kudos-reply-${rp.id}`}>
                                   <Award className="w-3 h-3" /> {t('studiecafe.kudosFrom', { name: rp.kudos.byName })}
@@ -611,6 +817,11 @@ export function StudiecafePage() {
                               <div className="flex items-center gap-2 mt-1.5">
                                 {renderReactions('reply', rp.id, rp.reactions)}
                                 <div className="flex items-center gap-1 ml-auto">
+                                  {(rp.isMine || isStaff) && (
+                                    <button onClick={() => startEditReply(rp)} className="p-1 rounded-md text-slate-300 hover:bg-slate-100 hover:text-slate-600 transition-colors" title={t('studiecafe.actions.edit')} data-testid={`button-edit-reply-${rp.id}`}>
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                   {isStaff && (
                                     <button onClick={() => toggleKudos('reply', rp.id)} className={`p-1 rounded-md transition-colors ${rp.kudos ? 'text-rose-500 hover:bg-rose-50' : 'text-slate-300 hover:bg-rose-50 hover:text-rose-500'}`} title={rp.kudos ? t('studiecafe.actions.removeKudos') : t('studiecafe.actions.kudos')} data-testid={`button-kudos-reply-${rp.id}`}>
                                       <Award className="w-3.5 h-3.5" />

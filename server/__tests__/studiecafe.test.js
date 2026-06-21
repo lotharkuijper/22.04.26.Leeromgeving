@@ -14,6 +14,7 @@ import {
   summarizeReactions,
   canModerate,
   canDeletePost,
+  canEditPost,
   canSetResolved,
   canReplyToThread,
   buildSoftDeleteRedaction,
@@ -22,6 +23,12 @@ import {
 describe('sanitizeCategory', () => {
   it('laat geldige categorieën door', () => {
     for (const c of STUDIECAFE_CATEGORIES) expect(sanitizeCategory(c)).toBe(c);
+  });
+  it('kent de optie-D categorieën (samenwerken vervangt tip)', () => {
+    expect(STUDIECAFE_CATEGORIES).toEqual(['vraag', 'discussie', 'samenwerken']);
+    expect(sanitizeCategory('samenwerken')).toBe('samenwerken');
+    // 'tip' bestaat niet meer en valt terug op de default.
+    expect(sanitizeCategory('tip')).toBe('vraag');
   });
   it('valt terug op vraag bij onbekend/leeg', () => {
     expect(sanitizeCategory('foo')).toBe('vraag');
@@ -147,6 +154,12 @@ describe('permissie-predicaten', () => {
     expect(canDeletePost({ isStaff: true, isAuthor: false })).toBe(true);
     expect(canDeletePost({ isStaff: false, isAuthor: true })).toBe(true);
     expect(canDeletePost({ isStaff: false, isAuthor: false })).toBe(false);
+  });
+  it('canEditPost voor staff of auteur', () => {
+    expect(canEditPost({ isStaff: true, isAuthor: false })).toBe(true);
+    expect(canEditPost({ isStaff: false, isAuthor: true })).toBe(true);
+    expect(canEditPost({ isStaff: false, isAuthor: false })).toBe(false);
+    expect(canEditPost({})).toBe(false);
   });
   it('canSetResolved voor staff of auteur', () => {
     expect(canSetResolved({ isStaff: false, isAuthor: true })).toBe(true);

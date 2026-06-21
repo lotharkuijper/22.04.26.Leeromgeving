@@ -23,3 +23,14 @@ same UPDATE that sets `deleted_at`, the realtime payload is already harmless and
 you can leave `deleted_at` out of the SELECT policy so the realtime nudge still
 reaches peers (they refetch via the server, which filters deleted rows). Check the
 `{error}` of these UPDATEs — a silent failure means content was NOT redacted.
+
+**Parent→child cascade must be atomic (or fail-closed ordered):** when deleting a
+parent (thread) whose children (replies) live in their OWN RLS-readable table, the
+child redaction is part of the same security boundary — redact children too, or
+their content stays directly readable under the deleted parent. Do NOT redact the
+parent first then the children in two independent UPDATEs: if the second fails you
+get a deleted parent with still-readable children (exactly the leak). Run both in a
+single `pgPool` transaction (`BEGIN`/`COMMIT`, `ROLLBACK` on error, `client.release()`
+in `finally`). For the no-pgPool fallback (test env), redact CHILDREN FIRST, then the
+parent — that ordering is fail-closed because a failed child cascade leaves the parent
+not-yet-deleted (no leak window).
