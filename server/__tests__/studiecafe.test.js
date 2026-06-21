@@ -18,6 +18,8 @@ import {
   canSetResolved,
   canReplyToThread,
   buildSoftDeleteRedaction,
+  toggleReactionAtomicPg,
+  REACTION_TABLES,
 } from '../studiecafe.js';
 
 describe('sanitizeCategory', () => {
@@ -200,5 +202,120 @@ describe('buildSoftDeleteRedaction', () => {
     for (const k of ['body', 'title']) expect(f[k]).toBe('');
     for (const k of ['author_id', 'kudos_by', 'kudos_at']) expect(f[k]).toBeNull();
     expect(f.reactions).toEqual({});
+  });
+});
+
+// Fake pgPool die row-level locking (SELECT ... FOR UPDATE) modelleert via een
+// per-id FIFO-mutex. Zo kunnen we aantonen dat twee gelijktijdige toggles
+// serialiseren: de tweede transactie blokkeert op de FOR UPDATE tot de eerste
+// COMMIT, leest dan de verse waarde en verliest de eerste reactie niet meer.
+function makeFakePool(rowsObj) {
+  const rows = new Map(Object.entries(rowsObj));
+  const tails = new Map(); // id -> Promise (mutex-staart)
+  let queries = 0;
+  function acquire(id) {
+    const prev = tails.get(id) || Promise.resolve();
+    let release;
+    const next = new Promise((res) => { release = res; });
+    tails.set(id, prev.then(() => next));
+    return prev.then(() => release);
+  }
+  return {
+    rows,
+    get queryCount() { return queries; },
+    async connect() {
+      let release = null;
+      return {
+        async query(sql, params) {
+          queries += 1;
+          if (/^\s*BEGIN/i.test(sql)) return { rows: [] };
+          if (/^\s*COMMIT/i.test(sql) || /^\s*ROLLBACK/i.test(sql)) {
+            if (release) { release(); release = null; }
+            return { rows: [] };
+          }
+          if (/FOR UPDATE/i.test(sql)) {
+            const id = params[0];
+            release = await acquire(id); // blokkeert tot vorige houder vrijgeeft
+            const row = rows.get(id);
+            // Diepe kopie zodat de "DB" pas bij UPDATE muteert (zoals echt SQL).
+            return { rows: row ? [{ ...row, reactions: JSON.parse(JSON.stringify(row.reactions)) }] : [] };
+          }
+          if (/UPDATE/i.test(sql)) {
+            const id = params[0];
+            const row = rows.get(id);
+            if (row) row.reactions = JSON.parse(params[1]);
+            return { rows: [], rowCount: 1 };
+          }
+          return { rows: [] };
+        },
+        release() { if (release) { release(); release = null; } },
+      };
+    },
+  };
+}
+
+describe('toggleReactionAtomicPg — race-veiligheid', () => {
+  it('verliest geen reactie bij twee gelijktijdige toggles op dezelfde post', async () => {
+    const pool = makeFakePool({
+      t1: { course_id: 'c1', reactions: {}, deleted_at: null },
+    });
+    const base = { pgPool: pool, table: 'studiecafe_threads', targetId: 't1', courseId: 'c1' };
+    // Twee verschillende gebruikers reageren tegelijk met verschillende emoji.
+    const [a, b] = await Promise.all([
+      toggleReactionAtomicPg({ ...base, emoji: '👍', userId: 'uA' }),
+      toggleReactionAtomicPg({ ...base, emoji: '❤️', userId: 'uB' }),
+    ]);
+    expect(a.next).toBeTruthy();
+    expect(b.next).toBeTruthy();
+    // Cruciaal: BEIDE reacties overleven in de uiteindelijke DB-staat.
+    expect(pool.rows.get('t1').reactions).toEqual({ '👍': ['uA'], '❤️': ['uB'] });
+  });
+
+  it('serialiseert dezelfde emoji van twee gebruikers (geen overschrijving)', async () => {
+    const pool = makeFakePool({
+      r9: { course_id: 'c1', reactions: {}, deleted_at: null },
+    });
+    const base = { pgPool: pool, table: 'studiecafe_replies', targetId: 'r9', courseId: 'c1' };
+    await Promise.all([
+      toggleReactionAtomicPg({ ...base, emoji: '🎉', userId: 'uA' }),
+      toggleReactionAtomicPg({ ...base, emoji: '🎉', userId: 'uB' }),
+    ]);
+    const arr = pool.rows.get('r9').reactions['🎉'];
+    expect(arr).toHaveLength(2);
+    expect([...arr].sort()).toEqual(['uA', 'uB']);
+  });
+
+  it('een gebruiker die twee keer dezelfde emoji togglet eindigt zonder reactie', async () => {
+    const pool = makeFakePool({
+      t2: { course_id: 'c1', reactions: {}, deleted_at: null },
+    });
+    const base = { pgPool: pool, table: 'studiecafe_threads', targetId: 't2', courseId: 'c1', emoji: '✅', userId: 'uA' };
+    await toggleReactionAtomicPg(base); // toevoegen
+    await toggleReactionAtomicPg(base); // weer weghalen
+    expect(pool.rows.get('t2').reactions).toEqual({});
+  });
+
+  it('geeft notFound bij ontbrekende rij, verkeerde cursus of verwijderd doel', async () => {
+    const pool = makeFakePool({
+      ok: { course_id: 'c1', reactions: {}, deleted_at: null },
+      del: { course_id: 'c1', reactions: {}, deleted_at: '2026-01-01T00:00:00Z' },
+      other: { course_id: 'c2', reactions: {}, deleted_at: null },
+    });
+    const base = { pgPool: pool, table: 'studiecafe_threads', courseId: 'c1', emoji: '👍', userId: 'uA' };
+    expect(await toggleReactionAtomicPg({ ...base, targetId: 'missing' })).toEqual({ notFound: true });
+    expect(await toggleReactionAtomicPg({ ...base, targetId: 'del' })).toEqual({ notFound: true });
+    expect(await toggleReactionAtomicPg({ ...base, targetId: 'other' })).toEqual({ notFound: true });
+  });
+
+  it('weigert niet-toegestane emoji en onbekende tabel zonder DB-call', async () => {
+    const pool = makeFakePool({ t1: { course_id: 'c1', reactions: {}, deleted_at: null } });
+    const base = { pgPool: pool, table: 'studiecafe_threads', targetId: 't1', courseId: 'c1', userId: 'uA' };
+    expect(await toggleReactionAtomicPg({ ...base, emoji: '💩' })).toEqual({ invalid: true });
+    expect(await toggleReactionAtomicPg({ ...base, emoji: '👍', table: 'evil_table' })).toEqual({ invalid: true });
+    expect(pool.queryCount).toBe(0);
+  });
+
+  it('REACTION_TABLES bevat alleen de twee bekende tabellen', () => {
+    expect(REACTION_TABLES).toEqual(['studiecafe_threads', 'studiecafe_replies']);
   });
 });

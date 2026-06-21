@@ -90,6 +90,52 @@ export function summarizeReactions(reactions, userId) {
   return out;
 }
 
+// Tabellen waarop een reactie-toggle is toegestaan. Gebruikt om de tabelnaam
+// te valideren vóór ze in een SQL-string wordt geïnterpoleerd (de naam komt uit
+// een server-side ternary, maar we whitelisten defensief tegen injectie).
+export const REACTION_TABLES = ['studiecafe_threads', 'studiecafe_replies'];
+
+// Race-veilige reactie-toggle via pgPool. Het oorspronkelijke pad las eerst de
+// reactions-jsonb, berekende de nieuwe waarde in JS en schreef terug; bij twee
+// gelijktijdige reacties op dezelfde post overschreef de tweede write de eerste,
+// waardoor een reactie stil verloren ging. Hier serialiseren we per rij met
+// `SELECT ... FOR UPDATE` binnen één transactie zodat de read-modify-write
+// atomair is. De allowlist/dedupe/cap-logica blijft in de pure `toggleReaction`.
+// Retourneert { next } bij succes, { notFound } of { invalid } anders.
+export async function toggleReactionAtomicPg({ pgPool, table, targetId, courseId, emoji, userId }) {
+  if (!REACTION_TABLES.includes(table)) return { invalid: true };
+  if (!isAllowedEmoji(emoji) || !userId) return { invalid: true };
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+    const sel = await client.query(
+      `SELECT course_id, reactions, deleted_at FROM ${table} WHERE id = $1 FOR UPDATE`,
+      [targetId],
+    );
+    const row = sel.rows[0];
+    if (!row || row.course_id !== courseId || row.deleted_at) {
+      await client.query('ROLLBACK');
+      return { notFound: true };
+    }
+    const next = toggleReaction(row.reactions, emoji, userId);
+    if (!next) {
+      await client.query('ROLLBACK');
+      return { invalid: true };
+    }
+    await client.query(
+      `UPDATE ${table} SET reactions = $2::jsonb WHERE id = $1`,
+      [targetId, JSON.stringify(next)],
+    );
+    await client.query('COMMIT');
+    return { next };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── Permissie-predicaten ────────────────────────────────────────────────────
 // Modereren (pinnen, sluiten, aankondigen, pluim) = alleen staff van de cursus.
 export function canModerate({ isStaff } = {}) { return !!isStaff; }
@@ -652,6 +698,20 @@ export function registerStudiecafeRoutes(app, deps) {
     }
     const table = targetType === 'thread' ? 'studiecafe_threads' : 'studiecafe_replies';
     try {
+      // Atomair pad: serialiseer de read-modify-write per rij met
+      // `SELECT ... FOR UPDATE` zodat twee gelijktijdige toggles elkaar niet
+      // overschrijven (gespiegeld op de atomic pgPool-aanpak elders in de app).
+      if (pgPool) {
+        const result = await toggleReactionAtomicPg({
+          pgPool, table, targetId, courseId, emoji, userId: auth.user.id,
+        });
+        if (result.notFound) return res.status(404).json({ error: 'Doel niet gevonden' });
+        if (result.invalid) return res.status(400).json({ error: 'Emoji niet toegestaan' });
+        return res.json({ reactions: summarizeReactions(result.next, auth.user.id) });
+      }
+      // Fallback zonder pgPool (bv. testomgeving): best-effort read-modify-write.
+      // Hier bestaat het lost-update-risico nog, maar dit pad draait alleen waar
+      // er geen directe Postgres-verbinding is.
       const { data: row } = await supabaseAdmin
         .from(table)
         .select('id, course_id, reactions, deleted_at')
