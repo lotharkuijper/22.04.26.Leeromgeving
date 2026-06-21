@@ -20,6 +20,7 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import ActiveCourseBadge from "./ActiveCourseBadge";
 import { useLanguage } from '../i18n';
 import { LanguageSelector } from './LanguageSelector';
+import { useStudiecafeUnread } from '../hooks/useStudiecafeUnread';
 
 interface LayoutProps {
   children: ReactNode;
@@ -32,9 +33,11 @@ interface NavItemProps {
   active: boolean;
   color: string;
   onClick?: () => void;
+  badge?: number;
+  badgeTitle?: string;
 }
 
-function NavItem({ to, icon: Icon, label, active, color, onClick }: NavItemProps) {
+function NavItem({ to, icon: Icon, label, active, color, onClick, badge = 0, badgeTitle }: NavItemProps) {
   const baseClass = "flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium";
   const activeClass = active
     ? `bg-gradient-to-r ${color} text-white shadow-md ring-1 ring-white/30`
@@ -46,7 +49,18 @@ function NavItem({ to, icon: Icon, label, active, color, onClick }: NavItemProps
       className={`${baseClass} ${activeClass}`}
       onClick={onClick}
     >
-      <Icon className="w-5 h-5" />
+      <span className="relative inline-flex">
+        <Icon className="w-5 h-5" />
+        {badge > 0 && (
+          <span
+            className={`absolute -top-1.5 -right-1.5 min-w-[1.05rem] h-[1.05rem] px-1 inline-flex items-center justify-center rounded-full text-[10px] font-bold leading-none ring-2 ${active ? 'bg-white text-rose-600 ring-white/40' : 'bg-rose-500 text-white ring-white'}`}
+            title={badgeTitle}
+            data-testid="badge-studiecafe-unread"
+          >
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+      </span>
       <span>{label}</span>
     </Link>
   );
@@ -67,6 +81,9 @@ export function Layout({ children }: LayoutProps) {
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Ongelezen-indicator voor het Studiecafé van de actieve cursus.
+  const studiecafeUnread = useStudiecafeUnread(activeCourseId);
 
   const navItems = useMemo(() => {
     const items = [
@@ -185,17 +202,23 @@ export function Layout({ children }: LayoutProps) {
         `}>
           <div className="p-4 space-y-2">
 
-            {navItems.map((item) => (
-              <NavItem
-                key={item.to}
-                to={item.to}
-                icon={item.icon}
-                label={item.label}
-                active={location.pathname === item.to}
-                color={item.color}
-                onClick={() => setMobileMenuOpen(false)}
-              />
-            ))}
+            {navItems.map((item) => {
+              const isStudiecafe = item.to === '/studiecafe';
+              const badge = isStudiecafe ? studiecafeUnread.count : 0;
+              return (
+                <NavItem
+                  key={item.to}
+                  to={item.to}
+                  icon={item.icon}
+                  label={item.label}
+                  active={location.pathname === item.to}
+                  color={item.color}
+                  onClick={() => setMobileMenuOpen(false)}
+                  badge={badge}
+                  badgeTitle={badge > 0 ? t('studiecafe.unread.navTitle', { count: badge }) : undefined}
+                />
+              );
+            })}
 
             {/* SWITCH COURSE BUTTON */}
             <button

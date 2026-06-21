@@ -136,6 +136,32 @@ export async function toggleReactionAtomicPg({ pgPool, table, targetId, courseId
   }
 }
 
+// ── Ongelezen-indicator (Task #307) ─────────────────────────────────────────
+// Pure helper: telt threads met activiteit ná het laatste bezoek. lastSeenAt null
+// (nog nooit geopend) ⇒ géén ongelezen (zachte uitrol: geen badge-vloed voor oude
+// content). Splitst aankondigingen apart zodat de UI die kan benadrukken.
+export function summarizeUnread(threads, lastSeenAt) {
+  const out = { count: 0, announcementCount: 0, latestActivityAt: null };
+  if (!Array.isArray(threads)) return out;
+  for (const th of threads) {
+    const act = th && th.last_activity_at;
+    if (!act) continue;
+    if (!out.latestActivityAt || act > out.latestActivityAt) out.latestActivityAt = act;
+    if (!lastSeenAt) continue;
+    if (act > lastSeenAt) {
+      out.count += 1;
+      if (th.is_announcement) out.announcementCount += 1;
+    }
+  }
+  return out;
+}
+
+// Is één thread ongelezen voor deze lezer? lastSeenAt null ⇒ nooit ongelezen.
+export function isThreadUnread(lastActivityAt, lastSeenAt) {
+  if (!lastActivityAt || !lastSeenAt) return false;
+  return lastActivityAt > lastSeenAt;
+}
+
 // ── Permissie-predicaten ────────────────────────────────────────────────────
 // Modereren (pinnen, sluiten, aankondigen, pluim) = alleen staff van de cursus.
 export function canModerate({ isStaff } = {}) { return !!isStaff; }
@@ -256,6 +282,24 @@ export function registerStudiecafeRoutes(app, deps) {
 
   async function nowIso() { return new Date().toISOString(); }
 
+  // Lees de last_seen_at van één gebruiker voor één cursus. Defensief: als de
+  // studiecafe_last_seen-tabel (migratie #307) nog niet bestaat, geef null terug
+  // zodat de feed gewoon blijft werken (geen ongelezen-markeringen).
+  async function getLastSeen(userId, courseId) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('studiecafe_last_seen')
+        .select('last_seen_at')
+        .eq('user_id', userId)
+        .eq('course_id', courseId)
+        .maybeSingle();
+      if (error) return null;
+      return data ? data.last_seen_at : null;
+    } catch {
+      return null;
+    }
+  }
+
   // GET feed — niet-verwijderde threads, pinned + aankondigingen bovenaan.
   app.get('/api/studiecafe/:courseId/threads', async (req, res) => {
     const auth = await requireAuthUser(req, res);
@@ -283,10 +327,73 @@ export function registerStudiecafeRoutes(app, deps) {
         (rows || []).flatMap((r) => [r.author_id, r.kudos_by]),
       );
       const threads = (rows || []).map((r) => shapeThread(r, nameFor, auth.user.id));
-      return res.json({ isStaff, currentUserId: auth.user.id, threads });
+      // lastSeenAt = vóór dít bezoek; de client markeert hiermee "nieuwe" threads
+      // en roept daarna POST /seen aan om de teller te resetten.
+      const lastSeenAt = await getLastSeen(auth.user.id, courseId);
+      return res.json({ isStaff, currentUserId: auth.user.id, threads, lastSeenAt });
     } catch (err) {
       console.error('[studiecafe] feed unexpected:', err);
       return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET ongelezen-samenvatting — voedt de nav-badge. Zuiver (geen side-effects):
+  // lastSeenAt null (nog nooit geopend) ⇒ count 0. Defensief bij ontbrekende
+  // last_seen-tabel (getLastSeen geeft dan null → count 0).
+  app.get('/api/studiecafe/:courseId/unread', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId } = req.params;
+    if (!(await userHasCourseAccess(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+    try {
+      const lastSeenAt = await getLastSeen(auth.user.id, courseId);
+      const { data: rows, error } = await supabaseAdmin
+        .from('studiecafe_threads')
+        .select('last_activity_at, is_announcement')
+        .eq('course_id', courseId)
+        .is('deleted_at', null)
+        .order('last_activity_at', { ascending: false })
+        .limit(200);
+      if (error) {
+        console.error('[studiecafe] unread error:', error.message);
+        return res.status(500).json({ error: error.message });
+      }
+      const summary = summarizeUnread(rows || [], lastSeenAt);
+      return res.json({ ...summary, lastSeenAt });
+    } catch (err) {
+      console.error('[studiecafe] unread unexpected:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /seen — markeer het studiecafé van deze cursus als gezien (now()).
+  // Upsert per (user, course). Defensief: ontbrekende last_seen-tabel ⇒ stil ok.
+  app.post('/api/studiecafe/:courseId/seen', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId } = req.params;
+    if (!(await userHasCourseAccess(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+    const ts = await nowIso();
+    try {
+      const { error } = await supabaseAdmin
+        .from('studiecafe_last_seen')
+        .upsert(
+          { user_id: auth.user.id, course_id: courseId, last_seen_at: ts },
+          { onConflict: 'user_id,course_id' },
+        );
+      if (error) {
+        // Ontbrekende tabel of andere fout: niet fataal, de feed werkt door.
+        console.warn('[studiecafe] seen upsert mislukt:', error.message);
+        return res.json({ ok: false, lastSeenAt: ts });
+      }
+      return res.json({ ok: true, lastSeenAt: ts });
+    } catch (err) {
+      console.warn('[studiecafe] seen unexpected:', err.message);
+      return res.json({ ok: false, lastSeenAt: ts });
     }
   });
 

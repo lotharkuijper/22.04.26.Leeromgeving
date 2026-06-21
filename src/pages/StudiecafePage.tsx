@@ -98,6 +98,12 @@ export function StudiecafePage() {
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Ongelezen-markering (Task #307): lastSeenAt = het moment van het vorige bezoek.
+  // We bevriezen het bij binnenkomst zodat "nieuw"-labels zichtbaar blijven, ook
+  // nadat we het bezoek server-side als gezien hebben gemarkeerd.
+  const [seenBaseline, setSeenBaseline] = useState<string | null>(null);
+  const markedSeenRef = useRef(false);
+
   // Inline bewerken (auteur of staff).
   const [editingThread, setEditingThread] = useState<{ id: string; title: string; body: string; category: Category } | null>(null);
   const [editingReply, setEditingReply] = useState<{ id: string; body: string } | null>(null);
@@ -141,6 +147,15 @@ export function StudiecafePage() {
         setThreads(d.threads || []);
         setIsStaff(!!d.isStaff);
         setError(null);
+        // Eénmalig per bezoek: bevries het vorige-bezoek-moment voor de
+        // "nieuw"-markeringen en markeer dit bezoek daarna server-side als gezien
+        // (reset de nav-badge). Volgende refetches binnen dit bezoek wijzigen de
+        // baseline niet meer.
+        if (!markedSeenRef.current) {
+          markedSeenRef.current = true;
+          setSeenBaseline(d.lastSeenAt ?? null);
+          apiFetch(`/api/studiecafe/${courseId}/seen`, { method: 'POST' }).catch(() => {});
+        }
       } else {
         setError(d.error || t('studiecafe.loadError'));
       }
@@ -165,6 +180,8 @@ export function StudiecafePage() {
     setThreads([]);
     setRepliesByThread({});
     setExpandedId(null);
+    markedSeenRef.current = false;
+    setSeenBaseline(null);
     if (courseId) loadThreads();
     else setLoading(false);
   }, [courseId, loadThreads]);
@@ -390,6 +407,26 @@ export function StudiecafePage() {
     return arr;
   }, [filtered, sort]);
 
+  // Ongelezen-helpers: een thread is "nieuw" als zijn laatste activiteit ná de
+  // bevroren baseline (vorig bezoek) ligt. Geen baseline (eerste bezoek ooit) ⇒
+  // niets is nieuw.
+  const isUnread = useCallback(
+    (th: Thread) => !!seenBaseline && th.lastActivityAt > seenBaseline,
+    [seenBaseline],
+  );
+  const unreadStats = useMemo(() => {
+    if (!seenBaseline) return { count: 0, hasAnnouncement: false };
+    let count = 0;
+    let hasAnnouncement = false;
+    for (const th of threads) {
+      if (th.lastActivityAt > seenBaseline) {
+        count += 1;
+        if (th.isAnnouncement) hasAnnouncement = true;
+      }
+    }
+    return { count, hasAnnouncement };
+  }, [threads, seenBaseline]);
+
   const filterChips: { key: FilterKey; label: string }[] = [
     { key: 'all', label: t('studiecafe.filter.all') },
     { key: 'vraag', label: t('studiecafe.filter.vraag') },
@@ -601,6 +638,16 @@ export function StudiecafePage() {
         <div className="mb-4 px-4 py-3 rounded-xl bg-red-50 text-red-700 ring-1 ring-red-200 text-sm" data-testid="text-error">{error}</div>
       )}
 
+      {unreadStats.count > 0 && (
+        <div className="mb-4 px-4 py-3 rounded-xl bg-rose-50 text-rose-800 ring-1 ring-rose-200 text-sm font-medium" data-testid="banner-unread">
+          {unreadStats.hasAnnouncement
+            ? t('studiecafe.unread.bannerAnnouncement')
+            : unreadStats.count === 1
+              ? t('studiecafe.unread.bannerOne')
+              : t('studiecafe.unread.bannerMany', { count: unreadStats.count })}
+        </div>
+      )}
+
       {/* FEED */}
       {loading ? (
         <div className="flex justify-center py-16 text-slate-400"><Loader2 className="w-6 h-6 animate-spin" /></div>
@@ -626,9 +673,14 @@ export function StudiecafePage() {
                     <Megaphone className="w-3.5 h-3.5" /> {t('studiecafe.announcement')}
                   </div>
                 )}
-                <div className="p-4">
+                <div className={`p-4 ${isUnread(th) ? 'border-l-4 border-rose-400' : ''}`}>
                   {/* META-RIJ */}
                   <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
+                    {isUnread(th) && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold ring-1 ring-rose-200" data-testid={`badge-unread-${th.id}`}>
+                        {t('studiecafe.unread.thread')}
+                      </span>
+                    )}
                     {!th.isAnnouncement && (
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full ring-1 ${CATEGORY_META[th.category].classes}`}>
                         <CatIcon className="w-3 h-3" />{t(`studiecafe.category.${th.category}` as any)}

@@ -20,6 +20,8 @@ import {
   buildSoftDeleteRedaction,
   toggleReactionAtomicPg,
   REACTION_TABLES,
+  summarizeUnread,
+  isThreadUnread,
 } from '../studiecafe.js';
 
 describe('sanitizeCategory', () => {
@@ -317,5 +319,55 @@ describe('toggleReactionAtomicPg — race-veiligheid', () => {
 
   it('REACTION_TABLES bevat alleen de twee bekende tabellen', () => {
     expect(REACTION_TABLES).toEqual(['studiecafe_threads', 'studiecafe_replies']);
+  });
+});
+
+describe('summarizeUnread (Task #307)', () => {
+  const threads = [
+    { last_activity_at: '2026-06-20T10:00:00Z', is_announcement: false },
+    { last_activity_at: '2026-06-21T10:00:00Z', is_announcement: true },
+    { last_activity_at: '2026-06-22T10:00:00Z', is_announcement: false },
+  ];
+
+  it('telt geen ongelezen zonder lastSeenAt (zachte uitrol)', () => {
+    const s = summarizeUnread(threads, null);
+    expect(s.count).toBe(0);
+    expect(s.announcementCount).toBe(0);
+    expect(s.latestActivityAt).toBe('2026-06-22T10:00:00Z');
+  });
+
+  it('telt threads met activiteit ná lastSeenAt', () => {
+    const s = summarizeUnread(threads, '2026-06-20T12:00:00Z');
+    expect(s.count).toBe(2);
+    expect(s.announcementCount).toBe(1);
+  });
+
+  it('telt niets als lastSeenAt na alle activiteit ligt', () => {
+    const s = summarizeUnread(threads, '2026-06-23T00:00:00Z');
+    expect(s.count).toBe(0);
+    expect(s.announcementCount).toBe(0);
+  });
+
+  it('is defensief bij niet-array en lege/ongeldige rijen', () => {
+    expect(summarizeUnread(null, '2026-06-20T00:00:00Z')).toEqual({ count: 0, announcementCount: 0, latestActivityAt: null });
+    const s = summarizeUnread([{ is_announcement: true }, {}], '2026-06-20T00:00:00Z');
+    expect(s.count).toBe(0);
+    expect(s.latestActivityAt).toBeNull();
+  });
+});
+
+describe('isThreadUnread (Task #307)', () => {
+  it('null lastSeenAt ⇒ nooit ongelezen', () => {
+    expect(isThreadUnread('2026-06-21T10:00:00Z', null)).toBe(false);
+  });
+  it('null lastActivityAt ⇒ nooit ongelezen', () => {
+    expect(isThreadUnread(null, '2026-06-21T10:00:00Z')).toBe(false);
+  });
+  it('activiteit ná laatste bezoek ⇒ ongelezen', () => {
+    expect(isThreadUnread('2026-06-22T10:00:00Z', '2026-06-21T10:00:00Z')).toBe(true);
+  });
+  it('activiteit gelijk of vóór laatste bezoek ⇒ gelezen', () => {
+    expect(isThreadUnread('2026-06-21T10:00:00Z', '2026-06-21T10:00:00Z')).toBe(false);
+    expect(isThreadUnread('2026-06-20T10:00:00Z', '2026-06-21T10:00:00Z')).toBe(false);
   });
 });
