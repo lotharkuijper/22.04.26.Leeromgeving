@@ -19,6 +19,7 @@ import {
   canReplyToThread,
   buildSoftDeleteRedaction,
   toggleReactionAtomicPg,
+  toggleKudosAtomicPg,
   REACTION_TABLES,
   summarizeUnread,
   isThreadUnread,
@@ -240,12 +241,19 @@ function makeFakePool(rowsObj) {
             release = await acquire(id); // blokkeert tot vorige houder vrijgeeft
             const row = rows.get(id);
             // Diepe kopie zodat de "DB" pas bij UPDATE muteert (zoals echt SQL).
-            return { rows: row ? [{ ...row, reactions: JSON.parse(JSON.stringify(row.reactions)) }] : [] };
+            return { rows: row ? [JSON.parse(JSON.stringify(row))] : [] };
           }
           if (/UPDATE/i.test(sql)) {
             const id = params[0];
             const row = rows.get(id);
-            if (row) row.reactions = JSON.parse(params[1]);
+            if (row) {
+              if (/SET\s+kudos_by/i.test(sql)) {
+                row.kudos_by = params[1];
+                row.kudos_at = params[2];
+              } else {
+                row.reactions = JSON.parse(params[1]);
+              }
+            }
             return { rows: [], rowCount: 1 };
           }
           return { rows: [] };
@@ -369,5 +377,65 @@ describe('isThreadUnread (Task #307)', () => {
   it('activiteit gelijk of vóór laatste bezoek ⇒ gelezen', () => {
     expect(isThreadUnread('2026-06-21T10:00:00Z', '2026-06-21T10:00:00Z')).toBe(false);
     expect(isThreadUnread('2026-06-20T10:00:00Z', '2026-06-21T10:00:00Z')).toBe(false);
+  });
+});
+
+describe('toggleKudosAtomicPg — race-veiligheid', () => {
+  it('verliest geen pluim bij twee gelijktijdige toggles op dezelfde post', async () => {
+    // Startwaarde: nog geen pluim. Twee docenten togglen tegelijk. Door de
+    // FOR UPDATE-serialisatie geeft de eerste de pluim en haalt de tweede hem
+    // weer weg (i.p.v. dat beiden los van elkaar 'giving' concluderen en de
+    // tweede write de eerste overschrijft). Eindstaat is consistent.
+    const pool = makeFakePool({
+      t1: { course_id: 'c1', kudos_by: null, kudos_at: null, deleted_at: null },
+    });
+    const base = { pgPool: pool, table: 'studiecafe_threads', targetId: 't1', courseId: 'c1', ts: '2026-06-21T00:00:00.000Z' };
+    const [a, b] = await Promise.all([
+      toggleKudosAtomicPg({ ...base, userId: 'uA' }),
+      toggleKudosAtomicPg({ ...base, userId: 'uB' }),
+    ]);
+    // Precies één van de twee gaf de pluim, de ander haalde hem weg.
+    expect([a.giving, b.giving].sort()).toEqual([false, true]);
+    const row = pool.rows.get('t1');
+    // Consistente eindstaat: kudos_by en kudos_at horen bij elkaar (beide null
+    // of beide gevuld) — geen half-geschreven, verloren toggle.
+    if (row.kudos_at) {
+      expect(row.kudos_by).toBeTruthy();
+    } else {
+      expect(row.kudos_by).toBeNull();
+    }
+  });
+
+  it('twee gebruikers togglen serieel: gegeven dan weggehaald eindigt leeg', async () => {
+    const pool = makeFakePool({
+      r9: { course_id: 'c1', kudos_by: null, kudos_at: null, deleted_at: null },
+    });
+    const base = { pgPool: pool, table: 'studiecafe_replies', targetId: 'r9', courseId: 'c1', ts: '2026-06-21T00:00:00.000Z' };
+    const first = await toggleKudosAtomicPg({ ...base, userId: 'uA' });
+    expect(first.giving).toBe(true);
+    expect(pool.rows.get('r9')).toMatchObject({ kudos_by: 'uA', kudos_at: '2026-06-21T00:00:00.000Z' });
+    const second = await toggleKudosAtomicPg({ ...base, userId: 'uB' });
+    expect(second.giving).toBe(false);
+    expect(pool.rows.get('r9')).toMatchObject({ kudos_by: null, kudos_at: null });
+  });
+
+  it('geeft notFound bij ontbrekende rij, verkeerde cursus of verwijderd doel', async () => {
+    const pool = makeFakePool({
+      ok: { course_id: 'c1', kudos_by: null, kudos_at: null, deleted_at: null },
+      del: { course_id: 'c1', kudos_by: null, kudos_at: null, deleted_at: '2026-01-01T00:00:00Z' },
+      other: { course_id: 'c2', kudos_by: null, kudos_at: null, deleted_at: null },
+    });
+    const base = { pgPool: pool, table: 'studiecafe_threads', courseId: 'c1', userId: 'uA', ts: '2026-06-21T00:00:00.000Z' };
+    expect(await toggleKudosAtomicPg({ ...base, targetId: 'missing' })).toEqual({ notFound: true });
+    expect(await toggleKudosAtomicPg({ ...base, targetId: 'del' })).toEqual({ notFound: true });
+    expect(await toggleKudosAtomicPg({ ...base, targetId: 'other' })).toEqual({ notFound: true });
+  });
+
+  it('weigert onbekende tabel of ontbrekende user zonder DB-call', async () => {
+    const pool = makeFakePool({ t1: { course_id: 'c1', kudos_by: null, kudos_at: null, deleted_at: null } });
+    const base = { pgPool: pool, table: 'studiecafe_threads', targetId: 't1', courseId: 'c1', ts: 'x' };
+    expect(await toggleKudosAtomicPg({ ...base, userId: 'uA', table: 'evil_table' })).toEqual({ invalid: true });
+    expect(await toggleKudosAtomicPg({ ...base, userId: null })).toEqual({ invalid: true });
+    expect(pool.queryCount).toBe(0);
   });
 });

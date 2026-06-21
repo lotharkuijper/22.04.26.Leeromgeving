@@ -162,6 +162,44 @@ export function isThreadUnread(lastActivityAt, lastSeenAt) {
   return lastActivityAt > lastSeenAt;
 }
 
+// Race-veilige pluim (kudos)-toggle via pgPool. Net als bij reacties las het
+// oorspronkelijke pad eerst `kudos_at`, besloot in JS geven/verwijderen en
+// schreef terug; twee gelijktijdige toggles op dezelfde post konden elkaars
+// write overschrijven. Hier serialiseren we per rij met `SELECT ... FOR UPDATE`
+// binnen één transactie. Retourneert { giving, by, at } bij succes (with by/at
+// null wanneer de pluim is weggehaald) of { notFound } anders.
+export async function toggleKudosAtomicPg({ pgPool, table, targetId, courseId, userId, ts }) {
+  if (!REACTION_TABLES.includes(table)) return { invalid: true };
+  if (!userId) return { invalid: true };
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+    const sel = await client.query(
+      `SELECT course_id, kudos_at, deleted_at FROM ${table} WHERE id = $1 FOR UPDATE`,
+      [targetId],
+    );
+    const row = sel.rows[0];
+    if (!row || row.course_id !== courseId || row.deleted_at) {
+      await client.query('ROLLBACK');
+      return { notFound: true };
+    }
+    const giving = !row.kudos_at;
+    const by = giving ? userId : null;
+    const at = giving ? ts : null;
+    await client.query(
+      `UPDATE ${table} SET kudos_by = $2, kudos_at = $3 WHERE id = $1`,
+      [targetId, by, at],
+    );
+    await client.query('COMMIT');
+    return { giving, by, at };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── Permissie-predicaten ────────────────────────────────────────────────────
 // Modereren (pinnen, sluiten, aankondigen, pluim) = alleen staff van de cursus.
 export function canModerate({ isStaff } = {}) { return !!isStaff; }
@@ -858,6 +896,21 @@ export function registerStudiecafeRoutes(app, deps) {
     }
     const table = targetType === 'thread' ? 'studiecafe_threads' : 'studiecafe_replies';
     try {
+      const ts = await nowIso();
+      // Atomair pad: serialiseer de read-modify-write per rij met
+      // `SELECT ... FOR UPDATE` zodat twee gelijktijdige pluim-toggles elkaar
+      // niet overschrijven (gespiegeld op het reactie-pad hierboven).
+      if (pgPool) {
+        const result = await toggleKudosAtomicPg({
+          pgPool, table, targetId, courseId, userId: auth.user.id, ts,
+        });
+        if (result.notFound) return res.status(404).json({ error: 'Doel niet gevonden' });
+        if (result.invalid) return res.status(400).json({ error: 'Ongeldig doel' });
+        return res.json({ kudos: result.giving ? { by: result.by, at: result.at } : null });
+      }
+      // Fallback zonder pgPool (bv. testomgeving): best-effort read-modify-write.
+      // Hier bestaat het lost-update-risico nog, maar dit pad draait alleen waar
+      // er geen directe Postgres-verbinding is.
       const { data: row } = await supabaseAdmin
         .from(table)
         .select('id, course_id, kudos_at, deleted_at')
@@ -867,7 +920,6 @@ export function registerStudiecafeRoutes(app, deps) {
         return res.status(404).json({ error: 'Doel niet gevonden' });
       }
       const giving = !row.kudos_at;
-      const ts = await nowIso();
       const update = giving ? { kudos_by: auth.user.id, kudos_at: ts } : { kudos_by: null, kudos_at: null };
       const { error } = await supabaseAdmin.from(table).update(update).eq('id', targetId);
       if (error) {
