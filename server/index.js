@@ -81,6 +81,7 @@ import {
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
+import { registerStudiecafeRoutes } from './studiecafe.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
 import {
@@ -5134,6 +5135,17 @@ registerConceptEvidenceRoutes(app, {
   requireAuthUser,
   userHasCourseAccess,
   getSchemaReady: () => conceptEvidenceSchemaReady,
+});
+
+// Studiecafé (Task #304) — per-cursus discussieforum. Alle schrijfacties lopen
+// via de service-role met userHasCourseAccess / isStaffForCourse als poortwachters;
+// SELECT-RLS (sc_can_read_course) spiegelt de zichtbaarheids-gebaseerde toegang.
+registerStudiecafeRoutes(app, {
+  supabaseAdmin,
+  requireAuthUser,
+  userHasCourseAccess,
+  isStaffForCourse,
+  pgPool,
 });
 
 app.delete('/api/admin/concepts/:id', async (req, res) => {

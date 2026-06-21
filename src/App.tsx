@@ -21,6 +21,7 @@ const QuizPage = lazy(() => import('./pages/QuizPage').then(m => ({ default: m.Q
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
 const ProjectRoomPage = lazy(() => import('./pages/ProjectRoomPage').then(m => ({ default: m.ProjectRoomPage })));
 const FeedbackPage = lazy(() => import('./pages/FeedbackPage').then(m => ({ default: m.FeedbackPage })));
+const StudiecafePage = lazy(() => import('./pages/StudiecafePage').then(m => ({ default: m.StudiecafePage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
 const ResourcesPage = lazy(() => import('./pages/ResourcesPage').then(m => ({ default: m.ResourcesPage })));
 const CoursesAdminPage = lazy(() => import('./pages/CoursesAdminPage').then(m => ({ default: m.CoursesAdminPage })));
@@ -188,6 +189,15 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ProjectRoomPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/studiecafe"
+        element={
+          <ProtectedRoute>
+            <StudiecafePage />
           </ProtectedRoute>
         }
       />

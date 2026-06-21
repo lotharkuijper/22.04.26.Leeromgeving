@@ -12,7 +12,8 @@ import {
   GraduationCap,
   RefreshCw,
   BookText,
-  Package
+  Package,
+  Coffee
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -74,6 +75,7 @@ export function Layout({ children }: LayoutProps) {
       { to: '/explain', icon: BookOpen, label: t('nav.explain'), color: 'from-blue-500 to-blue-600' },
       { to: '/quiz', icon: FileQuestion, label: t('nav.quiz'), color: 'from-cyan-500 to-cyan-600' },
       { to: '/projects', icon: BarChart3, label: t('nav.projects'), color: 'from-orange-500 to-orange-600' },
+      { to: '/studiecafe', icon: Coffee, label: t('nav.studiecafe'), color: 'from-amber-500 to-rose-500' },
       { to: '/feedback', icon: BookText, label: t('nav.feedback'), color: 'from-teal-500 to-teal-600' },
       { to: '/resources', icon: Package, label: t('nav.resources'), color: 'from-purple-500 to-purple-600' },
     ];
