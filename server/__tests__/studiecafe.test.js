@@ -1254,3 +1254,43 @@ describe('studiecafe endpoints — DELETE thread transactioneel pgPool-pad (Task
     expect(old.deleted_by).toBe('staff-9');
   });
 });
+
+describe('studiecafe endpoints — reply-delete-bump (reply_count omlaag)', () => {
+  it('een reply verwijderen verlaagt reply_count van de parent-thread', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', reply_count: 3 })],
+      studiecafe_replies: [replyRow({ id: 'r-1', thread_id: 't-1', author_id: 'stu-1' })],
+    });
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    // De reply is geredigeerd (soft-delete) ...
+    expect(store.studiecafe_replies[0].deleted_at).toBeTruthy();
+    // ... en de teller is met 1 gedaald.
+    expect(store.studiecafe_threads[0].reply_count).toBe(2);
+  });
+
+  it('verlaagt nooit onder 0 (GREATEST/Math.max-bescherming bij ontspoorde teller)', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', reply_count: 0 })],
+      studiecafe_replies: [replyRow({ id: 'r-1', thread_id: 't-1', author_id: 'stu-1' })],
+    });
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-1' } });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_threads[0].reply_count).toBe(0);
+  });
+
+  it('een al verwijderde reply opnieuw verwijderen laat reply_count ongemoeid (idempotent)', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', reply_count: 2 })],
+      studiecafe_replies: [
+        replyRow({ id: 'r-1', thread_id: 't-1', author_id: 'stu-1', deleted_at: '2026-06-21T12:00:00.000Z' }),
+      ],
+    });
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    // Vroege terugkeer bij reeds-verwijderd: de teller mag NIET dubbel dalen.
+    expect(store.studiecafe_threads[0].reply_count).toBe(2);
+  });
+});
