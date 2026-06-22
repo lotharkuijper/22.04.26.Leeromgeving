@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "Son ziyaretinden bu yana {count} sohbette yeni etkinlik var.",
   "studiecafe.unread.bannerAnnouncement": "Öğretmeninden yeni bir duyuru var.",
   "studiecafe.unread.markAllRead": "Tümünü okundu olarak işaretle",
+  "studiecafe.unread.markUnread": "Okunmadı olarak işaretle",
   "nav.feedback": "Öğrenme Günlüğü",
   "nav.resources": "Kaynaklar",
   "nav.admin": "Yönetim",

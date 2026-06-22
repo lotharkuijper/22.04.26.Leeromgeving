@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Coffee, Send, Loader2, Pin, PinOff, Lock, Unlock, Trash2, CheckCircle2,
   Award, Megaphone, Smile, MessageCircle, HelpCircle, MessagesSquare, Users,
-  Pencil, X, Search, Bell, CheckCheck,
+  Pencil, X, Search, Bell, CheckCheck, Mail,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -302,6 +302,22 @@ export function StudiecafePage() {
       .catch(() => {});
   }, [courseId, apiFetch, threads]);
 
+  // Markeer één thread weer als ongelezen (Task #324): optimistisch lokaal de
+  // read-markering wissen + server-rij verwijderen. Nudge de nav-badge zodat hij
+  // meteen weer oploopt. Werkt voor threads met activiteit ná de vloer.
+  const markUnread = useCallback((threadId: string) => {
+    if (!courseId) return;
+    setReads((prev) => {
+      if (!(threadId in prev)) return prev;
+      const next = { ...prev };
+      delete next[threadId];
+      return next;
+    });
+    apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}/unread`, { method: 'POST' })
+      .then(() => { try { window.dispatchEvent(new Event('studiecafe-unread-refresh')); } catch { /* noop */ } })
+      .catch(() => {});
+  }, [courseId, apiFetch]);
+
   // ── Realtime: bij elke wijziging een gedebouncede refetch ─────────────────
   const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const expandedRef = useRef<string | null>(null);
@@ -544,6 +560,13 @@ export function StudiecafePage() {
       return true;
     },
     [seenBaseline, reads],
+  );
+  // Mag deze thread weer als "nieuw" worden getoond? Alleen zinvol als hij nu
+  // gelezen is én zijn activiteit ná de vloer ligt (anders zou hij toch niet
+  // oplichten). (Task #324)
+  const canMarkUnread = useCallback(
+    (th: Thread) => !!seenBaseline && th.lastActivityAt > seenBaseline && !isUnread(th),
+    [seenBaseline, isUnread],
   );
   const unreadStats = useMemo(() => {
     if (!seenBaseline) return { count: 0, hasAnnouncement: false };
@@ -975,6 +998,16 @@ export function StudiecafePage() {
                     </button>
 
                     <div className="flex items-center gap-1 ml-auto">
+                      {canMarkUnread(th) && (
+                        <button
+                          onClick={() => markUnread(th.id)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                          title={t('studiecafe.unread.markUnread')}
+                          data-testid={`button-mark-unread-${th.id}`}
+                        >
+                          <Mail className="w-4 h-4" />
+                        </button>
+                      )}
                       {(th.category === 'vraag') && (th.isMine || isStaff) && (
                         <button
                           onClick={() => patchThread(th.id, { isResolved: !th.isResolved })}

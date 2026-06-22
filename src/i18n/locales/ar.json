@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "هناك {count} محادثات فيها نشاط جديد منذ زيارتك الأخيرة.",
   "studiecafe.unread.bannerAnnouncement": "هناك إعلان جديد من مدرّسك.",
   "studiecafe.unread.markAllRead": "تمييز الكل كمقروء",
+  "studiecafe.unread.markUnread": "وضع علامة كغير مقروء",
   "nav.feedback": "يوميات التعلّم",
   "nav.resources": "المصادر",
   "nav.admin": "الإدارة",

@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "{count} обговорень мають нову активність після твого останнього відвідування.",
   "studiecafe.unread.bannerAnnouncement": "Є нове оголошення від твого викладача.",
   "studiecafe.unread.markAllRead": "Позначити все як прочитане",
+  "studiecafe.unread.markUnread": "Позначити як непрочитане",
   "nav.feedback": "Навчальний щоденник",
   "nav.resources": "Ресурси",
   "nav.admin": "Адміністрування",

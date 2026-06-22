@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "तुम्हारी पिछली विज़िट के बाद {count} बातचीतों में नई गतिविधि हुई है।",
   "studiecafe.unread.bannerAnnouncement": "तुम्हारे शिक्षक की ओर से एक नई घोषणा है।",
   "studiecafe.unread.markAllRead": "सभी को पढ़ा हुआ चिह्नित करें",
+  "studiecafe.unread.markUnread": "अपठित के रूप में चिह्नित करें",
   "nav.feedback": "सीखने की डायरी",
   "nav.resources": "संसाधन",
   "nav.admin": "प्रबंधन",

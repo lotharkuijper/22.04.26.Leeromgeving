@@ -595,6 +595,22 @@ export function registerStudiecafeRoutes(app, deps) {
     }
   }
 
+  // Markeer één thread weer als ongelezen voor deze gebruiker (Task #324):
+  // verwijder de per-thread read-rij zodat de thread opnieuw als "nieuw" kan
+  // oplichten. Defensief: ontbrekende tabel/fout ⇒ stil falen.
+  async function markThreadUnread(userId, threadId) {
+    try {
+      const { error } = await supabaseAdmin
+        .from('studiecafe_thread_reads')
+        .delete()
+        .eq('user_id', userId)
+        .eq('thread_id', threadId);
+      if (error) console.warn('[studiecafe] thread-unread delete mislukt:', error.message);
+    } catch (err) {
+      console.warn('[studiecafe] thread-unread unexpected:', err.message);
+    }
+  }
+
   // GET feed — niet-verwijderde threads, pinned + aankondigingen bovenaan.
   app.get('/api/studiecafe/:courseId/threads', async (req, res) => {
     const auth = await requireAuthUser(req, res);
@@ -733,6 +749,34 @@ export function registerStudiecafeRoutes(app, deps) {
     } catch (err) {
       console.warn('[studiecafe] read unexpected:', err.message);
       return res.json({ ok: false, readAt: ts });
+    }
+  });
+
+  // POST /threads/:threadId/unread — markeer één thread weer als ongelezen voor
+  // deze gebruiker (Task #324). Verwijdert de per-thread read-rij zodat de thread
+  // opnieuw als "nieuw" oplicht (mits zijn activiteit ná de zachte-uitrol-vloer
+  // ligt). Verifieert dat de thread bij deze cursus hoort. Defensief/idempotent.
+  app.post('/api/studiecafe/:courseId/threads/:threadId/unread', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId, threadId } = req.params;
+    if (!(await userHasCourseAccess(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+    try {
+      const { data: thread } = await supabaseAdmin
+        .from('studiecafe_threads')
+        .select('id, course_id')
+        .eq('id', threadId)
+        .maybeSingle();
+      if (!thread || thread.course_id !== courseId) {
+        return res.status(404).json({ error: 'Thread niet gevonden' });
+      }
+      await markThreadUnread(auth.user.id, threadId);
+      return res.json({ ok: true });
+    } catch (err) {
+      console.warn('[studiecafe] unread unexpected:', err.message);
+      return res.json({ ok: false });
     }
   });
 

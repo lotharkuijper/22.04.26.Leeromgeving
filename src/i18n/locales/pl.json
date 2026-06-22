@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "{count} rozmów ma nową aktywność od twojej ostatniej wizyty.",
   "studiecafe.unread.bannerAnnouncement": "Jest nowe ogłoszenie od twojego wykładowcy.",
   "studiecafe.unread.markAllRead": "Oznacz wszystko jako przeczytane",
+  "studiecafe.unread.markUnread": "Oznacz jako nieprzeczytane",
   "nav.feedback": "Dziennik nauki",
   "nav.resources": "Zasoby",
   "nav.admin": "Administracja",

@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "{count} razgovora ima novu aktivnost od tvog zadnjeg posjeta.",
   "studiecafe.unread.bannerAnnouncement": "Imaš novu obavijest od svog nastavnika.",
   "studiecafe.unread.markAllRead": "Označi sve kao pročitano",
+  "studiecafe.unread.markUnread": "Označi kao nepročitano",
   "nav.feedback": "Dnevnik učenja",
   "nav.resources": "Resursi",
   "nav.admin": "Administracija",

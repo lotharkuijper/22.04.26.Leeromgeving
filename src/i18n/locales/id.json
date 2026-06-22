@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "{count} percakapan memiliki aktivitas baru sejak kunjungan terakhirmu.",
   "studiecafe.unread.bannerAnnouncement": "Ada pengumuman baru dari dosenmu.",
   "studiecafe.unread.markAllRead": "Tandai semua sebagai telah dibaca",
+  "studiecafe.unread.markUnread": "Tandai sebagai belum dibaca",
   "nav.feedback": "Jurnal Belajar",
   "nav.resources": "Sumber Belajar",
   "nav.admin": "Admin",

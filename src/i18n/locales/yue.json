@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "自你上次到訪後，有 {count} 個對話有新動態。",
   "studiecafe.unread.bannerAnnouncement": "你嘅老師有一則新公告。",
   "studiecafe.unread.markAllRead": "全部標記為已讀",
+  "studiecafe.unread.markUnread": "標記為未讀",
   "nav.feedback": "學習日誌",
   "nav.resources": "資源",
   "nav.admin": "管理",

@@ -70,6 +70,7 @@
   "studiecafe.unread.bannerMany": "自你上次访问以来，有 {count} 个讨论有新动态。",
   "studiecafe.unread.bannerAnnouncement": "你的教师发布了一条新公告。",
   "studiecafe.unread.markAllRead": "全部标记为已读",
+  "studiecafe.unread.markUnread": "标记为未读",
   "nav.feedback": "学习日记",
   "nav.resources": "资源",
   "nav.admin": "管理",
