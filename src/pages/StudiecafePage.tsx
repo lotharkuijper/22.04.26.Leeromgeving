@@ -98,10 +98,13 @@ export function StudiecafePage() {
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Ongelezen-markering (Task #307): lastSeenAt = het moment van het vorige bezoek.
-  // We bevriezen het bij binnenkomst zodat "nieuw"-labels zichtbaar blijven, ook
-  // nadat we het bezoek server-side als gezien hebben gemarkeerd.
+  // Ongelezen-markering (Task #307/#312): seenBaseline = de zachte-uitrol-vloer
+  // (per-cursus last_seen). We bevriezen die bij binnenkomst. `reads` houdt per
+  // thread bij wanneer hij voor het laatst is geopend; een thread blijft "nieuw"
+  // tot hij INDIVIDUEEL is geopend, niet meer voor alle threads tegelijk bij het
+  // openen van de pagina.
   const [seenBaseline, setSeenBaseline] = useState<string | null>(null);
+  const [reads, setReads] = useState<Record<string, string>>({});
   const markedSeenRef = useRef(false);
 
   // Inline bewerken (auteur of staff).
@@ -197,14 +200,30 @@ export function StudiecafePage() {
         setThreads(d.threads || []);
         setIsStaff(!!d.isStaff);
         setError(null);
-        // Eénmalig per bezoek: bevries het vorige-bezoek-moment voor de
-        // "nieuw"-markeringen en markeer dit bezoek daarna server-side als gezien
-        // (reset de nav-badge). Volgende refetches binnen dit bezoek wijzigen de
-        // baseline niet meer.
+        // Merge de server-leesstatus met lokaal (optimistisch) gezette reads zodat
+        // een net-geopende thread niet terugspringt naar "nieuw" bij een refetch:
+        // per thread wint de laatste read-timestamp.
+        const serverReads: Record<string, string> = (d.reads && typeof d.reads === 'object') ? d.reads : {};
+        setReads((prev) => {
+          const merged: Record<string, string> = { ...prev };
+          for (const [tid, at] of Object.entries(serverReads)) {
+            if (typeof at === 'string' && (!merged[tid] || at > merged[tid])) merged[tid] = at;
+          }
+          return merged;
+        });
+        // Eénmalig per bezoek: bevries de zachte-uitrol-vloer. Anders dan #307
+        // markeren we het bezoek NIET meer als "alles gezien" — per-thread reads
+        // doen dat. Alleen bij de allereerste keer (geen vloer) leggen we de vloer
+        // vast op nu, zodat de bestaande backlog niet als ongelezen oplicht.
         if (!markedSeenRef.current) {
           markedSeenRef.current = true;
-          setSeenBaseline(d.lastSeenAt ?? null);
-          apiFetch(`/api/studiecafe/${courseId}/seen`, { method: 'POST' }).catch(() => {});
+          if (d.lastSeenAt) {
+            setSeenBaseline(d.lastSeenAt);
+          } else {
+            const sr = await apiFetch(`/api/studiecafe/${courseId}/seen`, { method: 'POST' }).catch(() => null);
+            const sd = sr ? await sr.json().catch(() => null) : null;
+            setSeenBaseline(sd?.lastSeenAt ?? new Date().toISOString());
+          }
         }
       } else {
         setError(d.error || t('studiecafe.loadError'));
@@ -232,19 +251,42 @@ export function StudiecafePage() {
     setExpandedId(null);
     markedSeenRef.current = false;
     setSeenBaseline(null);
+    setReads({});
     if (courseId) loadThreads();
     else setLoading(false);
   }, [courseId, loadThreads]);
+
+  // Markeer één thread als gelezen (Task #312): optimistisch lokaal + persisteren.
+  // Nudge de nav-badge zodat hij meteen meedaalt zonder op de poll te wachten.
+  const markRead = useCallback((threadId: string) => {
+    if (!courseId) return;
+    const ts = new Date().toISOString();
+    setReads((prev) => {
+      const cur = prev[threadId];
+      if (cur && cur >= ts) return prev;
+      return { ...prev, [threadId]: ts };
+    });
+    apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}/read`, { method: 'POST' })
+      .then(() => { try { window.dispatchEvent(new Event('studiecafe-unread-refresh')); } catch { /* noop */ } })
+      .catch(() => {});
+  }, [courseId, apiFetch]);
 
   // ── Realtime: bij elke wijziging een gedebouncede refetch ─────────────────
   const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const expandedRef = useRef<string | null>(null);
   useEffect(() => { expandedRef.current = expandedId; }, [expandedId]);
+  const markReadRef = useRef(markRead);
+  useEffect(() => { markReadRef.current = markRead; }, [markRead]);
   const scheduleRefetch = useCallback(() => {
     if (refetchTimer.current) clearTimeout(refetchTimer.current);
     refetchTimer.current = setTimeout(() => {
       loadThreads();
-      if (expandedRef.current) loadReplies(expandedRef.current);
+      // Houdt de actueel geopende thread "gelezen": nieuwe activiteit terwijl hij
+      // openstaat mag hem niet opnieuw als "nieuw" markeren (Task #312).
+      if (expandedRef.current) {
+        loadReplies(expandedRef.current);
+        markReadRef.current(expandedRef.current);
+      }
     }, 400);
   }, [loadThreads, loadReplies]);
   const scheduleRef = useRef(scheduleRefetch);
@@ -302,6 +344,8 @@ export function StudiecafePage() {
     if (expandedId === threadId) { setExpandedId(null); return; }
     setExpandedId(threadId);
     setReplyBody('');
+    // Openen = gelezen (Task #312): alleen deze thread verliest zijn markering.
+    markRead(threadId);
     if (!repliesByThread[threadId]) await loadReplies(threadId);
   };
 
@@ -457,25 +501,32 @@ export function StudiecafePage() {
     return arr;
   }, [filtered, sort]);
 
-  // Ongelezen-helpers: een thread is "nieuw" als zijn laatste activiteit ná de
-  // bevroren baseline (vorig bezoek) ligt. Geen baseline (eerste bezoek ooit) ⇒
-  // niets is nieuw.
+  // Ongelezen-helpers (Task #312): een thread is "nieuw" als zijn laatste
+  // activiteit ná de bevroren vloer ligt ÉN hij niet individueel is geopend (geen
+  // read, of de read is ouder dan de activiteit). Geen vloer (eerste bezoek ooit)
+  // ⇒ niets is nieuw.
   const isUnread = useCallback(
-    (th: Thread) => !!seenBaseline && th.lastActivityAt > seenBaseline,
-    [seenBaseline],
+    (th: Thread) => {
+      if (!seenBaseline || th.lastActivityAt <= seenBaseline) return false;
+      const readAt = reads[th.id];
+      if (readAt && th.lastActivityAt <= readAt) return false;
+      return true;
+    },
+    [seenBaseline, reads],
   );
   const unreadStats = useMemo(() => {
     if (!seenBaseline) return { count: 0, hasAnnouncement: false };
     let count = 0;
     let hasAnnouncement = false;
     for (const th of threads) {
-      if (th.lastActivityAt > seenBaseline) {
-        count += 1;
-        if (th.isAnnouncement) hasAnnouncement = true;
-      }
+      if (th.lastActivityAt <= seenBaseline) continue;
+      const readAt = reads[th.id];
+      if (readAt && th.lastActivityAt <= readAt) continue;
+      count += 1;
+      if (th.isAnnouncement) hasAnnouncement = true;
     }
     return { count, hasAnnouncement };
-  }, [threads, seenBaseline]);
+  }, [threads, seenBaseline, reads]);
 
   const filterChips: { key: FilterKey; label: string }[] = [
     { key: 'all', label: t('studiecafe.filter.all') },

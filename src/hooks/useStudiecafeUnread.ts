@@ -55,6 +55,11 @@ export function useStudiecafeUnread(courseId: string | null | undefined): Studie
     const interval = setInterval(refresh, POLL_MS);
     const onFocus = () => refresh();
     window.addEventListener('focus', onFocus);
+    // Task #312: bij het openen van een thread (per-thread gelezen-markering) nudge
+    // de pagina de badge via dit event zodat hij meteen meedaalt, niet pas bij de
+    // volgende poll/focus.
+    const onReadRefresh = () => refresh();
+    window.addEventListener('studiecafe-unread-refresh', onReadRefresh);
 
     // Realtime: nieuwe/aangepaste threads of replies → direct herladen.
     const channel = supabase
@@ -66,6 +71,7 @@ export function useStudiecafeUnread(courseId: string | null | undefined): Studie
     return () => {
       clearInterval(interval);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('studiecafe-unread-refresh', onReadRefresh);
       supabase.removeChannel(channel);
     };
   }, [courseId, refresh]);

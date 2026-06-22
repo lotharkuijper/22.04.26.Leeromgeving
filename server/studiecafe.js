@@ -207,6 +207,40 @@ export async function toggleKudosAtomicPg({ pgPool, table, targetId, courseId, u
   }
 }
 
+// ── Per-thread ongelezen-indicator (Task #312) ──────────────────────────────
+// Een thread is ongelezen voor deze lezer wanneer zijn laatste activiteit ná de
+// zachte-uitrol-vloer (per-cursus last_seen) ligt ÉN de lezer hem sindsdien niet
+// heeft geopend: geen read-rij, of de read is ouder dan de laatste activiteit.
+//   floorAt null  (cursus nooit bezocht)      ⇒ niets ongelezen (zachte uitrol).
+//   activiteit ≤ floorAt (vóór eerste bezoek) ⇒ gelezen (backlog onderdrukt).
+//   threadReadAt ≥ activiteit (geopend)       ⇒ gelezen.
+export function isThreadUnreadFor(lastActivityAt, floorAt, threadReadAt) {
+  if (!lastActivityAt || !floorAt) return false;
+  if (lastActivityAt <= floorAt) return false;
+  if (threadReadAt && lastActivityAt <= threadReadAt) return false;
+  return true;
+}
+
+// Tel ongelezen threads voor de nav-badge met per-thread leesstatus. readMap mag
+// een Map of een plain object (thread_id → read_at ISO) zijn. Splitst
+// aankondigingen apart zodat de UI die kan benadrukken.
+export function summarizeUnreadThreads(threads, floorAt, readMap) {
+  const out = { count: 0, announcementCount: 0, latestActivityAt: null };
+  if (!Array.isArray(threads)) return out;
+  const reads = readMap instanceof Map ? readMap : new Map(Object.entries(readMap || {}));
+  for (const th of threads) {
+    const act = th && th.last_activity_at;
+    if (!act) continue;
+    if (!out.latestActivityAt || act > out.latestActivityAt) out.latestActivityAt = act;
+    const readAt = th.id ? reads.get(th.id) || null : null;
+    if (isThreadUnreadFor(act, floorAt, readAt)) {
+      out.count += 1;
+      if (th.is_announcement) out.announcementCount += 1;
+    }
+  }
+  return out;
+}
+
 // ── Permissie-predicaten ────────────────────────────────────────────────────
 // Modereren (pinnen, sluiten, aankondigen, pluim) = alleen staff van de cursus.
 export function canModerate({ isStaff } = {}) { return !!isStaff; }
@@ -525,6 +559,42 @@ export function registerStudiecafeRoutes(app, deps) {
     }
   }
 
+  // Lees alle per-thread leesmomenten van één gebruiker binnen één cursus
+  // (Task #312) → Map thread_id → read_at. Defensief: ontbrekende tabel ⇒ lege Map
+  // zodat de feed gewoon blijft werken (geen per-thread markeringen).
+  async function getThreadReads(userId, courseId) {
+    const map = new Map();
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('studiecafe_thread_reads')
+        .select('thread_id, read_at')
+        .eq('user_id', userId)
+        .eq('course_id', courseId);
+      if (error) return map;
+      for (const r of data || []) map.set(r.thread_id, r.read_at);
+      return map;
+    } catch {
+      return map;
+    }
+  }
+
+  // Markeer één thread als gelezen voor deze gebruiker (Task #312). Upsert per
+  // (user, thread). Defensief: ontbrekende tabel/fout ⇒ stil falen (de feed werkt
+  // door, de markering blijft alleen staan).
+  async function markThreadRead(userId, courseId, threadId, ts) {
+    try {
+      const { error } = await supabaseAdmin
+        .from('studiecafe_thread_reads')
+        .upsert(
+          { user_id: userId, course_id: courseId, thread_id: threadId, read_at: ts },
+          { onConflict: 'user_id,thread_id' },
+        );
+      if (error) console.warn('[studiecafe] thread-read upsert mislukt:', error.message);
+    } catch (err) {
+      console.warn('[studiecafe] thread-read unexpected:', err.message);
+    }
+  }
+
   // GET feed — niet-verwijderde threads, pinned + aankondigingen bovenaan.
   app.get('/api/studiecafe/:courseId/threads', async (req, res) => {
     const auth = await requireAuthUser(req, res);
@@ -552,10 +622,20 @@ export function registerStudiecafeRoutes(app, deps) {
         (rows || []).flatMap((r) => [r.author_id, r.kudos_by]),
       );
       const threads = (rows || []).map((r) => shapeThread(r, nameFor, auth.user.id));
-      // lastSeenAt = vóór dít bezoek; de client markeert hiermee "nieuwe" threads
-      // en roept daarna POST /seen aan om de teller te resetten.
-      const lastSeenAt = await getLastSeen(auth.user.id, courseId);
-      return res.json({ isStaff, currentUserId: auth.user.id, threads, lastSeenAt });
+      // lastSeenAt = zachte-uitrol-vloer (zie #307/#312). reads = per-thread
+      // leesmomenten (#312): de client markeert een thread "nieuw" als zijn
+      // activiteit ná de vloer ligt én hij niet individueel is geopend.
+      const [lastSeenAt, readMap] = await Promise.all([
+        getLastSeen(auth.user.id, courseId),
+        getThreadReads(auth.user.id, courseId),
+      ]);
+      return res.json({
+        isStaff,
+        currentUserId: auth.user.id,
+        threads,
+        lastSeenAt,
+        reads: Object.fromEntries(readMap),
+      });
     } catch (err) {
       console.error('[studiecafe] feed unexpected:', err);
       return res.status(500).json({ error: err.message });
@@ -573,10 +653,13 @@ export function registerStudiecafeRoutes(app, deps) {
       return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
     }
     try {
-      const lastSeenAt = await getLastSeen(auth.user.id, courseId);
+      const [lastSeenAt, readMap] = await Promise.all([
+        getLastSeen(auth.user.id, courseId),
+        getThreadReads(auth.user.id, courseId),
+      ]);
       const { data: rows, error } = await supabaseAdmin
         .from('studiecafe_threads')
-        .select('last_activity_at, is_announcement')
+        .select('id, last_activity_at, is_announcement')
         .eq('course_id', courseId)
         .is('deleted_at', null)
         .order('last_activity_at', { ascending: false })
@@ -585,7 +668,9 @@ export function registerStudiecafeRoutes(app, deps) {
         console.error('[studiecafe] unread error:', error.message);
         return res.status(500).json({ error: error.message });
       }
-      const summary = summarizeUnread(rows || [], lastSeenAt);
+      // Per-thread leesstatus (#312): tel alleen threads met activiteit ná de
+      // vloer die de gebruiker niet individueel heeft geopend.
+      const summary = summarizeUnreadThreads(rows || [], lastSeenAt, readMap);
       return res.json({ ...summary, lastSeenAt });
     } catch (err) {
       console.error('[studiecafe] unread unexpected:', err);
@@ -619,6 +704,35 @@ export function registerStudiecafeRoutes(app, deps) {
     } catch (err) {
       console.warn('[studiecafe] seen unexpected:', err.message);
       return res.json({ ok: false, lastSeenAt: ts });
+    }
+  });
+
+  // POST /threads/:threadId/read — markeer één thread als gelezen voor deze
+  // gebruiker (Task #312). Wordt aangeroepen wanneer de student de thread
+  // uitklapt/opent; alleen die ene thread verliest zijn "nieuw"-markering.
+  // Verifieert dat de thread bij deze cursus hoort. Defensief/idempotent.
+  app.post('/api/studiecafe/:courseId/threads/:threadId/read', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId, threadId } = req.params;
+    if (!(await userHasCourseAccess(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+    const ts = await nowIso();
+    try {
+      const { data: thread } = await supabaseAdmin
+        .from('studiecafe_threads')
+        .select('id, course_id')
+        .eq('id', threadId)
+        .maybeSingle();
+      if (!thread || thread.course_id !== courseId) {
+        return res.status(404).json({ error: 'Thread niet gevonden' });
+      }
+      await markThreadRead(auth.user.id, courseId, threadId, ts);
+      return res.json({ ok: true, readAt: ts });
+    } catch (err) {
+      console.warn('[studiecafe] read unexpected:', err.message);
+      return res.json({ ok: false, readAt: ts });
     }
   });
 
@@ -692,6 +806,7 @@ export function registerStudiecafeRoutes(app, deps) {
         console.error('[studiecafe] create thread error:', error.message);
         return res.status(500).json({ error: error.message });
       }
+
       // Aankondiging? Meld het aan de doelgroep. Fire-and-forget: het opbouwen
       // van een grote doelgroep mag het plaatsen van de aankondiging niet ophouden.
       if (isAnnouncement) {
@@ -702,6 +817,11 @@ export function registerStudiecafeRoutes(app, deps) {
           actorId: auth.user.id,
         }).catch((e) => console.warn('[studiecafe] enqueue aankondiging mislukt:', e.message));
       }
+
+      // De auteur heeft zijn eigen thread "gelezen": markeer hem zodat hij niet
+      // als ongelezen voor zichzelf verschijnt (Task #312).
+      await markThreadRead(auth.user.id, courseId, data.id, data.last_activity_at || (await nowIso()));
+
       const nameFor = await buildNameResolver([data.author_id, data.kudos_by]);
       return res.json({ thread: shapeThread(data, nameFor, auth.user.id) });
     } catch (err) {
@@ -759,6 +879,7 @@ export function registerStudiecafeRoutes(app, deps) {
           .update({ reply_count: (thread.reply_count || 0) + 1, last_activity_at: await nowIso() })
           .eq('id', threadId);
       }
+
       // Meld de thread-auteur (niet jezelf) dat er een reactie is (best-effort).
       if (thread.author_id && thread.author_id !== auth.user.id) {
         await enqueueNotifications([
@@ -773,6 +894,11 @@ export function registerStudiecafeRoutes(app, deps) {
           },
         ]).catch((e) => console.warn('[studiecafe] enqueue reactie-melding mislukt:', e.message));
       }
+
+      // De auteur heeft de thread waarop hij reageert effectief gelezen:
+      // markeer hem zodat zijn eigen reactie hem niet als ongelezen markeert (#312).
+      await markThreadRead(auth.user.id, courseId, threadId, await nowIso());
+
       const nameFor = await buildNameResolver([data.author_id, data.kudos_by]);
       return res.json({ reply: shapeReply(data, nameFor, auth.user.id) });
     } catch (err) {

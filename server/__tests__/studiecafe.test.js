@@ -24,6 +24,8 @@ import {
   summarizeUnread,
   isThreadUnread,
   registerStudiecafeRoutes,
+  isThreadUnreadFor,
+  summarizeUnreadThreads,
 } from '../studiecafe.js';
 
 describe('sanitizeCategory', () => {
@@ -1292,5 +1294,62 @@ describe('studiecafe endpoints — reply-delete-bump (reply_count omlaag)', () =
     expect(res.body).toEqual({ ok: true });
     // Vroege terugkeer bij reeds-verwijderd: de teller mag NIET dubbel dalen.
     expect(store.studiecafe_threads[0].reply_count).toBe(2);
+  });
+});
+
+describe('isThreadUnreadFor (Task #312)', () => {
+  const FLOOR = '2026-06-20T00:00:00Z';
+  it('null floor ⇒ nooit ongelezen (zachte uitrol)', () => {
+    expect(isThreadUnreadFor('2026-06-21T10:00:00Z', null, null)).toBe(false);
+  });
+  it('null activiteit ⇒ nooit ongelezen', () => {
+    expect(isThreadUnreadFor(null, FLOOR, null)).toBe(false);
+  });
+  it('activiteit ≤ floor ⇒ gelezen (backlog onderdrukt)', () => {
+    expect(isThreadUnreadFor('2026-06-19T10:00:00Z', FLOOR, null)).toBe(false);
+    expect(isThreadUnreadFor(FLOOR, FLOOR, null)).toBe(false);
+  });
+  it('activiteit ná floor zonder read ⇒ ongelezen', () => {
+    expect(isThreadUnreadFor('2026-06-21T10:00:00Z', FLOOR, null)).toBe(true);
+  });
+  it('geopend ná activiteit ⇒ gelezen', () => {
+    expect(isThreadUnreadFor('2026-06-21T10:00:00Z', FLOOR, '2026-06-21T10:00:00Z')).toBe(false);
+    expect(isThreadUnreadFor('2026-06-21T10:00:00Z', FLOOR, '2026-06-21T12:00:00Z')).toBe(false);
+  });
+  it('nieuwe activiteit ná de read ⇒ opnieuw ongelezen', () => {
+    expect(isThreadUnreadFor('2026-06-22T10:00:00Z', FLOOR, '2026-06-21T10:00:00Z')).toBe(true);
+  });
+});
+
+describe('summarizeUnreadThreads (Task #312)', () => {
+  const FLOOR = '2026-06-20T00:00:00Z';
+  const threads = [
+    { id: 'a', last_activity_at: '2026-06-21T10:00:00Z', is_announcement: true },
+    { id: 'b', last_activity_at: '2026-06-22T10:00:00Z' },
+    { id: 'c', last_activity_at: '2026-06-19T10:00:00Z' },
+  ];
+  it('telt alleen ongelezen threads ná de floor', () => {
+    const s = summarizeUnreadThreads(threads, FLOOR, {});
+    expect(s.count).toBe(2);
+    expect(s.announcementCount).toBe(1);
+    expect(s.latestActivityAt).toBe('2026-06-22T10:00:00Z');
+  });
+  it('per-thread read sluit alleen die thread uit', () => {
+    const s = summarizeUnreadThreads(threads, FLOOR, { a: '2026-06-21T12:00:00Z' });
+    expect(s.count).toBe(1);
+    expect(s.announcementCount).toBe(0);
+  });
+  it('accepteert een Map als readMap', () => {
+    const s = summarizeUnreadThreads(threads, FLOOR, new Map([['b', '2026-06-23T00:00:00Z']]));
+    expect(s.count).toBe(1);
+    expect(s.announcementCount).toBe(1);
+  });
+  it('null floor ⇒ niets ongelezen maar latestActivityAt nog gezet', () => {
+    const s = summarizeUnreadThreads(threads, null, {});
+    expect(s.count).toBe(0);
+    expect(s.latestActivityAt).toBe('2026-06-22T10:00:00Z');
+  });
+  it('niet-array ⇒ lege samenvatting', () => {
+    expect(summarizeUnreadThreads(null, FLOOR, {})).toEqual({ count: 0, announcementCount: 0, latestActivityAt: null });
   });
 });
