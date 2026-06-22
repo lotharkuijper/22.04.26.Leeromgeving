@@ -1213,9 +1213,28 @@ function makeTxPool(store, { failOnSql = null } = {}) {
     studiecafe_threads: store.studiecafe_threads,
     studiecafe_replies: store.studiecafe_replies,
   };
+  function applyReplyCountUpdate(sql, params) {
+    // UPDATE studiecafe_threads SET reply_count = GREATEST(reply_count - 1, 0) ...
+    const [threadId] = params;
+    for (const r of tables.studiecafe_threads) {
+      if (r.id === threadId) {
+        r.reply_count = Math.max((r.reply_count || 0) - 1, 0);
+      }
+    }
+  }
   return {
     log,
     released: 0,
+    // Top-level pgPool.query — gebruikt door het reply-delete-pad voor de
+    // reply_count-decrement (geen connect()/transactie zoals het thread-pad).
+    async query(sql, params) {
+      log.push(/UPDATE\s+studiecafe_threads/i.test(sql) ? 'UPDATE_REPLY_COUNT' : 'OTHER');
+      if (failOnSql && failOnSql.test(sql)) {
+        throw new Error('tx boom');
+      }
+      if (/UPDATE\s+studiecafe_threads/i.test(sql)) applyReplyCountUpdate(sql, params);
+      return { rows: [], rowCount: 1 };
+    },
     async connect() {
       const self = this;
       return {
@@ -1468,5 +1487,106 @@ describe('summarizeUnreadThreads (Task #312)', () => {
   });
   it('niet-array ⇒ lege samenvatting', () => {
     expect(summarizeUnreadThreads(null, FLOOR, {})).toEqual({ count: 0, announcementCount: 0, latestActivityAt: null });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// DELETE reply — transactioneel pgPool-pad (Task #320). In productie wordt de
+// reply EERST volledig geredigeerd (body/auteur/kudos/reacties gewist via
+// supabaseAdmin — de beveiligingskritische stap), en pas DAARNA decrementeert
+// het pgPool-pad de reply_count van de parent-thread met één atomaire
+// `UPDATE ... GREATEST(reply_count - 1, 0)`. Task #305 dekte alleen het
+// fallback-pad (pgPool=null, select+update). Hier injecteren we makeTxPool zodat
+// de top-level pgPool.query de echte decrement op de in-memory store uitvoert.
+// Fail-volgorde is bewust: de inhoud is altijd gewist vóór de cosmetische teller
+// wordt geraakt, zodat een falende decrement nooit leesbare inhoud achterlaat.
+// ───────────────────────────────────────────────────────────────────────────
+describe('studiecafe endpoints — DELETE reply transactioneel pgPool-pad (Task #320)', () => {
+  function seedThreadWithReply(over = {}) {
+    return {
+      studiecafe_threads: [threadRow({ id: 't-1', reply_count: 3 })],
+      studiecafe_replies: [
+        replyRow({
+          id: 'r-1', thread_id: 't-1', author_id: 'stu-1', body: 'reply-geheim',
+          reactions: { '❤️': ['y'] }, kudos_by: 'staff-2', kudos_at: '2026-06-21T11:00:00.000Z',
+          ...over,
+        }),
+      ],
+    };
+  }
+
+  it('redigeert de reply volledig én decrementeert reply_count via pgPool', async () => {
+    const seed = seedThreadWithReply();
+    const pool = makeTxPool(makeStore(seed));
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    ctx.userId = 'stu-1';
+
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+
+    // De reply-inhoud is cursus-breed onleesbaar gemaakt.
+    const r = seed.studiecafe_replies[0];
+    expect(r.deleted_at).toBeTruthy();
+    expect(r.deleted_by).toBe('stu-1');
+    expect(r.body).toBe('');
+    expect(r.author_id).toBeNull();
+    expect(r.kudos_by).toBeNull();
+    expect(r.kudos_at).toBeNull();
+    expect(r.reactions).toEqual({});
+
+    // De parent-thread-teller is precies met 1 verlaagd via het pgPool-pad.
+    expect(pool.log).toEqual(['UPDATE_REPLY_COUNT']);
+    expect(seed.studiecafe_threads[0].reply_count).toBe(2);
+  });
+
+  it('decrement vloert op 0 (GREATEST) bij een reeds-nul reply_count', async () => {
+    const seed = seedThreadWithReply();
+    seed.studiecafe_threads[0].reply_count = 0;
+    const pool = makeTxPool(makeStore(seed));
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    ctx.isStaff = true; // staff mag andermans reply verwijderen
+
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-1' } });
+    expect(res.status).toBe(200);
+    expect(seed.studiecafe_threads[0].reply_count).toBe(0);
+  });
+
+  it('een falende reply_count-update → 500, maar de inhoud is al gewist (fail-closed)', async () => {
+    const seed = seedThreadWithReply();
+    const pool = makeTxPool(makeStore(seed), { failOnSql: /UPDATE\s+studiecafe_threads/i });
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    ctx.userId = 'stu-1';
+
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-1' } });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('tx boom');
+
+    // Beveiligingskritisch: de redactie liep VÓÓR de teller, dus zelfs als de
+    // decrement faalt blijft er geen leesbare reply-inhoud achter.
+    const r = seed.studiecafe_replies[0];
+    expect(r.deleted_at).toBeTruthy();
+    expect(r.body).toBe('');
+    expect(r.author_id).toBeNull();
+    // De teller bleef onaangeroerd (de update gooide vóór de mutatie).
+    expect(seed.studiecafe_threads[0].reply_count).toBe(3);
+  });
+
+  it('een reeds verwijderde reply → 200 zonder her-redactie of decrement', async () => {
+    const seed = seedThreadWithReply({
+      deleted_at: '2026-06-20T08:00:00.000Z', deleted_by: 'staff-9', body: '', author_id: null,
+    });
+    const pool = makeTxPool(makeStore(seed));
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    ctx.isStaff = true;
+
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+
+    // Geen pgPool-decrement en de audit blijft intact.
+    expect(pool.log).toEqual([]);
+    expect(seed.studiecafe_threads[0].reply_count).toBe(3);
+    expect(seed.studiecafe_replies[0].deleted_by).toBe('staff-9');
   });
 });
