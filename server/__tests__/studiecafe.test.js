@@ -2425,4 +2425,85 @@ describe('studiecafe endpoints — POST /read-all (Task #342)', () => {
       });
     }
   });
+
+  // Task #346: het atomaire pgPool-pad. Eén multi-row INSERT ... ON CONFLICT
+  // (user_id, thread_id) DO UPDATE schrijft alle reads ineens; herhaalde clicks
+  // mogen GEEN dubbele rijen maken en moeten ok + de volledige threadIds geven.
+  // Modelleert een directe Postgres-verbinding met een eigen thread_reads-store
+  // (de pgPool-route schrijft NIET naar de Supabase-store).
+  function makeReadAllPool() {
+    const reads = [];
+    let queries = 0;
+    return {
+      reads,
+      get queryCount() { return queries; },
+      async query(sql, params) {
+        queries += 1;
+        if (!/INSERT INTO studiecafe_thread_reads/i.test(sql)) {
+          return { rows: [], rowCount: 0 };
+        }
+        const hasManual = /manual_unread/i.test(sql);
+        const [userId, courseId, ts, ...threadIds] = params;
+        for (const threadId of threadIds) {
+          const existing = reads.find(
+            (r) => r.user_id === userId && r.thread_id === threadId,
+          );
+          const next = {
+            user_id: userId, course_id: courseId, thread_id: threadId, read_at: ts,
+            ...(hasManual ? { manual_unread: false } : {}),
+          };
+          if (existing) Object.assign(existing, next);
+          else reads.push(next);
+        }
+        return { rows: [], rowCount: threadIds.length };
+      },
+    };
+  }
+
+  it('schrijft via het atomaire pgPool-pad één read-rij per thread (geen Supabase-store)', async () => {
+    const pool = makeReadAllPool();
+    const { call, store } = setup(
+      { studiecafe_threads: [threadRow({ id: 't-1' }), threadRow({ id: 't-2' })] },
+      { pgPool: pool },
+    );
+    const res = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.threadIds.sort()).toEqual(['t-1', 't-2']);
+    // De mutatie landt in de pgPool-"DB", niet in de Supabase-store.
+    expect(pool.queryCount).toBeGreaterThan(0);
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+    expect(pool.reads).toHaveLength(2);
+    for (const row of pool.reads) {
+      expect(row).toMatchObject({
+        user_id: 'stu-1', course_id: COURSE_A,
+        read_at: res.body.readAt, manual_unread: false,
+      });
+    }
+  });
+
+  it('twee keer klikken via het pgPool-pad maakt geen dubbele rijen en blijft volledig ok', async () => {
+    const pool = makeReadAllPool();
+    const { call } = setup(
+      { studiecafe_threads: [threadRow({ id: 't-1' }), threadRow({ id: 't-2' })] },
+      { pgPool: pool },
+    );
+    const first = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(first.status).toBe(200);
+    expect(first.body.threadIds.sort()).toEqual(['t-1', 't-2']);
+    expect(pool.reads).toHaveLength(2);
+
+    const second = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(second.status).toBe(200);
+    expect(second.body.ok).toBe(true);
+    expect(second.body.threadIds.sort()).toEqual(['t-1', 't-2']);
+    // ON CONFLICT (user_id, thread_id): precies één rij per thread.
+    expect(pool.reads).toHaveLength(2);
+    const keys = pool.reads.map((r) => `${r.user_id}:${r.thread_id}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const row of pool.reads) {
+      expect(row.read_at).toBe(second.body.readAt);
+      expect(row.manual_unread).toBe(false);
+    }
+  });
 });

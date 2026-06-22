@@ -1028,8 +1028,57 @@ export function registerStudiecafeRoutes(app, deps) {
       const threadIds = (rows || []).map((r) => r.id);
       if (threadIds.length) {
         // read_at=now() én manual_unread=false: "alles gelezen" heft ook eerdere
-        // bewust-ongelezen markeringen (#327) op. Defensief: oude DB zonder de
-        // kolom valt terug op de upsert zonder manual_unread.
+        // bewust-ongelezen markeringen (#327) op.
+        if (pgPool) {
+          // Atomair pad: één multi-row INSERT ... ON CONFLICT (user_id, thread_id)
+          // DO UPDATE (gespiegeld op de reactie-/pluim-/melding-pgPool-paden). De
+          // upsert is idempotent per (user, thread), maar de directe Postgres-route
+          // houdt deze mutatie consistent met de andere muterende routes en blijft
+          // robuust als de logica groeit (deel-markeringen, conditioneel wissen van
+          // manual_unread). Defensief: oude DB zonder manual_unread-kolom (42703)
+          // valt terug op een INSERT zonder die kolom.
+          // params: [user_id, course_id, read_at, ...threadIds]; elke thread is
+          // $4, $5, … zodat één multi-row VALUES-lijst alle reads in één keer zet.
+          const params = [auth.user.id, courseId, ts, ...threadIds];
+          const valuesWithManual = threadIds
+            .map((_, i) => `($1, $2, $${i + 4}, $3, false)`)
+            .join(',');
+          const valuesLegacy = threadIds
+            .map((_, i) => `($1, $2, $${i + 4}, $3)`)
+            .join(',');
+          try {
+            await pgPool.query(
+              `INSERT INTO studiecafe_thread_reads
+                  (user_id, course_id, thread_id, read_at, manual_unread)
+                VALUES ${valuesWithManual}
+                ON CONFLICT (user_id, thread_id)
+                DO UPDATE SET read_at = EXCLUDED.read_at,
+                             manual_unread = EXCLUDED.manual_unread`,
+              params,
+            );
+          } catch (e) {
+            // Oude DB zonder manual_unread-kolom (42703): herhaal de INSERT zonder
+            // die kolom, net als de Supabase-fallback hieronder.
+            if (/manual_unread/.test(e.message || '')) {
+              await pgPool.query(
+                `INSERT INTO studiecafe_thread_reads
+                    (user_id, course_id, thread_id, read_at)
+                  VALUES ${valuesLegacy}
+                  ON CONFLICT (user_id, thread_id)
+                  DO UPDATE SET read_at = EXCLUDED.read_at`,
+                params,
+              );
+            } else {
+              console.warn('[studiecafe] read-all atomic upsert mislukt:', e.message);
+              return res.json({ ok: false, readAt: ts, threadIds: [] });
+            }
+          }
+          return res.json({ ok: true, readAt: ts, threadIds });
+        }
+        // Fallback zonder pgPool (bv. testomgeving): Supabase REST upsert.
+        // Idempotent per (user, thread); geen directe Postgres-verbinding nodig.
+        // Defensief: oude DB zonder de kolom valt terug op de upsert zonder
+        // manual_unread.
         const buildPayload = (withManual) =>
           threadIds.map((id) => ({
             user_id: auth.user.id,
