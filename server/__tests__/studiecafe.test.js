@@ -998,6 +998,138 @@ describe('studiecafe endpoints — feed leesstatus-markers (Task #343)', () => {
   });
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// Feed-vormgeving (Task #344): de GET /threads-handler draait buildNameResolver
+// + shapeThread om ruwe rijen naar de client-vorm te brengen: opgeloste
+// auteursnamen (uit de profiles-seed), de pluim-gever-naam en de kijker-relatieve
+// "mine"/reactie-vlaggen berekend tegen auth.user.id, plus de envelope
+// (isStaff, currentUserId). Deze transform werd alleen indirect uitgeoefend; een
+// regressie zou een verkeerde naam tonen, een geredigeerde/verwijderde auteur
+// kunnen lekken of "mine" tegen de verkeerde gebruiker kunnen berekenen zonder
+// dat de leesstatus-tests dit vangen.
+// ───────────────────────────────────────────────────────────────────────────
+describe('studiecafe endpoints — feed auteursnamen + kijker-vlaggen (Task #344)', () => {
+  it('lost de auteursnaam op uit de profiles-seed (full_name)', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', author_id: 'stu-9' })],
+      profiles: [{ id: 'stu-9', full_name: 'Anna Student', email: 'anna@vu.nl' }],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    const [t] = res.body.threads;
+    expect(t.authorId).toBe('stu-9');
+    expect(t.authorName).toBe('Anna Student');
+  });
+
+  it('valt terug op het e-mail-prefix als full_name ontbreekt', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', author_id: 'stu-9' })],
+      profiles: [{ id: 'stu-9', full_name: null, email: 'bram@vu.nl' }],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.body.threads[0].authorName).toBe('bram');
+  });
+
+  it('geeft "Onbekend" als de auteur niet in de profiles-seed staat', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', author_id: 'spook' })],
+      profiles: [],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.body.threads[0].authorName).toBe('Onbekend');
+  });
+
+  it('lost de pluim-gever-naam op en vormt het kudos-object', async () => {
+    const { call } = setup({
+      studiecafe_threads: [
+        threadRow({
+          id: 't-1',
+          author_id: 'stu-9',
+          kudos_by: 'doc-1',
+          kudos_at: '2026-06-21T12:00:00.000Z',
+        }),
+      ],
+      profiles: [
+        { id: 'stu-9', full_name: 'Anna Student', email: 'anna@vu.nl' },
+        { id: 'doc-1', full_name: 'Docent Karel', email: 'karel@vu.nl' },
+      ],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.body.threads[0].kudos).toEqual({
+      by: 'doc-1',
+      byName: 'Docent Karel',
+      at: '2026-06-21T12:00:00.000Z',
+    });
+  });
+
+  it('geeft kudos=null als er geen pluim is gegeven', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', kudos_by: null, kudos_at: null })],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.body.threads[0].kudos).toBeNull();
+  });
+
+  it('berekent reactie-"mine" en isMine tegen de ingelogde gebruiker (auth.user.id)', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [
+        threadRow({
+          id: 't-1',
+          author_id: 'stu-1',
+          reactions: { '👍': ['stu-1', 'andere'], '❤️': ['andere'] },
+        }),
+      ],
+    });
+    ctx.userId = 'stu-1';
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    const [t] = res.body.threads;
+    expect(t.isMine).toBe(true);
+    expect(t.reactions).toEqual([
+      { emoji: '👍', count: 2, mine: true },
+      { emoji: '❤️', count: 1, mine: false },
+    ]);
+  });
+
+  it('"mine"/isMine zijn false voor een andere kijker dan de reagent/auteur', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [
+        threadRow({
+          id: 't-1',
+          author_id: 'stu-1',
+          reactions: { '👍': ['stu-1'] },
+        }),
+      ],
+    });
+    ctx.userId = 'kijker-2';
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    const [t] = res.body.threads;
+    expect(t.isMine).toBe(false);
+    expect(t.reactions).toEqual([{ emoji: '👍', count: 1, mine: false }]);
+  });
+
+  it('de envelope weerspiegelt isStaffForCourse + de auth-gebruiker (staff)', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1' })],
+    });
+    ctx.userId = 'doc-7';
+    ctx.isStaff = true;
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.body.isStaff).toBe(true);
+    expect(res.body.currentUserId).toBe('doc-7');
+  });
+
+  it('de envelope weerspiegelt een niet-staff student', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1' })],
+    });
+    ctx.userId = 'stu-3';
+    ctx.isStaff = false;
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.body.isStaff).toBe(false);
+    expect(res.body.currentUserId).toBe('stu-3');
+  });
+});
+
 describe('studiecafe endpoints — cross-course IDOR (gelekt id uit andere cursus)', () => {
   // Telkens: de gebruiker heeft toegang tot cursus A, maar het doel-id hoort bij
   // cursus B. De handler moet 404 geven (niet de rij uit B teruggeven/muteren).
