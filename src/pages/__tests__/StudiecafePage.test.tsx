@@ -242,3 +242,65 @@ describe('StudiecafePage — bewust ongelezen markeren', () => {
     expect(screen.queryByTestId('badge-unread-thread-b')).not.toBeInTheDocument();
   });
 });
+
+// Telt hoe vaak de replies van een specifieke thread zijn opgehaald (GET).
+function repliesGetCount(threadId: string): number {
+  return fetchMock.mock.calls.filter(([input, init]) => {
+    const url = typeof input === 'string' ? input : (input as URL | Request).toString();
+    const method = ((init as RequestInit | undefined)?.method || 'GET').toUpperCase();
+    return method === 'GET' && url.endsWith(`/threads/${threadId}/replies`);
+  }).length;
+}
+
+describe('StudiecafePage — realtime auto-refresh houdt het open gesprek gelezen', () => {
+  // De vloer ligt op 2026-06-20; we zetten de klok daarná zodat een verse
+  // markRead-timestamp (new Date()) deterministisch ná de nieuwe activiteit ligt.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-21T12:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('houdt het geopende gesprek gelezen en herlaadt zijn reacties bij een realtime-refetch', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPage();
+    await waitForLoaded();
+
+    // Open thread-a. Daarmee wordt hij gelezen gemarkeerd en zijn de reacties
+    // één keer opgehaald.
+    await user.click(screen.getByTestId('button-replies-thread-a'));
+    await waitFor(() => expect(repliesGetCount('thread-a')).toBe(1));
+    expect(screen.queryByTestId('badge-unread-thread-a')).not.toBeInTheDocument();
+
+    // De server meldt nu NIEUWE activiteit op beide threads (na de vloer). Een
+    // realtime-event triggert de gedebouncede refetch. thread-a staat open, dus
+    // mag NIET terugspringen naar "Nieuw"; thread-b is dicht en wél nieuw.
+    const NEW_ACTIVITY = '2026-06-20T18:00:00.000Z';
+    threadsResponse = {
+      ...threadsResponse,
+      threads: [
+        { ...makeThread('thread-a', 'Backlog vraag A'), lastActivityAt: NEW_ACTIVITY, replyCount: 1 },
+        { ...makeThread('thread-b', 'Backlog vraag B'), lastActivityAt: NEW_ACTIVITY, replyCount: 1 },
+      ],
+    };
+    act(() => {
+      realtimeHandlers.forEach((h) => h());
+    });
+
+    // Het gesloten gesprek (thread-b) komt als "Nieuw" binnen → bewijst dat de
+    // refetch de nieuwe activiteit daadwerkelijk heeft opgepikt.
+    await screen.findByTestId('badge-unread-thread-b');
+    // Het OPEN gesprek (thread-a) blijft gelezen ondanks de nieuwe activiteit.
+    expect(screen.queryByTestId('badge-unread-thread-a')).not.toBeInTheDocument();
+    // En zijn reacties zijn opnieuw opgehaald door de refetch (2e GET).
+    await waitFor(() => expect(repliesGetCount('thread-a')).toBeGreaterThanOrEqual(2));
+
+    // De refetch heeft het open gesprek opnieuw als gelezen weggeschreven.
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/studiecafe/course-1/threads/thread-a/read',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+});
