@@ -326,6 +326,15 @@ export function AdminPage() {
   const [explainLoading, setExplainLoading] = useState(false);
   const [explainSaving, setExplainSaving] = useState(false);
   const [explainMsg, setExplainMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // ── Per-cursus tutor-chat-prompt (Task #334) ──
+  const [chatCourseId, setChatCourseId] = useState<string>('');
+  const [chatOverrideContent, setChatOverrideContent] = useState('');
+  const [chatHasOverride, setChatHasOverride] = useState(false);
+  const [chatGlobalContent, setChatGlobalContent] = useState('');
+  const [chatOverrideCourses, setChatOverrideCourses] = useState<Set<string>>(new Set());
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatSaving, setChatSaving] = useState(false);
+  const [chatMsg, setChatMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [diagnosticQuery, setDiagnosticQuery] = useState('');
   const [diagnosticExpand, setDiagnosticExpand] = useState(false);
   const [diagnosticDefinition, setDiagnosticDefinition] = useState('');
@@ -398,6 +407,7 @@ export function AdminPage() {
       loadPrompts();
       loadAllCourses();
       loadExplainOverrideCourses();
+      loadChatOverrideCourses();
       (async () => {
         try {
           const { data: { session } } = await supabase.auth.getSession();
@@ -655,6 +665,110 @@ export function AdminPage() {
       setExplainMsg({ type: 'error', text: t('admin.prompts.explainPerCourse.resetError') + (err as Error).message });
     }
     setExplainSaving(false);
+  };
+
+  // ── Per-cursus tutor-chat-prompt (Task #334) ────────────────────────────
+  const loadChatOverrideCourses = async () => {
+    if (!session?.access_token) return;
+    try {
+      const res = await fetch('/api/admin/chat-prompt/overrides', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChatOverrideCourses(new Set(data.courseIds || []));
+      }
+    } catch {
+      console.warn('[admin] Chat-prompt overrides laden mislukt');
+    }
+  };
+
+  const loadChatOverride = async (courseId: string) => {
+    if (!courseId || !session?.access_token) return;
+    setChatLoading(true);
+    setChatMsg(null);
+    try {
+      const res = await fetch(`/api/admin/chat-prompt?courseId=${encodeURIComponent(courseId)}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setChatHasOverride(!!data.hasOverride);
+        setChatGlobalContent(data.globalContent || '');
+        setChatOverrideContent(data.hasOverride ? (data.content || '') : (data.globalContent || ''));
+      } else {
+        setChatMsg({ type: 'error', text: t('admin.prompts.chatPerCourse.loadError') });
+      }
+    } catch {
+      setChatMsg({ type: 'error', text: t('admin.prompts.chatPerCourse.loadError') });
+    }
+    setChatLoading(false);
+  };
+
+  const handleSelectChatCourse = (courseId: string) => {
+    setChatCourseId(courseId);
+    setChatMsg(null);
+    if (courseId) {
+      loadChatOverride(courseId);
+    } else {
+      setChatHasOverride(false);
+      setChatOverrideContent('');
+    }
+  };
+
+  const handleSaveChatOverride = async () => {
+    if (!chatCourseId || !session?.access_token) return;
+    if (!chatOverrideContent.trim()) {
+      setChatMsg({ type: 'error', text: t('admin.prompts.chatPerCourse.emptyError') });
+      return;
+    }
+    setChatSaving(true);
+    setChatMsg(null);
+    try {
+      const res = await fetch('/api/admin/chat-prompt', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ courseId: chatCourseId, content: chatOverrideContent }),
+      });
+      if (res.ok) {
+        setChatHasOverride(true);
+        setChatOverrideCourses(prev => new Set([...prev, chatCourseId]));
+        setChatMsg({ type: 'success', text: t('admin.prompts.chatPerCourse.saveSuccess') });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setChatMsg({ type: 'error', text: t('admin.prompts.chatPerCourse.saveError') + (data.error || '') });
+      }
+    } catch (err) {
+      setChatMsg({ type: 'error', text: t('admin.prompts.chatPerCourse.saveError') + (err as Error).message });
+    }
+    setChatSaving(false);
+  };
+
+  const handleResetChatOverride = async () => {
+    if (!chatCourseId || !session?.access_token) return;
+    setChatSaving(true);
+    setChatMsg(null);
+    try {
+      const res = await fetch(`/api/admin/chat-prompt/${encodeURIComponent(chatCourseId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (res.ok) {
+        setChatHasOverride(false);
+        setChatOverrideContent(chatGlobalContent);
+        setChatOverrideCourses(prev => { const next = new Set(prev); next.delete(chatCourseId); return next; });
+        setChatMsg({ type: 'success', text: t('admin.prompts.chatPerCourse.resetSuccess') });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setChatMsg({ type: 'error', text: t('admin.prompts.chatPerCourse.resetError') + (data.error || '') });
+      }
+    } catch (err) {
+      setChatMsg({ type: 'error', text: t('admin.prompts.chatPerCourse.resetError') + (err as Error).message });
+    }
+    setChatSaving(false);
   };
 
   const loadCoursesWithOverrides = async () => {
@@ -2292,6 +2406,86 @@ const tabGroups = [
                                 data-testid="button-reset-explain-override"
                               >
                                 {t('admin.prompts.explainPerCourse.reset')}
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* ── Per-cursus tutor-chat-prompt (Task #334) ── */}
+                    <div className="mt-4 p-4 border border-blue-200 bg-white rounded-xl space-y-3">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">{t('admin.prompts.chatPerCourse.title')}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{t('admin.prompts.chatPerCourse.desc')}</p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={chatCourseId}
+                          onChange={e => handleSelectChatCourse(e.target.value)}
+                          className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                          data-testid="select-chat-course"
+                        >
+                          <option value="">{t('admin.prompts.chatPerCourse.selectPlaceholder')}</option>
+                          {allCourses.map(c => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}{chatOverrideCourses.has(c.id) ? ' ●' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {chatCourseId && (
+                        <>
+                          <div className="flex items-center gap-2">
+                            {chatHasOverride ? (
+                              <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700" data-testid="status-chat-override">
+                                {t('admin.prompts.chatPerCourse.statusOverride')}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600" data-testid="status-chat-global">
+                                {t('admin.prompts.chatPerCourse.statusGlobal')}
+                              </span>
+                            )}
+                          </div>
+
+                          {chatLoading ? (
+                            <p className="text-sm text-gray-400 italic">{t('admin.loading')}</p>
+                          ) : (
+                            <textarea
+                              value={chatOverrideContent}
+                              onChange={e => setChatOverrideContent(e.target.value)}
+                              rows={8}
+                              placeholder={t('admin.prompts.chatPerCourse.placeholder')}
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                              data-testid="textarea-chat-override"
+                            />
+                          )}
+
+                          {chatMsg && (
+                            <p className={`text-sm ${chatMsg.type === 'success' ? 'text-green-700' : 'text-red-700'}`} data-testid="text-chat-msg">
+                              {chatMsg.text}
+                            </p>
+                          )}
+
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleSaveChatOverride}
+                              disabled={chatSaving || chatLoading || !chatOverrideContent.trim()}
+                              className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                              data-testid="button-save-chat-override"
+                            >
+                              {chatSaving ? t('admin.prompts.chatPerCourse.saving') : t('admin.prompts.chatPerCourse.save')}
+                            </button>
+                            {chatHasOverride && (
+                              <button
+                                onClick={handleResetChatOverride}
+                                disabled={chatSaving || chatLoading}
+                                className="px-4 py-1.5 text-sm bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                                data-testid="button-reset-chat-override"
+                              >
+                                {t('admin.prompts.chatPerCourse.reset')}
                               </button>
                             )}
                           </div>

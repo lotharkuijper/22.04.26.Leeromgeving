@@ -334,29 +334,37 @@ export async function syncShareStatsQuestions(
   return result;
 }
 
-const CONFIG_KEY = '__quiz_itembank_config__';
+// De ItemBank-bronconfiguratie loopt via de server (service-role), niet meer
+// rechtstreeks naar de admin-only `chatbot_prompts`-tabel. Zo kan een docent een
+// eigen bron per cursus instellen (Task #334, stap 5). Geef `courseId` mee voor
+// een cursus-override; zonder courseId betreft het de globale (admin-only) bron.
+async function authHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Geen actieve sessie');
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session.access_token}`,
+  };
+}
 
-export async function getShareStatsConfig(): Promise<{
+export async function getShareStatsConfig(courseId?: string): Promise<{
   repositoryUrl: string;
   lastSyncedAt?: string;
+  hasOverride?: boolean;
+  globalRepositoryUrl?: string;
 }> {
   try {
-    const { data } = await supabase
-      .from('chatbot_prompts')
-      .select('content')
-      .eq('name', CONFIG_KEY)
-      .maybeSingle();
-
-    if (data?.content) {
-      try {
-        const parsed = JSON.parse(data.content);
-        return {
-          repositoryUrl: parsed.repositoryUrl || DEFAULT_REPO_URL,
-          lastSyncedAt: parsed.lastSyncedAt,
-        };
-      } catch {
-        // val terug op default
-      }
+    const headers = await authHeaders();
+    const qs = courseId ? `?courseId=${encodeURIComponent(courseId)}` : '';
+    const res = await fetch(`/api/admin/itembank-config${qs}`, { headers });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        repositoryUrl: data.repositoryUrl || DEFAULT_REPO_URL,
+        lastSyncedAt: data.lastSyncedAt,
+        hasOverride: data.hasOverride,
+        globalRepositoryUrl: data.globalRepositoryUrl || DEFAULT_REPO_URL,
+      };
     }
   } catch (err) {
     console.warn('getShareStatsConfig: kon config niet ophalen:', err);
@@ -367,31 +375,31 @@ export async function getShareStatsConfig(): Promise<{
 export async function saveShareStatsConfig(config: {
   repositoryUrl: string;
   lastSyncedAt?: string;
-}): Promise<void> {
-  const payload = {
-    name: CONFIG_KEY,
-    content: JSON.stringify({
+}, courseId?: string): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch('/api/admin/itembank-config', {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      courseId,
       repositoryUrl: config.repositoryUrl,
       lastSyncedAt: config.lastSyncedAt,
     }),
-    is_active: true,
-    // Interne config-rij — mag nooit als chat-/explain-prompt opgepikt worden.
-    section: 'internal',
-  };
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j?.error || `HTTP ${res.status}`);
+  }
+}
 
-  // Upsert via select+insert/update. (chatbot_prompts heeft een unique op name.)
-  const { data: existing } = await supabase
-    .from('chatbot_prompts')
-    .select('id')
-    .eq('name', CONFIG_KEY)
-    .maybeSingle();
-
-  if (existing) {
-    await supabase
-      .from('chatbot_prompts')
-      .update({ content: payload.content, is_active: true })
-      .eq('id', existing.id);
-  } else {
-    await supabase.from('chatbot_prompts').insert(payload);
+export async function resetShareStatsConfig(courseId: string): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`/api/admin/itembank-config/${encodeURIComponent(courseId)}`, {
+    method: 'DELETE',
+    headers,
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j?.error || `HTTP ${res.status}`);
   }
 }

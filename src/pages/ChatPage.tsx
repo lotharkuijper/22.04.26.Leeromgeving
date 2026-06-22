@@ -533,7 +533,8 @@ export function ChatPage() {
           context,
           ragSettings.chat.rag_strict_mode,
           displaySources.length > 0 ? displaySources : undefined,
-          learningLevel
+          learningLevel,
+          activeCourse || undefined
         );
       } catch (llmErr) {
         console.error('[CHAT] LLM call failed:', llmErr);

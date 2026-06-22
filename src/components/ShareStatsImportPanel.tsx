@@ -97,7 +97,8 @@ export function ShareStatsImportPanel() {
 
   useEffect(() => {
     void loadConfigAndTopics();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCourseId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -110,7 +111,7 @@ export function ShareStatsImportPanel() {
   const loadConfigAndTopics = async () => {
     setLoading(true);
     try {
-      const config = await getShareStatsConfig();
+      const config = await getShareStatsConfig(activeCourseId || undefined);
       const url = config.repositoryUrl || 'https://github.com/ShareStats/itembank';
       setRepoUrl(url);
       setSavedRepoUrl(url);
@@ -138,7 +139,7 @@ export function ShareStatsImportPanel() {
     }
     setSavingConfig(true);
     try {
-      await saveShareStatsConfig({ repositoryUrl: repoUrl, lastSyncedAt });
+      await saveShareStatsConfig({ repositoryUrl: repoUrl, lastSyncedAt }, activeCourseId || undefined);
       setSavedRepoUrl(repoUrl);
       setItembankRepo(parsed.owner, parsed.repo);
       // Topics opnieuw laden voor de nieuwe repo.

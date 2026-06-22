@@ -214,6 +214,52 @@ export default function CoursesAdmin() {
     }
   }
 
+  async function removeMember(userId: string, force = false) {
+    if (!membersTarget) return;
+    const token = session?.access_token;
+    if (!token) {
+      setMembersError('Niet ingelogd.');
+      return;
+    }
+    if (!force) {
+      const target = membersList.find((m) => m.user_id === userId);
+      const label = target?.full_name || target?.email || 'dit lid';
+      if (!window.confirm(`Weet je zeker dat je ${label} uit "${membersTarget.name}" wilt verwijderen?`)) {
+        return;
+      }
+    }
+    setMemberRoleBusy(userId);
+    setMembersError(null);
+    try {
+      const url = `/api/admin/courses/${membersTarget.id}/members/${userId}${force ? '?force=1' : ''}`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Last-teacher-bescherming: een admin mag het forceren na bevestiging.
+        if (res.status === 409 && json.code === 'last_teacher' && isAdmin && !force) {
+          const ok = window.confirm(
+            `${json.error}\n\nWeet je zeker dat je deze cursus zonder docent achterlaat? (Alleen admins kunnen dit forceren.)`
+          );
+          if (ok) {
+            return removeMember(userId, true);
+          }
+          setMembersError(json.error);
+          return;
+        }
+        setMembersError(json.error || `Verwijderen mislukt (${res.status})`);
+        return;
+      }
+      setMembersList((prev) => prev.filter((m) => m.user_id !== userId));
+    } catch (err: unknown) {
+      setMembersError(err instanceof Error ? err.message : 'Onbekende fout');
+    } finally {
+      setMemberRoleBusy(null);
+    }
+  }
+
   async function loadCourses() {
     setLoadingList(true);
     // Defensief: oude DB zonder cue_delta_max- of student_visible-kolom →
@@ -605,12 +651,13 @@ export default function CoursesAdmin() {
           Cursussen beheren
         </h1>
         <p className="text-sm text-gray-600">
-          Maak een nieuwe cursus aan. Bij het aanmaken worden automatisch een
-          cursusmap met submappen <strong>RAG</strong> en{' '}
-          <strong>Projectdata</strong> klaargezet en gekoppeld.
+          {isAdmin
+            ? 'Maak een nieuwe cursus aan en beheer bestaande cursussen. Bij het aanmaken worden automatisch een cursusmap met submappen RAG en Projectdata klaargezet en gekoppeld.'
+            : 'Beheer de cursussen waarin jij docent bent: leden, rollen en cursusinstellingen.'}
         </p>
       </header>
 
+      {isAdmin && (
       <section className="bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Nieuwe cursus aanmaken</h2>
         <form onSubmit={handleCreate} className="space-y-4" data-testid="form-create-course">
@@ -679,6 +726,7 @@ export default function CoursesAdmin() {
           </button>
         </form>
       </section>
+      )}
 
       <section>
         <h2 className="text-lg font-semibold text-gray-900 mb-3">Bestaande cursussen</h2>
@@ -830,6 +878,7 @@ export default function CoursesAdmin() {
                           >
                             {c.student_visible ? 'Beschikbaar' : 'Niet beschikbaar'}
                           </span>
+                          {isAdmin && (
                           <button
                             type="button"
                             onClick={() => startEdit(c)}
@@ -841,6 +890,8 @@ export default function CoursesAdmin() {
                             <Pencil className="w-3.5 h-3.5" />
                             Bewerken
                           </button>
+                          )}
+                          {isAdmin && (
                           <button
                             type="button"
                             onClick={() => toggleActive(c)}
@@ -860,6 +911,7 @@ export default function CoursesAdmin() {
                             )}
                             {c.is_active ? 'Deactiveren' : 'Activeren'}
                           </button>
+                          )}
                           {(isAdmin || myTeacherCourseIds.has(c.id)) && (
                             <button
                               type="button"
@@ -900,6 +952,7 @@ export default function CoursesAdmin() {
                               Beheer leden
                             </button>
                           )}
+                          {isAdmin && (
                           <button
                             type="button"
                             onClick={() => requestDelete(c)}
@@ -911,6 +964,7 @@ export default function CoursesAdmin() {
                             <Trash2 className="w-3.5 h-3.5" />
                             Verwijderen
                           </button>
+                          )}
                           {isAdmin && (
                             <button
                               type="button"
@@ -1342,6 +1396,7 @@ export default function CoursesAdmin() {
                       <th className="text-left py-2 px-2 font-semibold text-gray-700">Naam</th>
                       <th className="text-left py-2 px-2 font-semibold text-gray-700">E-mail</th>
                       <th className="text-left py-2 px-2 font-semibold text-gray-700">Rol in deze cursus</th>
+                      <th className="text-right py-2 px-2 font-semibold text-gray-700">Acties</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1388,6 +1443,21 @@ export default function CoursesAdmin() {
                               )}
                               {memberRoleBusy === m.user_id && (
                                 <Loader2 className="w-3 h-3 inline-block ml-2 animate-spin text-gray-400" />
+                              )}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeMember(m.user_id)}
+                                  disabled={memberRoleBusy === m.user_id || isSoleTeacherSelf}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                                  data-testid={`button-remove-member-${m.user_id}`}
+                                  title={isSoleTeacherSelf ? 'Je bent de laatste docent — wijs eerst een vervanger aan.' : 'Lid verwijderen uit deze cursus'}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  Verwijderen
+                                </button>
                               )}
                             </td>
                           </tr>

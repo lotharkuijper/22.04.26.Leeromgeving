@@ -33,6 +33,7 @@ import {
 import { validateReviewResponse, canRequestDocumentReview, badgeForGrade, normalizeBadgeAwardMode } from './documentReview.js';
 import { authorizeAvailabilityChange, parseStudentVisible, memberCanAccessCourse, canAccessCourseContent } from './courseAvailability.js';
 import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
+import { pickReusableRagFolder } from './ragFolder.js';
 import { buildLanguageInstruction, localizePrompt, languageEnglishName, normalizeLang } from './languages.js';
 import { buildLevelInstructionBlock, LEVEL_LABELS, LEVEL_MIN, LEVEL_MAX, LEVEL_DEFAULT } from './learningLevel.js';
 import {
@@ -450,6 +451,7 @@ app.post('/api/chat', async (req, res) => {
     sources,
     lang = 'nl',
     learningLevel,
+    courseId,
   } = req.body;
 
   // Task #296: parametrisch leerniveau-blok (leeg bij ontbrekend/ongeldig niveau).
@@ -480,29 +482,53 @@ app.post('/api/chat', async (req, res) => {
     let systemPromptContent = FALLBACK_SYSTEM_PROMPT;
     if (supabaseAdmin) {
       try {
-        const quizNamesExclude = Object.keys(QUIZ_PROMPT_DEFAULTS);
-        let promptQuery = supabaseAdmin
-          .from('chatbot_prompts')
-          .select('id, name, content')
-          .eq('is_active', true)
-          .not('name', 'like', '__rag_settings%')
-          .not('name', 'like', '__doc_mutation_%')
-          .not('name', 'like', '__concepts_regen_%')
-          .neq('name', '__quiz_itembank_config__')
-          .not('name', 'in', `(${quizNamesExclude.map(n => `"${n}"`).join(',')})`)
-          .order('updated_at', { ascending: false })
-          .limit(1);
-        if (promptsHasSection) {
-          promptQuery = promptQuery.eq('section', 'chat');
+        // 1) Cursus-specifieke tutor-chat-override (Task #334): als deze cursus
+        // een eigen, niet-lege chat-prompt heeft, gebruik die i.p.v. de globale.
+        // BEVEILIGING: courseId komt uit de request-body; we mogen de cursus-
+        // override pas laden nadat is vastgesteld dat de beller daadwerkelijk
+        // toegang tot die cursus heeft (anders kan elke ingelogde gebruiker de
+        // prompt van een willekeurige cursus afdwingen/uitlezen).
+        let courseOverrideUsed = false;
+        if (courseId && (await userHasCourseAccess(auth.user, auth.profile, courseId))) {
+          const { data: override } = await supabaseAdmin
+            .from('chatbot_prompts')
+            .select('id, content')
+            .eq('name', chatPromptKey(courseId))
+            .maybeSingle();
+          if (override?.content && override.content.trim()) {
+            systemPromptContent = override.content;
+            courseOverrideUsed = true;
+            console.log(`[/api/chat] Cursus-chat-prompt geladen voor courseId=${courseId} (id=${override.id})`);
+          }
+        } else if (courseId) {
+          console.warn(`[/api/chat] courseId=${courseId} genegeerd — beller heeft geen toegang tot deze cursus.`);
         }
-        const { data: promptData, error: promptError } = await promptQuery.maybeSingle();
-        if (promptError) {
-          console.warn('[/api/chat] Prompt ophalen mislukt, fallback gebruikt:', promptError.message);
-        } else if (promptData?.content) {
-          systemPromptContent = promptData.content;
-          console.log(`[/api/chat] Actieve chat-prompt geladen: "${promptData.name}" (id=${promptData.id})`);
-        } else {
-          console.warn('[/api/chat] Geen actieve chat-prompt in database — fallback gebruikt');
+        if (!courseOverrideUsed) {
+          const quizNamesExclude = Object.keys(QUIZ_PROMPT_DEFAULTS);
+          let promptQuery = supabaseAdmin
+            .from('chatbot_prompts')
+            .select('id, name, content')
+            .eq('is_active', true)
+            .not('name', 'like', '__rag_settings%')
+            .not('name', 'like', '__doc_mutation_%')
+            .not('name', 'like', '__concepts_regen_%')
+            .not('name', 'like', '__chat_prompt_%')
+            .not('name', 'like', '__quiz_itembank_config%')
+            .not('name', 'in', `(${quizNamesExclude.map(n => `"${n}"`).join(',')})`)
+            .order('updated_at', { ascending: false })
+            .limit(1);
+          if (promptsHasSection) {
+            promptQuery = promptQuery.eq('section', 'chat');
+          }
+          const { data: promptData, error: promptError } = await promptQuery.maybeSingle();
+          if (promptError) {
+            console.warn('[/api/chat] Prompt ophalen mislukt, fallback gebruikt:', promptError.message);
+          } else if (promptData?.content) {
+            systemPromptContent = promptData.content;
+            console.log(`[/api/chat] Actieve chat-prompt geladen: "${promptData.name}" (id=${promptData.id})`);
+          } else {
+            console.warn('[/api/chat] Geen actieve chat-prompt in database — fallback gebruikt');
+          }
         }
       } catch (err) {
         console.warn('[/api/chat] Prompt ophalen exception, fallback gebruikt:', err.message);
@@ -2350,77 +2376,26 @@ app.post('/api/admin/create-rag-folder', async (req, res) => {
       return res.status(403).json({ error: 'Could not verify user role' });
     }
 
-    const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
-    if (!isAdmin) {
-      return res.status(403).json({ error: 'Admin role required' });
+    // Task #334: admin OF docent van DEZE cursus mag de RAG-map aanmaken.
+    if (!(await isStaffForCourse(user, profile, courseId))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
     }
 
-    const { data: existingFolder } = await supabaseAdmin
-      .from('document_folders')
-      .select('id')
-      .eq('name', `RAG - ${courseName}`)
+    // Beveiliging: vertrouw NOOIT de client-`courseName` voor mapnaam/hergebruik.
+    // Een docent van cursus A zou anders met een gemanipuleerde `courseName` een
+    // RAG-map van cursus B kunnen laten koppelen aan A. Leid de cursusnaam daarom
+    // server-side af uit `courseId` en negeer de meegestuurde `courseName`.
+    const { data: course, error: courseErr } = await supabaseAdmin
+      .from('courses')
+      .select('id, name')
+      .eq('id', courseId)
       .maybeSingle();
+    if (courseErr) return res.status(500).json({ error: courseErr.message });
+    if (!course) return res.status(404).json({ error: 'Cursus niet gevonden' });
 
-    let folderId;
-    if (existingFolder) {
-      folderId = existingFolder.id;
-      console.log(`[create-rag-folder] Reusing existing folder ${folderId} for course ${courseName}`);
-    } else {
-      const { data: newFolder, error: folderError } = await supabaseAdmin
-        .from('document_folders')
-        .insert({
-          name: `RAG - ${courseName}`,
-          description: `RAG-bronnen voor cursus ${courseName}`,
-          parent_folder_id: null,
-          created_by: user.id,
-          folder_type: 'rag_sources',
-          is_root: false,
-        })
-        .select()
-        .single();
-
-      if (folderError || !newFolder) {
-        console.error('[create-rag-folder] folder insert error:', folderError);
-        return res.status(500).json({ error: `Kon RAG-map niet aanmaken: ${folderError?.message}` });
-      }
-
-      folderId = newFolder.id;
-
-      const { error: permError } = await supabaseAdmin
-        .from('folder_permissions')
-        .insert([
-          { folder_id: folderId, role: 'admin', can_view: true, can_edit: true },
-          { folder_id: folderId, role: 'docent', can_view: true, can_edit: true },
-          { folder_id: folderId, role: 'student', can_view: true, can_edit: false },
-        ]);
-
-      if (permError) {
-        console.warn('[create-rag-folder] permissions insert error (non-fatal):', permError.message);
-      }
-
-      console.log(`[create-rag-folder] Created folder ${folderId} for course ${courseName}`);
-    }
-
-    const { data: existingAssignment } = await supabaseAdmin
-      .from('course_folder_assignments')
-      .select('id')
-      .eq('course_id', courseId)
-      .eq('folder_id', folderId)
-      .maybeSingle();
-
-    if (!existingAssignment) {
-      const { error: assignError } = await supabaseAdmin
-        .from('course_folder_assignments')
-        .insert({ course_id: courseId, folder_id: folderId });
-
-      if (assignError) {
-        console.error('[create-rag-folder] assignment insert error:', assignError);
-        return res.status(500).json({ error: `Kon map niet koppelen aan cursus: ${assignError.message}` });
-      }
-      console.log(`[create-rag-folder] Linked folder ${folderId} to course ${courseId}`);
-    }
-
-    return res.json({ folderId, created: !existingFolder });
+    const { folderId, created } = await ensureCourseRagFolder(courseId, course.name, user.id);
+    console.log(`[create-rag-folder] folder ${folderId} for course ${courseId} (created=${created})`);
+    return res.json({ folderId, created });
   } catch (err) {
     console.error('[create-rag-folder] Unexpected error:', err);
     return res.status(500).json({ error: err.message || 'Internal server error' });
@@ -2452,18 +2427,35 @@ async function ensureCourseRagFolder(courseId, courseName, userId) {
     }
   }
 
-  // 2) Anders: zoek op naam (mogelijk al aangemaakt zonder koppeling) of maak nieuw.
-  const { data: existingFolder } = await supabaseAdmin
+  // 2) Anders: zoek op naam (mogelijk al aangemaakt zonder koppeling), maar
+  //    hergebruik ALLEEN een map die nergens hangt of uitsluitend aan déze
+  //    cursus. Hangt een naam-match (ook) aan een ándere cursus, dan komt ze
+  //    NOOIT in aanmerking (anders zou een naam-botsing tot cross-course
+  //    koppeling leiden) → dan maken we een nieuwe map.
+  const { data: namedFolders } = await supabaseAdmin
     .from('document_folders')
     .select('id')
     .eq('name', `RAG - ${courseName}`)
-    .eq('folder_type', 'rag_sources')
-    .maybeSingle();
+    .eq('folder_type', 'rag_sources');
+
+  const assignmentsByFolderId = {};
+  for (const f of namedFolders || []) {
+    const { data: asg } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .select('course_id')
+      .eq('folder_id', f.id);
+    assignmentsByFolderId[f.id] = (asg || []).map((a) => a.course_id).filter(Boolean);
+  }
+  const reusableFolderId = pickReusableRagFolder({
+    folders: namedFolders || [],
+    assignmentsByFolderId,
+    courseId,
+  });
 
   let folderId;
   let created = false;
-  if (existingFolder) {
-    folderId = existingFolder.id;
+  if (reusableFolderId) {
+    folderId = reusableFolderId;
   } else {
     const { data: newFolder, error: folderError } = await supabaseAdmin
       .from('document_folders')
@@ -3107,21 +3099,124 @@ app.put('/api/admin/courses/:id/members/:userId', async (req, res) => {
   return res.json({ ok: true, user_id: userId, course_id: courseId, member_role });
 });
 
+// DELETE /api/admin/courses/:id/members/:userId — verwijder één lid uit een
+// cursus. Toegestaan voor admin/superuser OF voor een per-cursus docent van
+// déze cursus (course_members.member_role='teacher'). Strikt courseId-gescoped.
+// Last-teacher-bescherming: de laatste docent kan niet zomaar verwijderd
+// worden (409, code 'last_teacher') tenzij een admin ?force=1 meestuurt.
+app.delete('/api/admin/courses/:id/members/:userId', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
+  }
+  const r = await resolveAdminUser(req);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+
+  const { id: courseId, userId } = req.params;
+  if (!courseId || !userId) return res.status(400).json({ error: 'Cursus-ID of user-ID ontbreekt' });
+
+  // Autorisatie: admin OR per-cursus docent van déze cursus.
+  const callerIsCourseTeacher = r.isAdmin ? false : await isCourseTeacher(r.user.id, courseId);
+  const authz = authorizeMemberRoleChange({ isAdmin: r.isAdmin, isCourseTeacher: callerIsCourseTeacher });
+  if (!authz.allowed) return res.status(authz.status).json(authz.body);
+
+  const force = parseForceFlag(req.query.force);
+
+  // Atomair pad via pgPool — lock alle membership-rijen, tel docenten,
+  // pas last-teacher-bescherming toe en verwijder pas dan. Een docent
+  // verwijderen telt als demotie (teacher → weg) voor de bescherming.
+  if (pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: lockedRows } = await client.query(
+        'SELECT user_id, member_role FROM course_members WHERE course_id = $1 FOR UPDATE',
+        [courseId]
+      );
+      const existing = lockedRows.find((row) => row.user_id === userId);
+      if (!existing) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Lid niet gevonden in deze cursus' });
+      }
+      const teacherCount = lockedRows.filter((row) => row.member_role === 'teacher').length;
+      const guard = checkLastTeacherProtection({
+        existingMemberRole: existing.member_role,
+        newMemberRole: 'student',
+        teacherCount,
+        isAdmin: r.isAdmin,
+        force,
+      });
+      if (!guard.ok) {
+        await client.query('ROLLBACK');
+        return res.status(guard.status).json(guard.body);
+      }
+      await client.query(
+        'DELETE FROM course_members WHERE course_id = $1 AND user_id = $2',
+        [courseId, userId]
+      );
+      await client.query('COMMIT');
+      return res.json({ ok: true, user_id: userId, course_id: courseId, removed: true });
+    } catch (txErr) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      console.error('[admin members DELETE] tx error', txErr.message);
+      return res.status(500).json({ error: txErr.message });
+    } finally {
+      client.release();
+    }
+  }
+
+  // Fallback zonder directe DB-verbinding (best-effort, niet race-safe).
+  const { data: existing, error: fetchErr } = await supabaseAdmin
+    .from('course_members')
+    .select('member_role')
+    .eq('course_id', courseId).eq('user_id', userId).maybeSingle();
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (!existing) return res.status(404).json({ error: 'Lid niet gevonden in deze cursus' });
+  {
+    const { count, error: cntErr } = await supabaseAdmin
+      .from('course_members')
+      .select('user_id', { count: 'exact', head: true })
+      .eq('course_id', courseId)
+      .eq('member_role', 'teacher');
+    if (cntErr) return res.status(500).json({ error: cntErr.message });
+    const guard = checkLastTeacherProtection({
+      existingMemberRole: existing.member_role,
+      newMemberRole: 'student',
+      teacherCount: count || 0,
+      isAdmin: r.isAdmin,
+      force,
+    });
+    if (!guard.ok) return res.status(guard.status).json(guard.body);
+  }
+  const { error: delErr } = await supabaseAdmin
+    .from('course_members')
+    .delete()
+    .eq('course_id', courseId)
+    .eq('user_id', userId);
+  if (delErr) return res.status(500).json({ error: delErr.message });
+  return res.json({ ok: true, user_id: userId, course_id: courseId, removed: true });
+});
+
 // POST /api/admin/courses/:id/members/:userId — voeg een gebruiker toe aan
 // een cursus met een gegeven member_role ('student' of 'teacher'). Idempotent:
 // als de gebruiker al lid is, wordt diens member_role bijgewerkt (handig om
 // vanuit /admin → Gebruikers iemand direct als docent toe te voegen aan een
-// cursus). Admin-only.
+// cursus). Toegestaan voor admin/superuser OF voor een per-cursus docent van
+// déze cursus (course_members.member_role='teacher'). Strikt courseId-gescoped:
+// een docent van een andere cursus krijgt 403.
 app.post('/api/admin/courses/:id/members/:userId', async (req, res) => {
   if (!supabaseAdmin) {
     return res.status(503).json({ error: 'Admin client not available — SUPABASE_SERVICE_ROLE_KEY missing' });
   }
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen leden toevoegen' });
   const { id: courseId, userId } = req.params;
   const { member_role } = req.body || {};
   if (!courseId || !userId) return res.status(400).json({ error: 'Cursus-ID of user-ID ontbreekt' });
+  // Autorisatie: admin OR per-cursus docent van déze cursus (zelfde helper als
+  // de PUT/DELETE-varianten). Strikt courseId-gescoped.
+  const callerIsCourseTeacher = r.isAdmin ? false : await isCourseTeacher(r.user.id, courseId);
+  const authz = authorizeMemberRoleChange({ isAdmin: r.isAdmin, isCourseTeacher: callerIsCourseTeacher });
+  if (!authz.allowed) return res.status(authz.status).json(authz.body);
   // Dit endpoint is bedoeld om iemand als docent (of student) toe te voegen.
   // Demoties van bestaande docenten lopen via PUT (met last-teacher-bescherming);
   // hier laten we daarom een bestaande teacher-rol NOOIT door dit endpoint
@@ -6331,6 +6426,78 @@ function explainPromptKey(courseId) {
   return `${EXPLAIN_PROMPT_KEY_PREFIX}${courseId}__`;
 }
 
+// Per-cursus tutor-chat-prompt-override (Task #334). Zelfde patroon als de
+// uitleg-prompt: een speciaal-genoemde chatbot_prompts-rij
+// `__chat_prompt_<courseId>__` (section='internal', is_active=false) zodat de
+// globale chat-resolver (`section='chat'`, is_active=true) en de admin-
+// sectieweergave er niet door vervuild raken. Geen schemawijziging nodig.
+const CHAT_PROMPT_KEY_PREFIX = '__chat_prompt_';
+function chatPromptKey(courseId) {
+  return `${CHAT_PROMPT_KEY_PREFIX}${courseId}__`;
+}
+
+// Per-cursus ItemBank-bronconfiguratie (Task #334, stap 5). De globale bron
+// blijft in `__quiz_itembank_config__` (admin-only); een cursus mag een eigen
+// bron-override hebben in `__quiz_itembank_config_<courseId>__`. Net als de
+// chat-prompt-override: section='internal' + is_active=false zodat geen enkele
+// prompt-resolver de rij oppikt. De waarde is JSON {repositoryUrl,lastSyncedAt}.
+const ITEMBANK_CONFIG_GLOBAL_KEY = '__quiz_itembank_config__';
+const ITEMBANK_CONFIG_KEY_PREFIX = '__quiz_itembank_config_';
+function itembankConfigKey(courseId) {
+  return `${ITEMBANK_CONFIG_KEY_PREFIX}${courseId}__`;
+}
+function parseItembankConfig(content) {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed.repositoryUrl === 'string' && parsed.repositoryUrl.trim()) {
+      return { repositoryUrl: parsed.repositoryUrl, lastSyncedAt: parsed.lastSyncedAt };
+    }
+  } catch { /* ongeldige JSON → geen config */ }
+  return null;
+}
+async function loadGlobalItembankConfig() {
+  try {
+    const { data } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('content')
+      .eq('name', ITEMBANK_CONFIG_GLOBAL_KEY)
+      .maybeSingle();
+    return parseItembankConfig(data?.content);
+  } catch (err) {
+    console.warn('[itembank-config] Kon globale config niet laden:', err.message);
+    return null;
+  }
+}
+
+async function loadGlobalChatPrompt() {
+  try {
+    const quizNamesExclude = Object.keys(QUIZ_PROMPT_DEFAULTS);
+    let q = supabaseAdmin
+      .from('chatbot_prompts')
+      .select('id, content')
+      .eq('is_active', true)
+      .not('name', 'like', '__rag_settings%')
+      .not('name', 'like', '__doc_mutation_%')
+      .not('name', 'like', '__concepts_regen_%')
+      .not('name', 'like', '__chat_prompt_%')
+      .not('name', 'like', '__quiz_itembank_config%')
+      .not('name', 'in', `(${quizNamesExclude.map(n => `"${n}"`).join(',')})`)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (promptsHasSection) q = q.eq('section', 'chat');
+    const { data, error } = await q.maybeSingle();
+    if (error) {
+      console.warn('[chat-prompt] Fout bij ophalen globale prompt:', error.message);
+      return { id: null, content: FALLBACK_SYSTEM_PROMPT };
+    }
+    return { id: data?.id ?? null, content: data?.content ?? FALLBACK_SYSTEM_PROMPT };
+  } catch (err) {
+    console.warn('[chat-prompt] Exception bij ophalen globale prompt:', err.message);
+    return { id: null, content: FALLBACK_SYSTEM_PROMPT };
+  }
+}
+
 async function loadGlobalExplainPrompt() {
   const { data, error } = await supabaseAdmin
     .from('chatbot_prompts')
@@ -6485,6 +6652,230 @@ app.get('/api/admin/explain-prompt/overrides', async (req, res) => {
   }
 });
 
+// ── Beheer: per-cursus tutor-chat-prompt (Task #334) ────────────────────────
+// Identiek patroon als de uitleg-prompt-endpoints hierboven: GET geeft de
+// cursus-override (indien aanwezig) plus de globale chat-prompt als referentie;
+// PUT slaat een override op, DELETE verwijdert hem (terug naar globaal). Auth:
+// staff voor de betreffende cursus (admin/superuser overal, docent van déze
+// cursus via isStaffForCourse).
+
+app.get('/api/admin/chat-prompt', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId } = req.query;
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const { data: override } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('content')
+      .eq('name', chatPromptKey(courseId))
+      .maybeSingle();
+    const global = await loadGlobalChatPrompt();
+    const hasOverride = !!(override?.content && override.content.trim());
+    return res.json({
+      hasOverride,
+      content: hasOverride ? override.content : '',
+      globalContent: global.content,
+    });
+  } catch (err) {
+    console.error('[/api/admin/chat-prompt GET] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/chat-prompt', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId, content } = req.body || {};
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+  if (typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'content (niet-leeg) vereist' });
+  }
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const key = chatPromptKey(courseId);
+    const { data: existing } = await supabaseAdmin
+      .from('chatbot_prompts').select('id').eq('name', key).maybeSingle();
+    if (existing) {
+      const { error: updErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ content, updated_at: new Date().toISOString() })
+        .eq('name', key);
+      if (updErr) throw new Error(`DB update mislukt: ${updErr.message}`);
+    } else {
+      const insertRow = { name: key, content, is_active: false };
+      if (promptsHasSection) insertRow.section = 'internal';
+      const { error: insErr } = await supabaseAdmin
+        .from('chatbot_prompts').insert(insertRow);
+      if (insErr) throw new Error(`DB insert mislukt: ${insErr.message}`);
+    }
+    console.log(`[chat-prompt PUT] Saved override for courseId=${courseId} by user=${auth.user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[/api/admin/chat-prompt PUT] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/chat-prompt/:courseId', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId } = req.params;
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const { error: delErr } = await supabaseAdmin
+      .from('chatbot_prompts').delete().eq('name', chatPromptKey(courseId));
+    if (delErr) throw new Error(`DB delete mislukt: ${delErr.message}`);
+    console.log(`[chat-prompt DELETE] Removed override for courseId=${courseId} by user=${auth.user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[/api/admin/chat-prompt DELETE] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/chat-prompt/overrides', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  if (!(await isStaffAnywhere(auth.user, auth.profile))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('name')
+      .like('name', `${CHAT_PROMPT_KEY_PREFIX}%`);
+    if (error) throw new Error(error.message);
+    const courseIds = (data || []).map(row => {
+      const m = row.name.match(/^__chat_prompt_(.+)__$/);
+      return m ? m[1] : null;
+    }).filter(Boolean);
+    return res.json({ courseIds });
+  } catch (err) {
+    console.error('[/api/admin/chat-prompt/overrides GET] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-cursus ItemBank-bronconfiguratie (Task #334, stap 5).
+// GET ?courseId= → de effectieve bron voor de cursus (eigen override of globale
+// terugval). PUT { courseId, repositoryUrl, lastSyncedAt? } → schrijf de
+// override. DELETE /:courseId → verwijder de override (terug naar globaal).
+// Zonder courseId betreft het de GLOBALE bron en geldt admin-only. Alle
+// schrijfacties lopen via service-role met een per-cursus docentcheck, zodat
+// docenten niet langer rechtstreeks naar de admin-only chatbot_prompts-tabel
+// hoeven te schrijven (wat voorheen faalde).
+function isAdminAuth(auth) {
+  return auth.profile?.role === 'admin' || auth.profile?.email === SUPERUSER_EMAIL;
+}
+
+app.get('/api/admin/itembank-config', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId } = req.query;
+  try {
+    const global = await loadGlobalItembankConfig();
+    if (!courseId) {
+      if (!isAdminAuth(auth)) return res.status(403).json({ error: 'Onvoldoende rechten' });
+      return res.json({
+        scope: 'global',
+        hasOverride: !!global,
+        repositoryUrl: global?.repositoryUrl || '',
+        lastSyncedAt: global?.lastSyncedAt,
+        globalRepositoryUrl: global?.repositoryUrl || '',
+      });
+    }
+    if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Onvoldoende rechten' });
+    }
+    const { data: row } = await supabaseAdmin
+      .from('chatbot_prompts')
+      .select('content')
+      .eq('name', itembankConfigKey(courseId))
+      .maybeSingle();
+    const override = parseItembankConfig(row?.content);
+    const effective = override || global;
+    return res.json({
+      scope: 'course',
+      hasOverride: !!override,
+      repositoryUrl: effective?.repositoryUrl || '',
+      lastSyncedAt: effective?.lastSyncedAt,
+      globalRepositoryUrl: global?.repositoryUrl || '',
+    });
+  } catch (err) {
+    console.error('[/api/admin/itembank-config GET] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/itembank-config', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId, repositoryUrl, lastSyncedAt } = req.body || {};
+  if (typeof repositoryUrl !== 'string' || !repositoryUrl.trim()) {
+    return res.status(400).json({ error: 'repositoryUrl (niet-leeg) vereist' });
+  }
+  if (courseId) {
+    if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Onvoldoende rechten' });
+    }
+  } else if (!isAdminAuth(auth)) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  const key = courseId ? itembankConfigKey(courseId) : ITEMBANK_CONFIG_GLOBAL_KEY;
+  const content = JSON.stringify({ repositoryUrl: repositoryUrl.trim(), lastSyncedAt });
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from('chatbot_prompts').select('id').eq('name', key).maybeSingle();
+    if (existing) {
+      const { error: updErr } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .update({ content, is_active: false, updated_at: new Date().toISOString() })
+        .eq('name', key);
+      if (updErr) throw new Error(`DB update mislukt: ${updErr.message}`);
+    } else {
+      const insertRow = { name: key, content, is_active: false };
+      if (promptsHasSection) insertRow.section = 'internal';
+      const { error: insErr } = await supabaseAdmin
+        .from('chatbot_prompts').insert(insertRow);
+      if (insErr) throw new Error(`DB insert mislukt: ${insErr.message}`);
+    }
+    console.log(`[itembank-config PUT] Saved ${courseId ? `courseId=${courseId}` : 'global'} by user=${auth.user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[/api/admin/itembank-config PUT] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/itembank-config/:courseId', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
+  const { courseId } = req.params;
+  if (!courseId) return res.status(400).json({ error: 'courseId vereist' });
+  if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+    return res.status(403).json({ error: 'Onvoldoende rechten' });
+  }
+  try {
+    const { error: delErr } = await supabaseAdmin
+      .from('chatbot_prompts').delete().eq('name', itembankConfigKey(courseId));
+    if (delErr) throw new Error(`DB delete mislukt: ${delErr.message}`);
+    console.log(`[itembank-config DELETE] Removed override for courseId=${courseId} by user=${auth.user.id}`);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[/api/admin/itembank-config DELETE] Error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -6524,7 +6915,7 @@ app.get('/api/debug/active-prompts', async (req, res) => {
       .not('name', 'like', '__rag_settings%')
       .not('name', 'like', '__doc_mutation_%')
       .not('name', 'like', '__concepts_regen_%')
-      .neq('name', '__quiz_itembank_config__')
+      .not('name', 'like', '__quiz_itembank_config%')
       .not('name', 'in', `(${quizNamesExclude.map(n => `"${n}"`).join(',')})`)
       .order('updated_at', { ascending: false })
       .limit(1);

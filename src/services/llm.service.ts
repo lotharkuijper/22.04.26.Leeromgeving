@@ -173,7 +173,8 @@ export async function sendChatMessage(
   context?: string,
   ragStrictMode?: boolean,
   sources?: Array<{ title: string; similarity: number }>,
-  learningLevel?: number
+  learningLevel?: number,
+  courseId?: string
 ): Promise<LLMResponse> {
   try {
     const userMessages = messages.filter(m => m.role !== 'system');
@@ -188,6 +189,7 @@ export async function sendChatMessage(
       ragStrictMode: ragStrictMode ?? false,
       sources: sources && sources.length > 0 ? sources : undefined,
       learningLevel,
+      courseId,
     });
 
     const content = data.choices[0]?.message?.content;
