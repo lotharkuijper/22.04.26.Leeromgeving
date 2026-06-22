@@ -13585,6 +13585,12 @@ async function runOrphanThreadReadsCleanupOnce() {
     if (lastSeen > 0) {
       console.log(`[studiecafe-reads-cleanup] ${lastSeen} wees-'laatst gezien'-rij(en) opgeruimd (toegang verlopen).`);
     }
+    // Task #329: zelf-ingesteld leerniveau per cursus (student_course_levels)
+    // heeft hetzelfde wees-probleem; ruim het met dezelfde regels op.
+    const levels = await cleanupOrphanTableOnce('student_course_levels');
+    if (levels > 0) {
+      console.log(`[studiecafe-reads-cleanup] ${levels} wees-leerniveau-rij(en) opgeruimd (toegang verlopen).`);
+    }
   } finally {
     readsCleanupRunning = false;
   }

@@ -270,9 +270,24 @@ describe('buildOrphanCourseAccessCleanupSql (Task #325)', () => {
     expect(() => buildOrphanCourseAccessCleanupSql('courses; DROP TABLE x', true)).toThrow();
     expect(() => buildOrphanCourseAccessCleanupSql('profiles', true)).toThrow();
   });
-  it('whitelist bevat beide tabellen', () => {
+  it('ondersteunt student_course_levels met dezelfde toegangsregels (Task #329)', () => {
+    const sql = buildOrphanCourseAccessCleanupSql('student_course_levels', true);
+    expect(sql).toContain('DELETE FROM student_course_levels');
+    expect(sql).toContain('USING courses c');
+    expect(sql).toContain('c.student_visible = false OR c.is_active = false');
+    expect(sql).toContain("c.student_visible = false AND m.member_role = 'teacher'");
+    expect(sql).toContain("p.role = 'admin' OR p.email = $1");
+  });
+  it('zonder student_visible-kolom: alleen gearchiveerde cursussen voor student_course_levels', () => {
+    const sql = buildOrphanCourseAccessCleanupSql('student_course_levels', false);
+    expect(sql).toContain('DELETE FROM student_course_levels');
+    expect(sql).toContain('c.is_active = false');
+    expect(sql).not.toContain('student_visible');
+  });
+  it('whitelist bevat alle tabellen', () => {
     expect(ORPHAN_CLEANUP_TABLES).toContain('studiecafe_thread_reads');
     expect(ORPHAN_CLEANUP_TABLES).toContain('studiecafe_last_seen');
+    expect(ORPHAN_CLEANUP_TABLES).toContain('student_course_levels');
   });
 });
 

@@ -298,15 +298,20 @@ export function buildSoftDeleteRedaction({ ts, userId, isThread } = {}) {
 // rij waarvan de gebruiker geen toegang meer heeft. Admins/superuser houden
 // altijd toegang en worden nooit opgeruimd.
 //
-// Geldt voor twee tabellen met dezelfde (user_id, course_id)-vorm:
+// Geldt voor meerdere tabellen met dezelfde (user_id, course_id)-vorm:
 //   - studiecafe_thread_reads (per-thread leesmarkeringen, Task #323);
-//   - studiecafe_last_seen   (per-cursus zachte-uitrol-vloer, Task #325).
-// Beide laten wees-rijen achter bij toegangsverlies; dezelfde regels gelden.
+//   - studiecafe_last_seen    (per-cursus zachte-uitrol-vloer, Task #325);
+//   - student_course_levels   (zelf-ingesteld leerniveau per cursus, Task #296).
+// Alle laten wees-rijen achter bij toegangsverlies; dezelfde regels gelden.
 //
 // `hasStudentVisible` schakelt de student_visible-tak uit op een oude DB zonder
 // die kolom (dan geldt elke cursus als zichtbaar → enkel de archief-regel telt).
 // $1 = superuser-e-mailadres.
-export const ORPHAN_CLEANUP_TABLES = ['studiecafe_thread_reads', 'studiecafe_last_seen'];
+export const ORPHAN_CLEANUP_TABLES = [
+  'studiecafe_thread_reads',
+  'studiecafe_last_seen',
+  'student_course_levels',
+];
 
 export function buildOrphanCourseAccessCleanupSql(table, hasStudentVisible = true) {
   // Whitelist de tabelnaam vóór interpolatie (defensief tegen injectie, ook al
