@@ -18,6 +18,7 @@ import {
   canSetResolved,
   canReplyToThread,
   buildSoftDeleteRedaction,
+  buildOrphanThreadReadsCleanupSql,
   toggleReactionAtomicPg,
   toggleKudosAtomicPg,
   REACTION_TABLES,
@@ -208,6 +209,35 @@ describe('buildSoftDeleteRedaction', () => {
     for (const k of ['body', 'title']) expect(f[k]).toBe('');
     for (const k of ['author_id', 'kudos_by', 'kudos_at']) expect(f[k]).toBeNull();
     expect(f.reactions).toEqual({});
+  });
+});
+
+describe('buildOrphanThreadReadsCleanupSql (Task #323)', () => {
+  it('verwijdert read-rijen uit studiecafe_thread_reads', () => {
+    const sql = buildOrphanThreadReadsCleanupSql(true);
+    expect(sql).toContain('DELETE FROM studiecafe_thread_reads');
+    expect(sql).toContain('USING courses c');
+  });
+  it('met student_visible: ruimt verborgen én gearchiveerde cursussen op', () => {
+    const sql = buildOrphanThreadReadsCleanupSql(true);
+    // Niet-open cursus = verborgen OF inactief.
+    expect(sql).toContain('c.student_visible = false OR c.is_active = false');
+    // Verborgen cursus: alleen docenten houden toegang.
+    expect(sql).toContain("c.student_visible = false AND m.member_role = 'teacher'");
+    // Gearchiveerd maar zichtbaar: elk lid houdt toegang.
+    expect(sql).toContain('c.student_visible IS DISTINCT FROM false AND c.is_active = false');
+  });
+  it('spaart admins/superuser via de profiles-uitsluiting', () => {
+    const sql = buildOrphanThreadReadsCleanupSql(true);
+    expect(sql).toContain('FROM profiles p');
+    expect(sql).toContain("p.role = 'admin' OR p.email = $1");
+  });
+  it('zonder student_visible-kolom: alleen gearchiveerde cursussen, leden behouden', () => {
+    const sql = buildOrphanThreadReadsCleanupSql(false);
+    expect(sql).toContain('c.is_active = false');
+    expect(sql).not.toContain('student_visible');
+    // Elk lid (ongeacht rol) blijft gespaard op een oude DB.
+    expect(sql).toContain('FROM course_members m');
   });
 });
 

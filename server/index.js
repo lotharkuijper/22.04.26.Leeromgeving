@@ -81,7 +81,7 @@ import {
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
-import { registerStudiecafeRoutes } from './studiecafe.js';
+import { registerStudiecafeRoutes, buildOrphanThreadReadsCleanupSql } from './studiecafe.js';
 import {
   groupPendingByUser,
   partitionByPrefs,
@@ -13134,6 +13134,51 @@ async function runStudiecafeDigestOnce() {
   }
 }
 
+// ── Studiecafé: opruimen van wees-leesmarkeringen (Task #323) ───────────────
+// Een student verliest toegang tot een cursus wanneer die verborgen of
+// gearchiveerd wordt (toegang is zichtbaarheids-gebaseerd, dus er is geen
+// course_members-rij om op te cascaden). De ON DELETE CASCADE op course_id ruimt
+// alleen op bij echte cursus-VERWIJDERING. Deze periodieke job verwijdert daarom
+// studiecafe_thread_reads-rijen waarvan de gebruiker geen toegang meer heeft
+// (gespiegeld op canAccessCourseContent). Vereist pgPool (directe Postgres-
+// verbinding) voor het set-gewijze NOT EXISTS-werk; zonder pgPool wordt de cyclus
+// stil overgeslagen. Defensief: ontbrekende tabel/kolom breekt niets af.
+const READS_CLEANUP_INTERVAL_MS = Number(process.env.STUDIECAFE_READS_CLEANUP_INTERVAL_MS) || 21600000; // 6 uur
+let readsCleanupRunning = false;
+async function runOrphanThreadReadsCleanupOnce() {
+  if (readsCleanupRunning) return;
+  if (!pgPool) return; // zonder directe Postgres-verbinding: niets te doen
+  readsCleanupRunning = true;
+  try {
+    let result;
+    try {
+      result = await pgPool.query(buildOrphanThreadReadsCleanupSql(coursesHasStudentVisible), [SUPERUSER_EMAIL]);
+    } catch (err) {
+      // 42P01 = tabel ontbreekt (oude DB); 42703 = student_visible-kolom ontbreekt
+      // toch → val terug op de variant zonder die kolom.
+      if (err && err.code === '42703') {
+        try {
+          result = await pgPool.query(buildOrphanThreadReadsCleanupSql(false), [SUPERUSER_EMAIL]);
+        } catch (err2) {
+          if (err2 && err2.code === '42P01') return;
+          console.warn('[studiecafe-reads-cleanup] fallback mislukt:', err2.message);
+          return;
+        }
+      } else {
+        if (err && err.code === '42P01') return;
+        console.warn('[studiecafe-reads-cleanup] mislukt:', err.message);
+        return;
+      }
+    }
+    const removed = result && typeof result.rowCount === 'number' ? result.rowCount : 0;
+    if (removed > 0) {
+      console.log(`[studiecafe-reads-cleanup] ${removed} wees-leesmarkering(en) opgeruimd (toegang verlopen).`);
+    }
+  } finally {
+    readsCleanupRunning = false;
+  }
+}
+
 // In de testomgeving importeren we de app zonder de poort te openen of de
 // schema-detectie/seeding te draaien; integratietests mounten `app` zelf op een
 // efemere poort (zie server/__tests__/chatEndpoint.test.js).
@@ -13165,6 +13210,16 @@ if (process.env.NODE_ENV !== 'test') {
       runStudiecafeDigestOnce().catch((e) => console.warn('[studiecafe-digest] cyclus mislukt:', e.message));
     }, DIGEST_INTERVAL_MS);
     if (typeof digestTimer.unref === 'function') digestTimer.unref();
+    // Studiecafé wees-leesmarkering-opruimer (Task #323): periodiek read-rijen
+    // verwijderen van studenten die geen toegang meer hebben tot de cursus.
+    // Eénmaal kort na startup en daarna op interval.
+    setTimeout(() => {
+      runOrphanThreadReadsCleanupOnce().catch((e) => console.warn('[studiecafe-reads-cleanup] cyclus mislukt:', e.message));
+    }, 10000).unref?.();
+    const readsCleanupTimer = setInterval(() => {
+      runOrphanThreadReadsCleanupOnce().catch((e) => console.warn('[studiecafe-reads-cleanup] cyclus mislukt:', e.message));
+    }, READS_CLEANUP_INTERVAL_MS);
+    if (typeof readsCleanupTimer.unref === 'function') readsCleanupTimer.unref();
   });
 }
 

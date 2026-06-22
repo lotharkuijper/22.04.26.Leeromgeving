@@ -284,6 +284,56 @@ export function buildSoftDeleteRedaction({ ts, userId, isThread } = {}) {
   return fields;
 }
 
+// ── Opruimen van wees-leesmarkeringen (Task #323) ───────────────────────────
+// Toegang tot een cursus is ZICHTBAARHEIDS-gebaseerd (zie userHasCourseAccess /
+// canAccessCourseContent), niet membership-gebaseerd. Daardoor blijven
+// studiecafe_thread_reads-rijen achter wanneer een student de toegang verliest
+// ZONDER dat de cursus wordt verwijderd (de ON DELETE CASCADE op course_id dekt
+// alleen echte cursus-verwijdering). Concreet verliest een student toegang als:
+//   - de cursus verborgen wordt (student_visible=false) → alleen docenten houden
+//     toegang;
+//   - de cursus gearchiveerd wordt (is_active=false) → alleen leden + docenten.
+// Een actieve, zichtbare cursus is open voor iedereen, dus daar wordt nooit iets
+// opgeruimd. Deze SQL spiegelt canAccessCourseContent exact en verwijdert elke
+// read-rij waarvan de gebruiker geen toegang meer heeft. Admins/superuser houden
+// altijd toegang en worden nooit opgeruimd.
+//
+// `hasStudentVisible` schakelt de student_visible-tak uit op een oude DB zonder
+// die kolom (dan geldt elke cursus als zichtbaar → enkel de archief-regel telt).
+// $1 = superuser-e-mailadres.
+export function buildOrphanThreadReadsCleanupSql(hasStudentVisible = true) {
+  const notAdmin = `NOT EXISTS (
+      SELECT 1 FROM profiles p
+      WHERE p.id = r.user_id AND (p.role = 'admin' OR p.email = $1)
+    )`;
+  if (!hasStudentVisible) {
+    // Zonder student_visible: alleen gearchiveerde cursussen ruimen op; leden
+    // (incl. docenten) houden toegang.
+    return `DELETE FROM studiecafe_thread_reads r
+  USING courses c
+  WHERE r.course_id = c.id
+    AND c.is_active = false
+    AND ${notAdmin}
+    AND NOT EXISTS (
+      SELECT 1 FROM course_members m
+      WHERE m.course_id = c.id AND m.user_id = r.user_id
+    )`;
+  }
+  return `DELETE FROM studiecafe_thread_reads r
+  USING courses c
+  WHERE r.course_id = c.id
+    AND (c.student_visible = false OR c.is_active = false)
+    AND ${notAdmin}
+    AND NOT EXISTS (
+      SELECT 1 FROM course_members m
+      WHERE m.course_id = c.id AND m.user_id = r.user_id
+        AND (
+          (c.student_visible = false AND m.member_role = 'teacher')
+          OR (c.student_visible IS DISTINCT FROM false AND c.is_active = false)
+        )
+    )`;
+}
+
 // ── Route-registratie ───────────────────────────────────────────────────────
 export function registerStudiecafeRoutes(app, deps) {
   const {
