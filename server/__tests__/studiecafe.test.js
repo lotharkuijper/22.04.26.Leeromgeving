@@ -1130,6 +1130,169 @@ describe('studiecafe endpoints — feed auteursnamen + kijker-vlaggen (Task #344
   });
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// Reply-vormgeving (Task #348): de GET /threads/:threadId/replies-handler draait
+// dezelfde buildNameResolver + shapeReply als de feed (Task #344), maar voor
+// replies: opgeloste auteursnaam (uit de profiles-seed), de pluim-gever-naam en
+// de kijker-relatieve "mine"/isMine-vlaggen berekend tegen auth.user.id. Voor een
+// soft-verwijderde reply geeft shapeReply een volledig geredigeerde vorm terug
+// (deleted:true, lege body, null authorName, lege reacties). Dit niet-verwijderde
+// pad werd alleen indirect uitgeoefend; een regressie zou de verkeerde auteur
+// kunnen tonen of "mine" tegen de verkeerde gebruiker kunnen berekenen zonder dat
+// de bestaande soft-delete-redactie-tests dit vangen.
+// ───────────────────────────────────────────────────────────────────────────
+describe('studiecafe endpoints — reply auteursnamen + kijker-vlaggen (Task #348)', () => {
+  it('lost de auteursnaam op uit de profiles-seed (full_name)', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [replyRow({ id: 'r-1', thread_id: 't-1', author_id: 'stu-9' })],
+      profiles: [{ id: 'stu-9', full_name: 'Anna Student', email: 'anna@vu.nl' }],
+    });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    const [r] = res.body.replies;
+    expect(r.authorId).toBe('stu-9');
+    expect(r.authorName).toBe('Anna Student');
+    expect(r.deleted).toBe(false);
+  });
+
+  it('valt terug op het e-mail-prefix als full_name ontbreekt', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [replyRow({ id: 'r-1', thread_id: 't-1', author_id: 'stu-9' })],
+      profiles: [{ id: 'stu-9', full_name: null, email: 'bram@vu.nl' }],
+    });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.body.replies[0].authorName).toBe('bram');
+  });
+
+  it('geeft "Onbekend" als de auteur niet in de profiles-seed staat', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [replyRow({ id: 'r-1', thread_id: 't-1', author_id: 'spook' })],
+      profiles: [],
+    });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.body.replies[0].authorName).toBe('Onbekend');
+  });
+
+  it('lost de pluim-gever-naam op en vormt het kudos-object', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [
+        replyRow({
+          id: 'r-1',
+          thread_id: 't-1',
+          author_id: 'stu-9',
+          kudos_by: 'doc-1',
+          kudos_at: '2026-06-21T12:00:00.000Z',
+        }),
+      ],
+      profiles: [
+        { id: 'stu-9', full_name: 'Anna Student', email: 'anna@vu.nl' },
+        { id: 'doc-1', full_name: 'Docent Karel', email: 'karel@vu.nl' },
+      ],
+    });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.body.replies[0].kudos).toEqual({
+      by: 'doc-1',
+      byName: 'Docent Karel',
+      at: '2026-06-21T12:00:00.000Z',
+    });
+  });
+
+  it('geeft kudos=null als er geen pluim is gegeven', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [replyRow({ id: 'r-1', thread_id: 't-1', kudos_by: null, kudos_at: null })],
+    });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.body.replies[0].kudos).toBeNull();
+  });
+
+  it('berekent reactie-"mine" en isMine tegen de ingelogde gebruiker (auth.user.id)', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [
+        replyRow({
+          id: 'r-1',
+          thread_id: 't-1',
+          author_id: 'stu-1',
+          reactions: { '👍': ['stu-1', 'andere'], '❤️': ['andere'] },
+        }),
+      ],
+    });
+    ctx.userId = 'stu-1';
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    const [r] = res.body.replies;
+    expect(r.isMine).toBe(true);
+    expect(r.reactions).toEqual([
+      { emoji: '👍', count: 2, mine: true },
+      { emoji: '❤️', count: 1, mine: false },
+    ]);
+  });
+
+  it('"mine"/isMine zijn false voor een andere kijker dan de reagent/auteur', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [
+        replyRow({
+          id: 'r-1',
+          thread_id: 't-1',
+          author_id: 'stu-1',
+          reactions: { '👍': ['stu-1'] },
+        }),
+      ],
+    });
+    ctx.userId = 'kijker-2';
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    const [r] = res.body.replies;
+    expect(r.isMine).toBe(false);
+    expect(r.reactions).toEqual([{ emoji: '👍', count: 1, mine: false }]);
+  });
+
+  it('geeft een soft-verwijderde reply in de volledig geredigeerde vorm terug', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [
+        replyRow({
+          id: 'r-del',
+          thread_id: 't-1',
+          author_id: 'stu-9',
+          body: 'geheim',
+          kudos_by: 'doc-1',
+          kudos_at: '2026-06-21T12:00:00.000Z',
+          reactions: { '👍': ['stu-1'] },
+          deleted_at: '2026-06-21T13:00:00.000Z',
+        }),
+      ],
+      profiles: [{ id: 'stu-9', full_name: 'Anna Student', email: 'anna@vu.nl' }],
+    });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    const [r] = res.body.replies;
+    expect(r.deleted).toBe(true);
+    expect(r.body).toBe('');
+    expect(r.authorName).toBeNull();
+    expect(r.reactions).toEqual([]);
+    expect(r.kudos).toBeNull();
+    expect(r.isMine).toBe(false);
+    // De geredigeerde vorm lekt geen auteur-id of resterende inhoud.
+    expect(r.authorId).toBeUndefined();
+  });
+
+  it('de envelope weerspiegelt isStaffForCourse + de auth-gebruiker (staff)', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_replies: [replyRow({ id: 'r-1', thread_id: 't-1' })],
+    });
+    ctx.userId = 'doc-7';
+    ctx.isStaff = true;
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.body.isStaff).toBe(true);
+    expect(res.body.currentUserId).toBe('doc-7');
+  });
+});
+
 describe('studiecafe endpoints — cross-course IDOR (gelekt id uit andere cursus)', () => {
   // Telkens: de gebruiker heeft toegang tot cursus A, maar het doel-id hoort bij
   // cursus B. De handler moet 404 geven (niet de rij uit B teruggeven/muteren).
