@@ -676,8 +676,9 @@ class Builder {
     if (!cols) return null;
     const payload = this._insert || this._patch || this._upsert;
     if (!payload) return null;
+    const payloads = Array.isArray(payload) ? payload : [payload];
     for (const c of cols) {
-      if (Object.prototype.hasOwnProperty.call(payload, c)) {
+      if (payloads.some((p) => Object.prototype.hasOwnProperty.call(p, c))) {
         return { message: `column "${c}" does not exist` };
       }
     }
@@ -705,16 +706,22 @@ class Builder {
     if (this.mode === 'upsert') {
       const conflictCols = this._onConflict.split(',').map((s) => s.trim()).filter(Boolean);
       const rows = this._rows();
-      const existing = conflictCols.length
-        ? rows.find((r) => conflictCols.every((c) => r[c] === this._upsert[c]))
-        : null;
-      if (existing) {
-        Object.assign(existing, this._upsert);
-        return [{ ...existing }];
+      const payloads = Array.isArray(this._upsert) ? this._upsert : [this._upsert];
+      const out = [];
+      for (const payload of payloads) {
+        const existing = conflictCols.length
+          ? rows.find((r) => conflictCols.every((c) => r[c] === payload[c]))
+          : null;
+        if (existing) {
+          Object.assign(existing, payload);
+          out.push({ ...existing });
+        } else {
+          const row = { id: `${this.table}-${this.store._seq++}`, ...payload };
+          rows.push(row);
+          out.push({ ...row });
+        }
       }
-      const row = { id: `${this.table}-${this.store._seq++}`, ...this._upsert };
-      rows.push(row);
-      return [{ ...row }];
+      return out;
     }
     if (this.mode === 'delete') {
       const rows = this._rows();
@@ -813,6 +820,7 @@ const R = {
   markRead: 'POST /api/studiecafe/:courseId/threads/:threadId/read',
   markUnread: 'POST /api/studiecafe/:courseId/threads/:threadId/unread',
   seen: 'POST /api/studiecafe/:courseId/seen',
+  readAll: 'POST /api/studiecafe/:courseId/read-all',
 };
 
 function threadRow(over = {}) {
@@ -2156,5 +2164,95 @@ describe('studiecafe endpoints — POST /seen (Task #340)', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(false);
     expect(res.body.lastSeenAt).toBeTruthy();
+  });
+});
+
+describe('studiecafe endpoints — POST /read-all (Task #342)', () => {
+  it('zonder cursustoegang → 403, niets geschreven', async () => {
+    const { ctx, call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    ctx.hasAccess = false;
+    const res = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+  });
+
+  it('upsert een read-rij voor elke niet-verwijderde thread van de cursus', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-1' }),
+        threadRow({ id: 't-2' }),
+      ],
+    });
+    const res = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.readAt).toBeTruthy();
+    expect(res.body.threadIds.sort()).toEqual(['t-1', 't-2']);
+    expect(store.studiecafe_thread_reads).toHaveLength(2);
+    for (const row of store.studiecafe_thread_reads) {
+      expect(row).toMatchObject({
+        user_id: 'stu-1', course_id: COURSE_A,
+        read_at: res.body.readAt, manual_unread: false,
+      });
+    }
+  });
+
+  it('is gescoped op de cursus en slaat verwijderde threads over', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-A', course_id: COURSE_A }),
+        threadRow({ id: 't-A-del', course_id: COURSE_A, deleted_at: '2026-06-21T11:00:00.000Z' }),
+        threadRow({ id: 't-B', course_id: COURSE_B }),
+      ],
+    });
+    const res = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.threadIds).toEqual(['t-A']);
+    expect(store.studiecafe_thread_reads).toHaveLength(1);
+    expect(store.studiecafe_thread_reads[0]).toMatchObject({
+      thread_id: 't-A', course_id: COURSE_A,
+    });
+  });
+
+  it('heft eerdere bewust-ongelezen markeringen op (manual_unread→false, geen dubbele rij)', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1' })],
+      studiecafe_thread_reads: [{
+        user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1',
+        read_at: '2026-06-20T09:00:00.000Z', manual_unread: true,
+      }],
+    });
+    const res = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_thread_reads).toHaveLength(1);
+    const row = store.studiecafe_thread_reads[0];
+    expect(row.manual_unread).toBe(false);
+    expect(row.read_at).toBe(res.body.readAt);
+    expect(row.read_at).not.toBe('2026-06-20T09:00:00.000Z');
+  });
+
+  it('zonder threads → ok met lege threadIds, niets geschreven', async () => {
+    const { call, store } = setup({ studiecafe_threads: [] });
+    const res = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.threadIds).toEqual([]);
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+  });
+
+  it('legacy DB zonder manual_unread-kolom: schrijft via de fallback zonder die kolom', async () => {
+    const { call, store } = setup(
+      { studiecafe_threads: [threadRow({ id: 't-1' }), threadRow({ id: 't-2' })] },
+      { rejectColumns: ['manual_unread'] },
+    );
+    const res = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.threadIds.sort()).toEqual(['t-1', 't-2']);
+    expect(store.studiecafe_thread_reads).toHaveLength(2);
+    for (const row of store.studiecafe_thread_reads) {
+      expect(row.read_at).toBe(res.body.readAt);
+      expect('manual_unread' in row).toBe(false);
+    }
   });
 });
