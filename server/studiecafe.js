@@ -207,15 +207,20 @@ export async function toggleKudosAtomicPg({ pgPool, table, targetId, courseId, u
   }
 }
 
-// ── Per-thread ongelezen-indicator (Task #312) ──────────────────────────────
+// ── Per-thread ongelezen-indicator (Task #312/#327) ─────────────────────────
 // Een thread is ongelezen voor deze lezer wanneer zijn laatste activiteit ná de
 // zachte-uitrol-vloer (per-cursus last_seen) ligt ÉN de lezer hem sindsdien niet
 // heeft geopend: geen read-rij, of de read is ouder dan de laatste activiteit.
+//   manualUnread true (bewust ongelezen)      ⇒ ALTIJD ongelezen (omzeilt de vloer).
 //   floorAt null  (cursus nooit bezocht)      ⇒ niets ongelezen (zachte uitrol).
 //   activiteit ≤ floorAt (vóór eerste bezoek) ⇒ gelezen (backlog onderdrukt).
 //   threadReadAt ≥ activiteit (geopend)       ⇒ gelezen.
-export function isThreadUnreadFor(lastActivityAt, floorAt, threadReadAt) {
-  if (!lastActivityAt || !floorAt) return false;
+// Task #327: de manualUnread-marker laat een student ELK gesprek (ook backlog vóór
+// de vloer) weer als "nieuw" tonen; hij omzeilt daarom de vloer- en read-checks.
+export function isThreadUnreadFor(lastActivityAt, floorAt, threadReadAt, manualUnread) {
+  if (!lastActivityAt) return false;
+  if (manualUnread) return true;
+  if (!floorAt) return false;
   if (lastActivityAt <= floorAt) return false;
   if (threadReadAt && lastActivityAt <= threadReadAt) return false;
   return true;
@@ -224,16 +229,20 @@ export function isThreadUnreadFor(lastActivityAt, floorAt, threadReadAt) {
 // Tel ongelezen threads voor de nav-badge met per-thread leesstatus. readMap mag
 // een Map of een plain object (thread_id → read_at ISO) zijn. Splitst
 // aankondigingen apart zodat de UI die kan benadrukken.
-export function summarizeUnreadThreads(threads, floorAt, readMap) {
+// manualUnreadSet (Task #327): optionele Set/array van thread-ids die de lezer
+// bewust weer als ongelezen heeft gemarkeerd; die tellen altijd mee, ook backlog.
+export function summarizeUnreadThreads(threads, floorAt, readMap, manualUnreadSet) {
   const out = { count: 0, announcementCount: 0, latestActivityAt: null };
   if (!Array.isArray(threads)) return out;
   const reads = readMap instanceof Map ? readMap : new Map(Object.entries(readMap || {}));
+  const manual = manualUnreadSet instanceof Set ? manualUnreadSet : new Set(manualUnreadSet || []);
   for (const th of threads) {
     const act = th && th.last_activity_at;
     if (!act) continue;
     if (!out.latestActivityAt || act > out.latestActivityAt) out.latestActivityAt = act;
     const readAt = th.id ? reads.get(th.id) || null : null;
-    if (isThreadUnreadFor(act, floorAt, readAt)) {
+    const isManual = th.id ? manual.has(th.id) : false;
+    if (isThreadUnreadFor(act, floorAt, readAt, isManual)) {
       out.count += 1;
       if (th.is_announcement) out.announcementCount += 1;
     }
@@ -560,52 +569,95 @@ export function registerStudiecafeRoutes(app, deps) {
   }
 
   // Lees alle per-thread leesmomenten van één gebruiker binnen één cursus
-  // (Task #312) → Map thread_id → read_at. Defensief: ontbrekende tabel ⇒ lege Map
-  // zodat de feed gewoon blijft werken (geen per-thread markeringen).
+  // (Task #312/#327) → { reads: Map thread_id → read_at, manual: Set thread_id }.
+  // De manual-Set bevat threads die de gebruiker bewust weer als ongelezen heeft
+  // gemarkeerd (Task #327). Defensief: ontbrekende tabel ⇒ leeg; ontbrekende
+  // manual_unread-kolom (oude DB) ⇒ retry zonder de kolom zodat de feed blijft
+  // werken (geen handmatige markeringen).
   async function getThreadReads(userId, courseId) {
-    const map = new Map();
+    const reads = new Map();
+    const manual = new Set();
+    const fill = (rows) => {
+      for (const r of rows || []) {
+        if (r.read_at) reads.set(r.thread_id, r.read_at);
+        if (r.manual_unread) manual.add(r.thread_id);
+      }
+    };
     try {
       const { data, error } = await supabaseAdmin
         .from('studiecafe_thread_reads')
-        .select('thread_id, read_at')
+        .select('thread_id, read_at, manual_unread')
         .eq('user_id', userId)
         .eq('course_id', courseId);
-      if (error) return map;
-      for (const r of data || []) map.set(r.thread_id, r.read_at);
-      return map;
+      if (!error) {
+        fill(data);
+        return { reads, manual };
+      }
+      // Kolom manual_unread ontbreekt nog (migratie #327 niet toegepast) → retry.
+      if (/manual_unread/.test(error.message || '')) {
+        const { data: d2, error: e2 } = await supabaseAdmin
+          .from('studiecafe_thread_reads')
+          .select('thread_id, read_at')
+          .eq('user_id', userId)
+          .eq('course_id', courseId);
+        if (!e2) fill(d2);
+      }
+      return { reads, manual };
     } catch {
-      return map;
+      return { reads, manual };
     }
   }
 
   // Markeer één thread als gelezen voor deze gebruiker (Task #312). Upsert per
-  // (user, thread). Defensief: ontbrekende tabel/fout ⇒ stil falen (de feed werkt
-  // door, de markering blijft alleen staan).
+  // (user, thread) met read_at=now() én manual_unread=false zodat openen een
+  // eerder bewust-ongelezen markering (Task #327) opheft. Defensief: ontbrekende
+  // manual_unread-kolom ⇒ retry zonder de kolom.
   async function markThreadRead(userId, courseId, threadId, ts) {
+    const base = { user_id: userId, course_id: courseId, thread_id: threadId, read_at: ts };
     try {
       const { error } = await supabaseAdmin
         .from('studiecafe_thread_reads')
-        .upsert(
-          { user_id: userId, course_id: courseId, thread_id: threadId, read_at: ts },
-          { onConflict: 'user_id,thread_id' },
-        );
-      if (error) console.warn('[studiecafe] thread-read upsert mislukt:', error.message);
+        .upsert({ ...base, manual_unread: false }, { onConflict: 'user_id,thread_id' });
+      if (!error) return;
+      if (/manual_unread/.test(error.message || '')) {
+        const { error: e2 } = await supabaseAdmin
+          .from('studiecafe_thread_reads')
+          .upsert(base, { onConflict: 'user_id,thread_id' });
+        if (e2) console.warn('[studiecafe] thread-read upsert mislukt:', e2.message);
+        return;
+      }
+      console.warn('[studiecafe] thread-read upsert mislukt:', error.message);
     } catch (err) {
       console.warn('[studiecafe] thread-read unexpected:', err.message);
     }
   }
 
-  // Markeer één thread weer als ongelezen voor deze gebruiker (Task #324):
-  // verwijder de per-thread read-rij zodat de thread opnieuw als "nieuw" kan
-  // oplichten. Defensief: ontbrekende tabel/fout ⇒ stil falen.
-  async function markThreadUnread(userId, threadId) {
+  // Markeer één thread weer als ongelezen voor deze gebruiker (Task #324/#327):
+  // zet de expliciete manual_unread-marker zodat de thread opnieuw als "nieuw"
+  // oplicht — óók backlog-threads met activiteit vóór de zachte-uitrol-vloer.
+  // Upsert per (user, thread) zodat ook een thread zonder bestaande read-rij
+  // gemarkeerd kan worden (read_at krijgt dan de kolom-default). Defensief: een
+  // oude DB zonder manual_unread-kolom valt terug op het oude gedrag (read-rij
+  // verwijderen), dat alleen voor post-vloer-threads werkt.
+  async function markThreadUnread(userId, courseId, threadId) {
     try {
       const { error } = await supabaseAdmin
         .from('studiecafe_thread_reads')
-        .delete()
-        .eq('user_id', userId)
-        .eq('thread_id', threadId);
-      if (error) console.warn('[studiecafe] thread-unread delete mislukt:', error.message);
+        .upsert(
+          { user_id: userId, course_id: courseId, thread_id: threadId, manual_unread: true },
+          { onConflict: 'user_id,thread_id' },
+        );
+      if (!error) return;
+      if (/manual_unread/.test(error.message || '')) {
+        const { error: e2 } = await supabaseAdmin
+          .from('studiecafe_thread_reads')
+          .delete()
+          .eq('user_id', userId)
+          .eq('thread_id', threadId);
+        if (e2) console.warn('[studiecafe] thread-unread fallback delete mislukt:', e2.message);
+        return;
+      }
+      console.warn('[studiecafe] thread-unread upsert mislukt:', error.message);
     } catch (err) {
       console.warn('[studiecafe] thread-unread unexpected:', err.message);
     }
@@ -641,7 +693,9 @@ export function registerStudiecafeRoutes(app, deps) {
       // lastSeenAt = zachte-uitrol-vloer (zie #307/#312). reads = per-thread
       // leesmomenten (#312): de client markeert een thread "nieuw" als zijn
       // activiteit ná de vloer ligt én hij niet individueel is geopend.
-      const [lastSeenAt, readMap] = await Promise.all([
+      // manualUnread (#327) = threads die de gebruiker bewust weer als ongelezen
+      // markeerde; die lichten altijd op, ook backlog vóór de vloer.
+      const [lastSeenAt, threadReads] = await Promise.all([
         getLastSeen(auth.user.id, courseId),
         getThreadReads(auth.user.id, courseId),
       ]);
@@ -650,7 +704,8 @@ export function registerStudiecafeRoutes(app, deps) {
         currentUserId: auth.user.id,
         threads,
         lastSeenAt,
-        reads: Object.fromEntries(readMap),
+        reads: Object.fromEntries(threadReads.reads),
+        manualUnread: [...threadReads.manual],
       });
     } catch (err) {
       console.error('[studiecafe] feed unexpected:', err);
@@ -669,7 +724,7 @@ export function registerStudiecafeRoutes(app, deps) {
       return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
     }
     try {
-      const [lastSeenAt, readMap] = await Promise.all([
+      const [lastSeenAt, threadReads] = await Promise.all([
         getLastSeen(auth.user.id, courseId),
         getThreadReads(auth.user.id, courseId),
       ]);
@@ -685,8 +740,9 @@ export function registerStudiecafeRoutes(app, deps) {
         return res.status(500).json({ error: error.message });
       }
       // Per-thread leesstatus (#312): tel alleen threads met activiteit ná de
-      // vloer die de gebruiker niet individueel heeft geopend.
-      const summary = summarizeUnreadThreads(rows || [], lastSeenAt, readMap);
+      // vloer die de gebruiker niet individueel heeft geopend. Bewust-ongelezen
+      // markeringen (#327) tellen altijd mee, ook backlog vóór de vloer.
+      const summary = summarizeUnreadThreads(rows || [], lastSeenAt, threadReads.reads, threadReads.manual);
       return res.json({ ...summary, lastSeenAt });
     } catch (err) {
       console.error('[studiecafe] unread unexpected:', err);
@@ -753,9 +809,10 @@ export function registerStudiecafeRoutes(app, deps) {
   });
 
   // POST /threads/:threadId/unread — markeer één thread weer als ongelezen voor
-  // deze gebruiker (Task #324). Verwijdert de per-thread read-rij zodat de thread
-  // opnieuw als "nieuw" oplicht (mits zijn activiteit ná de zachte-uitrol-vloer
-  // ligt). Verifieert dat de thread bij deze cursus hoort. Defensief/idempotent.
+  // deze gebruiker (Task #324/#327). Zet de expliciete manual_unread-marker zodat
+  // de thread opnieuw als "nieuw" oplicht, ÓÓK backlog-threads met activiteit vóór
+  // de zachte-uitrol-vloer. Verifieert dat de thread bij deze cursus hoort.
+  // Defensief/idempotent.
   app.post('/api/studiecafe/:courseId/threads/:threadId/unread', async (req, res) => {
     const auth = await requireAuthUser(req, res);
     if (!auth) return;
@@ -772,7 +829,7 @@ export function registerStudiecafeRoutes(app, deps) {
       if (!thread || thread.course_id !== courseId) {
         return res.status(404).json({ error: 'Thread niet gevonden' });
       }
-      await markThreadUnread(auth.user.id, threadId);
+      await markThreadUnread(auth.user.id, courseId, threadId);
       return res.json({ ok: true });
     } catch (err) {
       console.warn('[studiecafe] unread unexpected:', err.message);
@@ -806,15 +863,25 @@ export function registerStudiecafeRoutes(app, deps) {
       }
       const threadIds = (rows || []).map((r) => r.id);
       if (threadIds.length) {
-        const payload = threadIds.map((id) => ({
-          user_id: auth.user.id,
-          course_id: courseId,
-          thread_id: id,
-          read_at: ts,
-        }));
-        const { error: upErr } = await supabaseAdmin
+        // read_at=now() én manual_unread=false: "alles gelezen" heft ook eerdere
+        // bewust-ongelezen markeringen (#327) op. Defensief: oude DB zonder de
+        // kolom valt terug op de upsert zonder manual_unread.
+        const buildPayload = (withManual) =>
+          threadIds.map((id) => ({
+            user_id: auth.user.id,
+            course_id: courseId,
+            thread_id: id,
+            read_at: ts,
+            ...(withManual ? { manual_unread: false } : {}),
+          }));
+        let { error: upErr } = await supabaseAdmin
           .from('studiecafe_thread_reads')
-          .upsert(payload, { onConflict: 'user_id,thread_id' });
+          .upsert(buildPayload(true), { onConflict: 'user_id,thread_id' });
+        if (upErr && /manual_unread/.test(upErr.message || '')) {
+          ({ error: upErr } = await supabaseAdmin
+            .from('studiecafe_thread_reads')
+            .upsert(buildPayload(false), { onConflict: 'user_id,thread_id' }));
+        }
         if (upErr) {
           console.warn('[studiecafe] read-all upsert mislukt:', upErr.message);
           return res.json({ ok: false, readAt: ts, threadIds: [] });

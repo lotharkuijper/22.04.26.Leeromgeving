@@ -105,6 +105,10 @@ export function StudiecafePage() {
   // openen van de pagina.
   const [seenBaseline, setSeenBaseline] = useState<string | null>(null);
   const [reads, setReads] = useState<Record<string, string>>({});
+  // Task #327: bewust-ongelezen markeringen. Een thread hierin licht ALTIJD op als
+  // "nieuw", ook backlog-threads met activiteit vóór de vloer (anders dan #324, dat
+  // alleen de read-rij wiste en dus enkel post-vloer-threads weer kon tonen).
+  const [manualUnread, setManualUnread] = useState<Set<string>>(new Set());
   const markedSeenRef = useRef(false);
 
   // Inline bewerken (auteur of staff).
@@ -211,6 +215,9 @@ export function StudiecafePage() {
           }
           return merged;
         });
+        // Bewust-ongelezen markeringen (#327): server is leidend op een refetch.
+        const serverManual: string[] = Array.isArray(d.manualUnread) ? d.manualUnread : [];
+        setManualUnread(new Set(serverManual.filter((x) => typeof x === 'string')));
         // Eénmalig per bezoek: bevries de zachte-uitrol-vloer. Anders dan #307
         // markeren we het bezoek NIET meer als "alles gezien" — per-thread reads
         // doen dat. Alleen bij de allereerste keer (geen vloer) leggen we de vloer
@@ -252,6 +259,7 @@ export function StudiecafePage() {
     markedSeenRef.current = false;
     setSeenBaseline(null);
     setReads({});
+    setManualUnread(new Set());
     if (courseId) loadThreads();
     else setLoading(false);
   }, [courseId, loadThreads]);
@@ -265,6 +273,13 @@ export function StudiecafePage() {
       const cur = prev[threadId];
       if (cur && cur >= ts) return prev;
       return { ...prev, [threadId]: ts };
+    });
+    // Openen heft een eerdere bewust-ongelezen markering (#327) op.
+    setManualUnread((prev) => {
+      if (!prev.has(threadId)) return prev;
+      const next = new Set(prev);
+      next.delete(threadId);
+      return next;
     });
     apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}/read`, { method: 'POST' })
       .then(() => { try { window.dispatchEvent(new Event('studiecafe-unread-refresh')); } catch { /* noop */ } })
@@ -284,6 +299,8 @@ export function StudiecafePage() {
       }
       return next;
     });
+    // "Alles gelezen" heft ook alle bewust-ongelezen markeringen (#327) op.
+    setManualUnread((prev) => (prev.size ? new Set() : prev));
     apiFetch(`/api/studiecafe/${courseId}/read-all`, { method: 'POST' })
       .then((r) => r.json().catch(() => null))
       .then((d) => {
@@ -302,15 +319,15 @@ export function StudiecafePage() {
       .catch(() => {});
   }, [courseId, apiFetch, threads]);
 
-  // Markeer één thread weer als ongelezen (Task #324): optimistisch lokaal de
-  // read-markering wissen + server-rij verwijderen. Nudge de nav-badge zodat hij
-  // meteen weer oploopt. Werkt voor threads met activiteit ná de vloer.
+  // Markeer één thread weer als ongelezen (Task #324/#327): zet optimistisch de
+  // bewust-ongelezen markering zodat de thread ALTIJD weer als "nieuw" oplicht,
+  // ook backlog vóór de vloer. Nudge de nav-badge zodat hij meteen weer oploopt.
   const markUnread = useCallback((threadId: string) => {
     if (!courseId) return;
-    setReads((prev) => {
-      if (!(threadId in prev)) return prev;
-      const next = { ...prev };
-      delete next[threadId];
+    setManualUnread((prev) => {
+      if (prev.has(threadId)) return prev;
+      const next = new Set(prev);
+      next.add(threadId);
       return next;
     });
     apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}/unread`, { method: 'POST' })
@@ -554,33 +571,30 @@ export function StudiecafePage() {
   // ⇒ niets is nieuw.
   const isUnread = useCallback(
     (th: Thread) => {
+      // Bewust-ongelezen (#327): omzeilt de vloer- en read-checks.
+      if (manualUnread.has(th.id)) return true;
       if (!seenBaseline || th.lastActivityAt <= seenBaseline) return false;
       const readAt = reads[th.id];
       if (readAt && th.lastActivityAt <= readAt) return false;
       return true;
     },
-    [seenBaseline, reads],
+    [seenBaseline, reads, manualUnread],
   );
-  // Mag deze thread weer als "nieuw" worden getoond? Alleen zinvol als hij nu
-  // gelezen is én zijn activiteit ná de vloer ligt (anders zou hij toch niet
-  // oplichten). (Task #324)
-  const canMarkUnread = useCallback(
-    (th: Thread) => !!seenBaseline && th.lastActivityAt > seenBaseline && !isUnread(th),
-    [seenBaseline, isUnread],
-  );
+  // Mag deze thread weer als "nieuw" worden getoond? Sinds #327 mag dat voor ELK
+  // gesprek dat nu gelezen is — ook backlog vóór de vloer; de bewust-ongelezen
+  // markering omzeilt de vloer-check. Toont de knop dus niet voor wat al "nieuw" is.
+  const canMarkUnread = useCallback((th: Thread) => !isUnread(th), [isUnread]);
   const unreadStats = useMemo(() => {
-    if (!seenBaseline) return { count: 0, hasAnnouncement: false };
     let count = 0;
     let hasAnnouncement = false;
     for (const th of threads) {
-      if (th.lastActivityAt <= seenBaseline) continue;
-      const readAt = reads[th.id];
-      if (readAt && th.lastActivityAt <= readAt) continue;
-      count += 1;
-      if (th.isAnnouncement) hasAnnouncement = true;
+      if (isUnread(th)) {
+        count += 1;
+        if (th.isAnnouncement) hasAnnouncement = true;
+      }
     }
     return { count, hasAnnouncement };
-  }, [threads, seenBaseline, reads]);
+  }, [threads, isUnread]);
 
   const filterChips: { key: FilterKey; label: string }[] = [
     { key: 'all', label: t('studiecafe.filter.all') },

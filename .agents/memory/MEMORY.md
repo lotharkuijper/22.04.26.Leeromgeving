@@ -26,3 +26,4 @@
 - [Multilingual JSON-mode key/enum preservation](multilingual-json-mode.md) — any json_object call with a "respond in lang X" instruction must preserve JSON keys+enums (only translate values), else non-NL/EN parsing silently degrades; NL/EN tests hide it.
 - [Language bootstrap](language-bootstrap.md) — active UI/AI lang resolves via one holder (set->stored->browser->en); never default preferred_lang to 'nl' in DB or add a 2nd localStorage default.
 - [Studiecafé email notifications](studiecafe-notifications.md) — digest worker; announcement audience = members ∪ last_seen (engagement-limited, by design); DB-level dedup via partial unique index; fail-soft Resend transport.
+- [Studiecafé unread model](studiecafe-unread-model.md) — "new" = soft-rollout floor (suppresses backlog) + per-thread reads + manual_unread override column (bypasses floor); keep server/client helpers in lockstep.

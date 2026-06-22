@@ -1543,6 +1543,16 @@ describe('isThreadUnreadFor (Task #312)', () => {
   it('nieuwe activiteit ná de read ⇒ opnieuw ongelezen', () => {
     expect(isThreadUnreadFor('2026-06-22T10:00:00Z', FLOOR, '2026-06-21T10:00:00Z')).toBe(true);
   });
+  it('manualUnread ⇒ altijd ongelezen, ook backlog vóór de vloer (Task #327)', () => {
+    // Backlog vóór de vloer zou normaal onderdrukt worden, maar de bewust-
+    // ongelezen marker omzeilt de vloer- én read-checks.
+    expect(isThreadUnreadFor('2026-06-19T10:00:00Z', FLOOR, null, true)).toBe(true);
+    expect(isThreadUnreadFor('2026-06-19T10:00:00Z', FLOOR, '2026-06-19T12:00:00Z', true)).toBe(true);
+    expect(isThreadUnreadFor('2026-06-21T10:00:00Z', null, null, true)).toBe(true);
+  });
+  it('manualUnread doet niets zonder activiteit (Task #327)', () => {
+    expect(isThreadUnreadFor(null, FLOOR, null, true)).toBe(false);
+  });
 });
 
 describe('summarizeUnreadThreads (Task #312)', () => {
@@ -1575,6 +1585,21 @@ describe('summarizeUnreadThreads (Task #312)', () => {
   });
   it('niet-array ⇒ lege samenvatting', () => {
     expect(summarizeUnreadThreads(null, FLOOR, {})).toEqual({ count: 0, announcementCount: 0, latestActivityAt: null });
+  });
+  it('manualUnreadSet telt backlog vóór de vloer mee (Task #327)', () => {
+    // Thread c ligt vóór de vloer (normaal gelezen), maar staat in de manual-set.
+    const s = summarizeUnreadThreads(threads, FLOOR, {}, new Set(['c']));
+    expect(s.count).toBe(3);
+  });
+  it('manualUnreadSet accepteert ook een array (Task #327)', () => {
+    const s = summarizeUnreadThreads(threads, FLOOR, { a: '2026-06-21T12:00:00Z', b: '2026-06-23T00:00:00Z' }, ['c']);
+    // a en b zijn gelezen, c is bewust ongelezen ⇒ 1.
+    expect(s.count).toBe(1);
+  });
+  it('manualUnread heft een read-markering op dezelfde thread op (Task #327)', () => {
+    // b is gelezen ná zijn activiteit maar staat in de manual-set ⇒ telt mee.
+    const s = summarizeUnreadThreads(threads, FLOOR, { b: '2026-06-23T00:00:00Z' }, ['b']);
+    expect(s.count).toBe(2);
   });
 });
 
