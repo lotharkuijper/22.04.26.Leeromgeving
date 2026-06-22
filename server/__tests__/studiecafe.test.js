@@ -444,6 +444,92 @@ describe('toggleKudosAtomicPg — race-veiligheid', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// Gelijktijdige reacties/pluimen via de ROUTE-handlers (Task #321).
+// De helper-tests hierboven bewijzen race-veiligheid op het niveau van
+// toggleReactionAtomicPg / toggleKudosAtomicPg. Deze tests sluiten het gat door
+// twee gelijktijdige POST's via Promise.all door de échte route-handlers te
+// jagen met één gedeelde FIFO-mutex `makeFakePool`. Zo bewijzen we dat de
+// BEDRADING (route → atomic pgPool-tak) geen lost-update introduceert.
+//
+// Aanpak: twee aparte setup()-instanties delen dezelfde pgPool maar hebben elk
+// hun eigen `ctx` (zodat de twee calls verschillende gebruikers/rollen kunnen
+// voorstellen). De pgPool-tak van de reactie-/kudos-handler raakt de in-memory
+// Supabase-store niet; alleen de gedeelde pool muteert de rij.
+// ───────────────────────────────────────────────────────────────────────────
+describe('studiecafe endpoints — gelijktijdige reacties/pluimen (Task #321)', () => {
+  it('twee gelijktijdige POST /reactions (andere user, andere emoji) verliezen geen reactie', async () => {
+    const pool = makeFakePool({
+      't-1': { course_id: COURSE_A, reactions: {}, deleted_at: null },
+    });
+    const a = setup({}, { pgPool: pool });
+    const b = setup({}, { pgPool: pool });
+    a.ctx.userId = 'uA';
+    b.ctx.userId = 'uB';
+    const [ra, rb] = await Promise.all([
+      a.call(R.reaction, {
+        params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1', emoji: '👍' },
+      }),
+      b.call(R.reaction, {
+        params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1', emoji: '❤️' },
+      }),
+    ]);
+    expect(ra.status).toBe(200);
+    expect(rb.status).toBe(200);
+    // Cruciaal: BEIDE reacties overleven de race in de uiteindelijke DB-staat.
+    expect(pool.rows.get('t-1').reactions).toEqual({ '👍': ['uA'], '❤️': ['uB'] });
+  });
+
+  it('twee gelijktijdige POST /reactions (andere user, ZELFDE emoji) tellen beiden mee', async () => {
+    const pool = makeFakePool({
+      'r-9': { course_id: COURSE_A, reactions: {}, deleted_at: null },
+    });
+    const a = setup({}, { pgPool: pool });
+    const b = setup({}, { pgPool: pool });
+    a.ctx.userId = 'uA';
+    b.ctx.userId = 'uB';
+    const body = { targetType: 'reply', targetId: 'r-9', emoji: '🎉' };
+    const [ra, rb] = await Promise.all([
+      a.call(R.reaction, { params: { courseId: COURSE_A }, body }),
+      b.call(R.reaction, { params: { courseId: COURSE_A }, body }),
+    ]);
+    expect(ra.status).toBe(200);
+    expect(rb.status).toBe(200);
+    const arr = pool.rows.get('r-9').reactions['🎉'];
+    expect(arr).toHaveLength(2);
+    expect([...arr].sort()).toEqual(['uA', 'uB']);
+  });
+
+  it('twee gelijktijdige POST /kudos op hetzelfde doel lossen deterministisch op (geen lost update)', async () => {
+    const pool = makeFakePool({
+      't-1': { course_id: COURSE_A, kudos_by: null, kudos_at: null, deleted_at: null },
+    });
+    const a = setup({}, { pgPool: pool });
+    const b = setup({}, { pgPool: pool });
+    a.ctx.userId = 'uA'; a.ctx.isStaff = true;
+    b.ctx.userId = 'uB'; b.ctx.isStaff = true;
+    const body = { targetType: 'thread', targetId: 't-1' };
+    const [ra, rb] = await Promise.all([
+      a.call(R.kudos, { params: { courseId: COURSE_A }, body }),
+      b.call(R.kudos, { params: { courseId: COURSE_A }, body }),
+    ]);
+    expect(ra.status).toBe(200);
+    expect(rb.status).toBe(200);
+    // Door de FOR UPDATE-serialisatie gaf precies één call de pluim en haalde de
+    // ander hem weg — niet twee onafhankelijke "geven"-beslissingen.
+    const gaveCount = [ra.body.kudos, rb.body.kudos].filter(Boolean).length;
+    expect(gaveCount).toBe(1);
+    // Consistente eindstaat: kudos_by en kudos_at horen samen (beide gevuld of
+    // beide leeg) — geen half-geschreven, verloren toggle.
+    const row = pool.rows.get('t-1');
+    if (row.kudos_at) {
+      expect(row.kudos_by).toBeTruthy();
+    } else {
+      expect(row.kudos_by).toBeNull();
+    }
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // Endpoint-tests (Task #305) — bewaken de écht beveiligingskritische
 // route-poortwachters van het Studiecafé-forum: cross-course IDOR, staff-only
 // moderatie, auteur-of-staff acties, gesloten-thread-blokkade en
