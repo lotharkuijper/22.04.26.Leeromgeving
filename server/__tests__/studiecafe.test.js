@@ -1028,6 +1028,123 @@ describe('studiecafe endpoints — pluim-toggle round-trip', () => {
   });
 });
 
+// De bovenstaande round-trips draaien op het pgPool=null fallback-pad. In productie
+// gaat de live deployment door het atomaire pad (toggleReactionAtomicPg /
+// toggleKudosAtomicPg) zodra er een directe Postgres-verbinding (pgPool) is. De
+// helpers zijn los getest, maar de bedrading van de route-handlers naar die helpers
+// (de `if (pgPool)`-tak) heeft eigen dekking nodig: hier voeren we de reactie- en
+// pluim-routes uit met een fake pgPool zodat de atomaire tak end-to-end loopt.
+describe('studiecafe endpoints — atomair pgPool-pad (reactie/pluim)', () => {
+  it('reactie toevoegen dan weghalen via het pgPool-pad keert terug naar leeg', async () => {
+    const pool = makeFakePool({
+      't-1': { course_id: COURSE_A, reactions: {}, deleted_at: null },
+    });
+    const { call } = setup(undefined, { pgPool: pool });
+    // Toevoegen.
+    const add = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1', emoji: '👍' },
+    });
+    expect(add.status).toBe(200);
+    expect(add.body.reactions).toEqual([{ emoji: '👍', count: 1, mine: true }]);
+    // De mutatie landt in de pgPool-"DB", niet in de supabase-store.
+    expect(pool.rows.get('t-1').reactions).toEqual({ '👍': ['stu-1'] });
+    expect(pool.queryCount).toBeGreaterThan(0);
+    // Weghalen (zelfde emoji, zelfde gebruiker).
+    const remove = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1', emoji: '👍' },
+    });
+    expect(remove.status).toBe(200);
+    expect(remove.body.reactions).toEqual([]);
+    expect(pool.rows.get('t-1').reactions).toEqual({});
+  });
+
+  it('reactie via het pgPool-pad werkt ook op een reply en telt mede-reageerders mee', async () => {
+    const pool = makeFakePool({
+      'r-1': { course_id: COURSE_A, reactions: { '🎉': ['stu-2'] }, deleted_at: null },
+    });
+    const { call } = setup(undefined, { pgPool: pool });
+    const add = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'reply', targetId: 'r-1', emoji: '🎉' },
+    });
+    expect(add.status).toBe(200);
+    expect(add.body.reactions).toEqual([{ emoji: '🎉', count: 2, mine: true }]);
+    expect([...pool.rows.get('r-1').reactions['🎉']].sort()).toEqual(['stu-1', 'stu-2']);
+  });
+
+  it('reactie via het pgPool-pad op een doel uit een andere cursus → 404 (geen mutatie)', async () => {
+    const pool = makeFakePool({
+      't-B': { course_id: COURSE_B, reactions: {}, deleted_at: null },
+    });
+    const { call } = setup(undefined, { pgPool: pool });
+    const res = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-B', emoji: '👍' },
+    });
+    expect(res.status).toBe(404);
+    expect(pool.rows.get('t-B').reactions).toEqual({});
+  });
+
+  it('pluim geven dan weghalen via het pgPool-pad keert terug naar geen pluim', async () => {
+    const pool = makeFakePool({
+      't-1': { course_id: COURSE_A, kudos_at: null, kudos_by: null, deleted_at: null },
+    });
+    const { call, ctx } = setup(undefined, { pgPool: pool });
+    ctx.isStaff = true;
+    ctx.userId = 'staff-1';
+    // Geven.
+    const give = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1' },
+    });
+    expect(give.status).toBe(200);
+    expect(give.body.kudos).toMatchObject({ by: 'staff-1' });
+    expect(give.body.kudos.at).toBeTruthy();
+    expect(pool.rows.get('t-1').kudos_by).toBe('staff-1');
+    expect(pool.rows.get('t-1').kudos_at).toBeTruthy();
+    expect(pool.queryCount).toBeGreaterThan(0);
+    // Weghalen.
+    const remove = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1' },
+    });
+    expect(remove.status).toBe(200);
+    expect(remove.body.kudos).toBeNull();
+    expect(pool.rows.get('t-1').kudos_by).toBeNull();
+    expect(pool.rows.get('t-1').kudos_at).toBeNull();
+  });
+
+  it('pluim via het pgPool-pad werkt ook op een reply', async () => {
+    const pool = makeFakePool({
+      'r-1': { course_id: COURSE_A, kudos_at: null, kudos_by: null, deleted_at: null },
+    });
+    const { call, ctx } = setup(undefined, { pgPool: pool });
+    ctx.isStaff = true;
+    ctx.userId = 'staff-1';
+    const give = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'reply', targetId: 'r-1' },
+    });
+    expect(give.status).toBe(200);
+    expect(give.body.kudos).toMatchObject({ by: 'staff-1' });
+    expect(pool.rows.get('r-1').kudos_by).toBe('staff-1');
+    const remove = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'reply', targetId: 'r-1' },
+    });
+    expect(remove.status).toBe(200);
+    expect(remove.body.kudos).toBeNull();
+    expect(pool.rows.get('r-1').kudos_at).toBeNull();
+  });
+
+  it('pluim via het pgPool-pad op een doel uit een andere cursus → 404 (geen mutatie)', async () => {
+    const pool = makeFakePool({
+      't-B': { course_id: COURSE_B, kudos_at: null, kudos_by: null, deleted_at: null },
+    });
+    const { call, ctx } = setup(undefined, { pgPool: pool });
+    ctx.isStaff = true; // staff in cursus A, maar doel hoort bij B
+    const res = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-B' },
+    });
+    expect(res.status).toBe(404);
+    expect(pool.rows.get('t-B').kudos_at).toBeNull();
+  });
+});
+
 describe('studiecafe endpoints — feed-ordening', () => {
   it('zet pinned + aankondigingen bovenaan, daarna op last_activity_at aflopend', async () => {
     const { call } = setup({
