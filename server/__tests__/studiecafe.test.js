@@ -655,8 +655,9 @@ class Builder {
     this._patch = null;
     this._upsert = null;
     this._onConflict = '';
+    this._selectCols = '';
   }
-  select() { return this; }
+  select(cols) { this._selectCols = typeof cols === 'string' ? cols : ''; return this; }
   insert(row) { this.mode = 'insert'; this._insert = row; return this; }
   update(patch) { this.mode = 'update'; this._patch = patch; return this; }
   upsert(row, opts = {}) { this.mode = 'upsert'; this._upsert = row; this._onConflict = opts.onConflict || ''; return this; }
@@ -675,11 +676,26 @@ class Builder {
     const cols = this.store._rejectColumns;
     if (!cols) return null;
     const payload = this._insert || this._patch || this._upsert;
-    if (!payload) return null;
-    const payloads = Array.isArray(payload) ? payload : [payload];
-    for (const c of cols) {
-      if (payloads.some((p) => Object.prototype.hasOwnProperty.call(p, c))) {
-        return { message: `column "${c}" does not exist` };
+    if (payload) {
+      const payloads = Array.isArray(payload) ? payload : [payload];
+      for (const c of cols) {
+        if (payloads.some((p) => Object.prototype.hasOwnProperty.call(p, c))) {
+          return { message: `column "${c}" does not exist` };
+        }
+      }
+      return null;
+    }
+    // Lees-pad: een SELECT die een nog-niet-gemigreerde kolom expliciet opvraagt
+    // faalt PostgREST-achtig, zodat de defensieve retry-zonder-kolom (bv. in
+    // getThreadReads) op route-niveau echt wordt uitgeoefend. We tellen de
+    // afgewezen selects zodat tests kunnen aantonen dat de fallback liep.
+    if (this.mode === 'select' && this._selectCols) {
+      const requested = this._selectCols.split(',').map((s) => s.trim());
+      for (const c of cols) {
+        if (requested.includes(c)) {
+          this.store._rejectedSelects = (this.store._rejectedSelects || 0) + 1;
+          return { message: `column "${c}" does not exist` };
+        }
       }
     }
     return null;
@@ -860,6 +876,125 @@ describe('studiecafe endpoints — cursustoegang', () => {
     expect(res.status).toBe(200);
     const ids = res.body.threads.map((t) => t.id);
     expect(ids).toEqual(['t-A']);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Feed-leesstatus (Task #343): de GET /threads-handler stelt lastSeenAt, de
+// per-thread reads-map (thread_id → read_at) en de manualUnread-lijst samen uit
+// getLastSeen + getThreadReads zodat de client "nieuwe" threads kan markeren.
+// Deze assemblage was op route-niveau ongetest; een regressie zou threads als
+// nieuw/gelezen kunnen mislabelen terwijl de los-geteste /unread-route groen
+// blijft. We dekken: de samenstelling van de drie velden, scoping op (user,
+// course) en de legacy-fallback (ontbrekende manual_unread-kolom).
+// ───────────────────────────────────────────────────────────────────────────
+describe('studiecafe endpoints — feed leesstatus-markers (Task #343)', () => {
+  it('geeft lastSeenAt, reads-map en manualUnread voor de gebruiker terug', async () => {
+    const { call } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-1', course_id: COURSE_A }),
+        threadRow({ id: 't-2', course_id: COURSE_A }),
+      ],
+      studiecafe_last_seen: [
+        { user_id: 'stu-1', course_id: COURSE_A, last_seen_at: '2026-06-20T08:00:00.000Z' },
+      ],
+      studiecafe_thread_reads: [
+        { user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1', read_at: '2026-06-21T09:00:00.000Z', manual_unread: false },
+        { user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-2', read_at: '2026-06-21T10:00:00.000Z', manual_unread: true },
+      ],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.lastSeenAt).toBe('2026-06-20T08:00:00.000Z');
+    // reads = thread_id → read_at, voor élke read-rij (ook bewust-ongelezen).
+    expect(res.body.reads).toEqual({
+      't-1': '2026-06-21T09:00:00.000Z',
+      't-2': '2026-06-21T10:00:00.000Z',
+    });
+    // manualUnread = alleen de threads met manual_unread=true.
+    expect(res.body.manualUnread).toEqual(['t-2']);
+  });
+
+  it('zonder last_seen-rij is lastSeenAt null en zonder reads zijn de markers leeg', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.lastSeenAt).toBeNull();
+    expect(res.body.reads).toEqual({});
+    expect(res.body.manualUnread).toEqual([]);
+  });
+
+  it('scopet de markers op de gebruiker (negeert read-rijen van anderen)', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_last_seen: [
+        { user_id: 'stu-1', course_id: COURSE_A, last_seen_at: '2026-06-20T08:00:00.000Z' },
+        { user_id: 'andere', course_id: COURSE_A, last_seen_at: '2026-06-22T08:00:00.000Z' },
+      ],
+      studiecafe_thread_reads: [
+        { user_id: 'andere', course_id: COURSE_A, thread_id: 't-1', read_at: '2026-06-22T09:00:00.000Z', manual_unread: true },
+      ],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    // Eigen last_seen, niet die van 'andere'.
+    expect(res.body.lastSeenAt).toBe('2026-06-20T08:00:00.000Z');
+    // De read/manual-markering van 'andere' lekt niet door.
+    expect(res.body.reads).toEqual({});
+    expect(res.body.manualUnread).toEqual([]);
+  });
+
+  it('scopet de markers op de cursus (negeert read-rijen uit een andere cursus)', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', course_id: COURSE_A })],
+      studiecafe_last_seen: [
+        { user_id: 'stu-1', course_id: COURSE_A, last_seen_at: '2026-06-20T08:00:00.000Z' },
+        { user_id: 'stu-1', course_id: COURSE_B, last_seen_at: '2026-06-22T08:00:00.000Z' },
+      ],
+      studiecafe_thread_reads: [
+        { user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1', read_at: '2026-06-21T09:00:00.000Z', manual_unread: false },
+        { user_id: 'stu-1', course_id: COURSE_B, thread_id: 't-B', read_at: '2026-06-22T09:00:00.000Z', manual_unread: true },
+      ],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.lastSeenAt).toBe('2026-06-20T08:00:00.000Z');
+    expect(res.body.reads).toEqual({ 't-1': '2026-06-21T09:00:00.000Z' });
+    expect(res.body.manualUnread).toEqual([]);
+  });
+
+  it('legacy DB zonder manual_unread-kolom: reads blijven, manualUnread leeg', async () => {
+    const { call, store } = setup(
+      {
+        studiecafe_threads: [
+          threadRow({ id: 't-1', course_id: COURSE_A }),
+          threadRow({ id: 't-2', course_id: COURSE_A }),
+        ],
+        studiecafe_last_seen: [
+          { user_id: 'stu-1', course_id: COURSE_A, last_seen_at: '2026-06-20T08:00:00.000Z' },
+        ],
+        studiecafe_thread_reads: [
+          { user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1', read_at: '2026-06-21T09:00:00.000Z' },
+          { user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-2', read_at: '2026-06-21T10:00:00.000Z' },
+        ],
+      },
+      { rejectColumns: ['manual_unread'] },
+    );
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    // De eerste SELECT (met manual_unread) faalt en wordt geteld; de feed valt
+    // terug op de retry zonder de kolom — bewijs dat het fallback-pad echt liep.
+    expect(store._rejectedSelects).toBe(1);
+    expect(res.body.lastSeenAt).toBe('2026-06-20T08:00:00.000Z');
+    // De retry zonder de kolom levert nog steeds de read-momenten op.
+    expect(res.body.reads).toEqual({
+      't-1': '2026-06-21T09:00:00.000Z',
+      't-2': '2026-06-21T10:00:00.000Z',
+    });
+    // Zonder de kolom kunnen er geen handmatige markeringen zijn.
+    expect(res.body.manualUnread).toEqual([]);
   });
 });
 
