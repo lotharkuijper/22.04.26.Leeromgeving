@@ -923,3 +923,154 @@ describe('studiecafe endpoints — soft-delete redactie (geen lek van inhoud)', 
     expect(res.body).toEqual({ ok: true });
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Gedrag-tests (Task #309) — bewaken de NIET-beveiligingskritische, maar wel
+// stil-regresseerbare gedragingen van het forum die Task #305 bewust oversloeg:
+// de reactie-toggle round-trip (toevoegen → weghalen, met correcte "mine"-vlag
+// voor de aanroeper), de pluim-toggle round-trip, en de feed-ordening
+// (pinned + aankondigingen bovenaan, daarna op last_activity_at) plus de
+// reply_count/last_activity_at-bump bij een nieuwe reactie. Deze draaien op het
+// pgPool=null-fallbackpad van de in-memory harness hierboven.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('studiecafe endpoints — reactie-toggle round-trip', () => {
+  it('toevoegen dan weghalen van dezelfde emoji keert terug naar leeg', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    // Toevoegen.
+    const add = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1', emoji: '👍' },
+    });
+    expect(add.status).toBe(200);
+    expect(add.body.reactions).toEqual([{ emoji: '👍', count: 1, mine: true }]);
+    expect(store.studiecafe_threads[0].reactions).toEqual({ '👍': ['stu-1'] });
+    // Weghalen (zelfde emoji, zelfde gebruiker).
+    const remove = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1', emoji: '👍' },
+    });
+    expect(remove.status).toBe(200);
+    expect(remove.body.reactions).toEqual([]);
+    expect(store.studiecafe_threads[0].reactions).toEqual({});
+  });
+
+  it('de "mine"-vlag is correct voor de aanroeper naast andermans reactie', async () => {
+    const { call, store } = setup({
+      // stu-2 heeft al ❤️ gegeven; de aanroeper is stu-1.
+      studiecafe_threads: [threadRow({ id: 't-1', reactions: { '❤️': ['stu-2'] } })],
+    });
+    // stu-1 voegt 👍 toe: zijn eigen reactie is mine=true, de ❤️ van stu-2 mine=false.
+    const add = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1', emoji: '👍' },
+    });
+    expect(add.status).toBe(200);
+    expect(add.body.reactions).toEqual([
+      { emoji: '👍', count: 1, mine: true },
+      { emoji: '❤️', count: 1, mine: false },
+    ]);
+    expect(store.studiecafe_threads[0].reactions).toEqual({ '❤️': ['stu-2'], '👍': ['stu-1'] });
+  });
+
+  it('werkt ook op een reply en telt mede-reageerders mee', async () => {
+    const { call, store } = setup({
+      studiecafe_replies: [replyRow({ id: 'r-1', reactions: { '🎉': ['stu-2'] } })],
+    });
+    const add = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'reply', targetId: 'r-1', emoji: '🎉' },
+    });
+    expect(add.status).toBe(200);
+    expect(add.body.reactions).toEqual([{ emoji: '🎉', count: 2, mine: true }]);
+    expect([...store.studiecafe_replies[0].reactions['🎉']].sort()).toEqual(['stu-1', 'stu-2']);
+  });
+});
+
+describe('studiecafe endpoints — pluim-toggle round-trip', () => {
+  it('geven dan weghalen door dezelfde docent keert terug naar geen pluim', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    ctx.isStaff = true;
+    ctx.userId = 'staff-1';
+    // Geven.
+    const give = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1' },
+    });
+    expect(give.status).toBe(200);
+    expect(give.body.kudos).toMatchObject({ by: 'staff-1' });
+    expect(give.body.kudos.at).toBeTruthy();
+    expect(store.studiecafe_threads[0].kudos_by).toBe('staff-1');
+    expect(store.studiecafe_threads[0].kudos_at).toBeTruthy();
+    // Weghalen.
+    const remove = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1' },
+    });
+    expect(remove.status).toBe(200);
+    expect(remove.body.kudos).toBeNull();
+    expect(store.studiecafe_threads[0].kudos_by).toBeNull();
+    expect(store.studiecafe_threads[0].kudos_at).toBeNull();
+  });
+
+  it('pluim-toggle werkt ook op een reply', async () => {
+    const { call, ctx, store } = setup({ studiecafe_replies: [replyRow({ id: 'r-1' })] });
+    ctx.isStaff = true;
+    ctx.userId = 'staff-1';
+    const give = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'reply', targetId: 'r-1' },
+    });
+    expect(give.status).toBe(200);
+    expect(give.body.kudos).toMatchObject({ by: 'staff-1' });
+    expect(store.studiecafe_replies[0].kudos_by).toBe('staff-1');
+    const remove = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'reply', targetId: 'r-1' },
+    });
+    expect(remove.status).toBe(200);
+    expect(remove.body.kudos).toBeNull();
+    expect(store.studiecafe_replies[0].kudos_at).toBeNull();
+  });
+});
+
+describe('studiecafe endpoints — feed-ordening', () => {
+  it('zet pinned + aankondigingen bovenaan, daarna op last_activity_at aflopend', async () => {
+    const { call } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-old', last_activity_at: '2026-06-20T10:00:00.000Z' }),
+        threadRow({ id: 't-new', last_activity_at: '2026-06-22T10:00:00.000Z' }),
+        threadRow({ id: 't-ann', is_announcement: true, last_activity_at: '2026-06-21T10:00:00.000Z' }),
+        threadRow({ id: 't-pin', is_pinned: true, last_activity_at: '2026-06-19T10:00:00.000Z' }),
+      ],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    // Pinned eerst (ondanks oudste activiteit), dan aankondiging, dan de rest op
+    // recentste activiteit.
+    expect(res.body.threads.map((t) => t.id)).toEqual(['t-pin', 't-ann', 't-new', 't-old']);
+  });
+
+  it('een gepinde aankondiging blijft bovenaan boven een niet-gepinde aankondiging', async () => {
+    const { call } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-ann', is_announcement: true, last_activity_at: '2026-06-22T10:00:00.000Z' }),
+        threadRow({ id: 't-pin-ann', is_pinned: true, is_announcement: true, last_activity_at: '2026-06-18T10:00:00.000Z' }),
+        threadRow({ id: 't-plain', last_activity_at: '2026-06-23T10:00:00.000Z' }),
+      ],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.threads.map((t) => t.id)).toEqual(['t-pin-ann', 't-ann', 't-plain']);
+  });
+});
+
+describe('studiecafe endpoints — reply-bump (reply_count + last_activity_at)', () => {
+  it('een nieuwe reactie verhoogt reply_count en verschuift last_activity_at', async () => {
+    const oldActivity = '2026-06-21T10:00:00.000Z';
+    const { call, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', reply_count: 2, last_activity_at: oldActivity })],
+    });
+    const res = await call(R.createReply, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { body: 'nieuwe reactie' },
+    });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_replies).toHaveLength(1);
+    const t = store.studiecafe_threads[0];
+    expect(t.reply_count).toBe(3);
+    expect(t.last_activity_at).not.toBe(oldActivity);
+    expect(typeof t.last_activity_at).toBe('string');
+  });
+});
