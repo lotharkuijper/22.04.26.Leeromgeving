@@ -69,6 +69,7 @@
   "studiecafe.unread.bannerOne": "1 discussion a une nouvelle activité depuis ta dernière visite.",
   "studiecafe.unread.bannerMany": "{count} discussions ont une nouvelle activité depuis ta dernière visite.",
   "studiecafe.unread.bannerAnnouncement": "Il y a une nouvelle annonce de ton enseignant.",
+  "studiecafe.unread.markAllRead": "Tout marquer comme lu",
   "nav.feedback": "Journal d’apprentissage",
   "nav.resources": "Ressources",
   "nav.admin": "Administration",

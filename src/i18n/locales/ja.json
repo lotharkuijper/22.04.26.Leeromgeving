@@ -69,6 +69,7 @@
   "studiecafe.unread.bannerOne": "前回の訪問以降、1件のスレッドに新しい動きがあります。",
   "studiecafe.unread.bannerMany": "前回の訪問以降、{count}件のスレッドに新しい動きがあります。",
   "studiecafe.unread.bannerAnnouncement": "先生から新しいお知らせがあります。",
+  "studiecafe.unread.markAllRead": "すべて既読にする",
   "nav.feedback": "学習日誌",
   "nav.resources": "資料",
   "nav.admin": "管理",

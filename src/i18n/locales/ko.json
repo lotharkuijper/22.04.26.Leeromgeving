@@ -69,6 +69,7 @@
   "studiecafe.unread.bannerOne": "마지막 방문 이후 1개의 대화에 새로운 활동이 있어.",
   "studiecafe.unread.bannerMany": "마지막 방문 이후 {count}개의 대화에 새로운 활동이 있어.",
   "studiecafe.unread.bannerAnnouncement": "담당 교사의 새 공지가 있어.",
+  "studiecafe.unread.markAllRead": "모두 읽음으로 표시",
   "nav.feedback": "학습 일기",
   "nav.resources": "자료",
   "nav.admin": "관리",

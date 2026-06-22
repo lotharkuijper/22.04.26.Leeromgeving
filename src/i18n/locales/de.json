@@ -69,6 +69,7 @@
   "studiecafe.unread.bannerOne": "1 Gespräch hat seit deinem letzten Besuch neue Aktivität.",
   "studiecafe.unread.bannerMany": "{count} Gespräche haben seit deinem letzten Besuch neue Aktivität.",
   "studiecafe.unread.bannerAnnouncement": "Es gibt eine neue Ankündigung von deinem Dozenten.",
+  "studiecafe.unread.markAllRead": "Alle als gelesen markieren",
   "nav.feedback": "Lerntagebuch",
   "nav.resources": "Ressourcen",
   "nav.admin": "Verwaltung",

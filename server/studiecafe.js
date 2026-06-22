@@ -736,6 +736,53 @@ export function registerStudiecafeRoutes(app, deps) {
     }
   });
 
+  // POST /read-all — markeer ALLE zichtbare (niet-verwijderde) threads van deze
+  // cursus als gelezen voor deze gebruiker (Task #314). Upsert per thread een
+  // read-rij op now(); idempotent op (user, thread). Geeft de gemarkeerde
+  // thread-ids + timestamp terug zodat de client optimistisch kan bijwerken en de
+  // nav-badge meteen op 0 zet. Defensief: ontbrekende tabel/fout ⇒ stil ok=false.
+  app.post('/api/studiecafe/:courseId/read-all', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId } = req.params;
+    if (!(await userHasCourseAccess(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
+    }
+    const ts = await nowIso();
+    try {
+      const { data: rows, error } = await supabaseAdmin
+        .from('studiecafe_threads')
+        .select('id')
+        .eq('course_id', courseId)
+        .is('deleted_at', null)
+        .limit(500);
+      if (error) {
+        console.warn('[studiecafe] read-all feed mislukt:', error.message);
+        return res.json({ ok: false, readAt: ts, threadIds: [] });
+      }
+      const threadIds = (rows || []).map((r) => r.id);
+      if (threadIds.length) {
+        const payload = threadIds.map((id) => ({
+          user_id: auth.user.id,
+          course_id: courseId,
+          thread_id: id,
+          read_at: ts,
+        }));
+        const { error: upErr } = await supabaseAdmin
+          .from('studiecafe_thread_reads')
+          .upsert(payload, { onConflict: 'user_id,thread_id' });
+        if (upErr) {
+          console.warn('[studiecafe] read-all upsert mislukt:', upErr.message);
+          return res.json({ ok: false, readAt: ts, threadIds: [] });
+        }
+      }
+      return res.json({ ok: true, readAt: ts, threadIds });
+    } catch (err) {
+      console.warn('[studiecafe] read-all unexpected:', err.message);
+      return res.json({ ok: false, readAt: ts, threadIds: [] });
+    }
+  });
+
   // GET replies van één thread.
   app.get('/api/studiecafe/:courseId/threads/:threadId/replies', async (req, res) => {
     const auth = await requireAuthUser(req, res);

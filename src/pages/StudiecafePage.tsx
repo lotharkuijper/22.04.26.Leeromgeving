@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Coffee, Send, Loader2, Pin, PinOff, Lock, Unlock, Trash2, CheckCircle2,
   Award, Megaphone, Smile, MessageCircle, HelpCircle, MessagesSquare, Users,
-  Pencil, X, Search, Bell,
+  Pencil, X, Search, Bell, CheckCheck,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -270,6 +270,37 @@ export function StudiecafePage() {
       .then(() => { try { window.dispatchEvent(new Event('studiecafe-unread-refresh')); } catch { /* noop */ } })
       .catch(() => {});
   }, [courseId, apiFetch]);
+
+  // Markeer ALLE zichtbare threads als gelezen (Task #314): optimistisch lokaal +
+  // persisteren via één server-call. Werkt de nav-badge meteen bij naar 0.
+  const markAllRead = useCallback(() => {
+    if (!courseId) return;
+    const ts = new Date().toISOString();
+    setReads((prev) => {
+      const next = { ...prev };
+      for (const th of threads) {
+        const cur = next[th.id];
+        if (!cur || cur < ts) next[th.id] = ts;
+      }
+      return next;
+    });
+    apiFetch(`/api/studiecafe/${courseId}/read-all`, { method: 'POST' })
+      .then((r) => r.json().catch(() => null))
+      .then((d) => {
+        if (d && Array.isArray(d.threadIds) && typeof d.readAt === 'string') {
+          setReads((prev) => {
+            const next = { ...prev };
+            for (const id of d.threadIds) {
+              const cur = next[id];
+              if (!cur || cur < d.readAt) next[id] = d.readAt;
+            }
+            return next;
+          });
+        }
+        try { window.dispatchEvent(new Event('studiecafe-unread-refresh')); } catch { /* noop */ }
+      })
+      .catch(() => {});
+  }, [courseId, apiFetch, threads]);
 
   // ── Realtime: bij elke wijziging een gedebouncede refetch ─────────────────
   const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -800,12 +831,22 @@ export function StudiecafePage() {
       )}
 
       {unreadStats.count > 0 && (
-        <div className="mb-4 px-4 py-3 rounded-xl bg-rose-50 text-rose-800 ring-1 ring-rose-200 text-sm font-medium" data-testid="banner-unread">
-          {unreadStats.hasAnnouncement
-            ? t('studiecafe.unread.bannerAnnouncement')
-            : unreadStats.count === 1
-              ? t('studiecafe.unread.bannerOne')
-              : t('studiecafe.unread.bannerMany', { count: unreadStats.count })}
+        <div className="mb-4 px-4 py-3 rounded-xl bg-rose-50 text-rose-800 ring-1 ring-rose-200 text-sm font-medium flex items-center justify-between gap-3 flex-wrap" data-testid="banner-unread">
+          <span>
+            {unreadStats.hasAnnouncement
+              ? t('studiecafe.unread.bannerAnnouncement')
+              : unreadStats.count === 1
+                ? t('studiecafe.unread.bannerOne')
+                : t('studiecafe.unread.bannerMany', { count: unreadStats.count })}
+          </span>
+          <button
+            onClick={markAllRead}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 transition-colors shrink-0 font-medium"
+            data-testid="button-mark-all-read"
+          >
+            <CheckCheck className="w-4 h-4" />
+            {t('studiecafe.unread.markAllRead')}
+          </button>
         </div>
       )}
 
