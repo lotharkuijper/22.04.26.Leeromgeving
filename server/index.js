@@ -82,7 +82,7 @@ import {
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
-import { registerStudiecafeRoutes, buildOrphanCourseAccessCleanupSql } from './studiecafe.js';
+import { registerStudiecafeRoutes, createOrphanCourseAccessCleanupRunner } from './studiecafe.js';
 import {
   groupPendingByUser,
   partitionByPrefs,
@@ -13538,63 +13538,17 @@ async function runStudiecafeDigestOnce() {
 // werk; zonder pgPool wordt de cyclus stil overgeslagen. Defensief: een
 // ontbrekende tabel/kolom breekt niets af en stopt de andere tabel niet.
 const READS_CLEANUP_INTERVAL_MS = Number(process.env.STUDIECAFE_READS_CLEANUP_INTERVAL_MS) || 21600000; // 6 uur
-let readsCleanupRunning = false;
 
-// Ruim één tabel op. Retourneert het aantal verwijderde rijen, of null als de
-// tabel (nog) niet bestaat / niet kon worden opgeruimd.
-async function cleanupOrphanTableOnce(table) {
-  let result;
-  try {
-    result = await pgPool.query(
-      buildOrphanCourseAccessCleanupSql(table, coursesHasStudentVisible),
-      [SUPERUSER_EMAIL],
-    );
-  } catch (err) {
-    // 42P01 = tabel ontbreekt (oude DB); 42703 = student_visible-kolom ontbreekt
-    // toch → val terug op de variant zonder die kolom.
-    if (err && err.code === '42703') {
-      try {
-        result = await pgPool.query(
-          buildOrphanCourseAccessCleanupSql(table, false),
-          [SUPERUSER_EMAIL],
-        );
-      } catch (err2) {
-        if (err2 && err2.code === '42P01') return null;
-        console.warn(`[studiecafe-reads-cleanup] fallback (${table}) mislukt:`, err2.message);
-        return null;
-      }
-    } else {
-      if (err && err.code === '42P01') return null;
-      console.warn(`[studiecafe-reads-cleanup] (${table}) mislukt:`, err.message);
-      return null;
-    }
-  }
-  return result && typeof result.rowCount === 'number' ? result.rowCount : 0;
-}
-
-async function runOrphanThreadReadsCleanupOnce() {
-  if (readsCleanupRunning) return;
-  if (!pgPool) return; // zonder directe Postgres-verbinding: niets te doen
-  readsCleanupRunning = true;
-  try {
-    const reads = await cleanupOrphanTableOnce('studiecafe_thread_reads');
-    if (reads > 0) {
-      console.log(`[studiecafe-reads-cleanup] ${reads} wees-leesmarkering(en) opgeruimd (toegang verlopen).`);
-    }
-    const lastSeen = await cleanupOrphanTableOnce('studiecafe_last_seen');
-    if (lastSeen > 0) {
-      console.log(`[studiecafe-reads-cleanup] ${lastSeen} wees-'laatst gezien'-rij(en) opgeruimd (toegang verlopen).`);
-    }
-    // Task #329: zelf-ingesteld leerniveau per cursus (student_course_levels)
-    // heeft hetzelfde wees-probleem; ruim het met dezelfde regels op.
-    const levels = await cleanupOrphanTableOnce('student_course_levels');
-    if (levels > 0) {
-      console.log(`[studiecafe-reads-cleanup] ${levels} wees-leerniveau-rij(en) opgeruimd (toegang verlopen).`);
-    }
-  } finally {
-    readsCleanupRunning = false;
-  }
-}
+// De fallback-logica (42703 → kolomloze SQL, 42P01 → stil overslaan), de
+// pgPool=null no-op en de overlap-gate zitten in `createOrphanCourseAccessCleanupRunner`
+// (server/studiecafe.js) zodat ze los van deze module-state getest kunnen worden.
+// De getters leveren de actuele module-state (pgPool/coursesHasStudentVisible
+// wijzigen pas na de startup-detectie).
+const runOrphanThreadReadsCleanupOnce = createOrphanCourseAccessCleanupRunner({
+  getPgPool: () => pgPool,
+  getHasStudentVisible: () => coursesHasStudentVisible,
+  getSuperuserEmail: () => SUPERUSER_EMAIL,
+});
 
 // In de testomgeving importeren we de app zonder de poort te openen of de
 // schema-detectie/seeding te draaien; integratietests mounten `app` zelf op een

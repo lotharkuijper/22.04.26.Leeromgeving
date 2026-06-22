@@ -356,6 +356,98 @@ export function buildOrphanThreadReadsCleanupSql(hasStudentVisible = true) {
   return buildOrphanCourseAccessCleanupSql('studiecafe_thread_reads', hasStudentVisible);
 }
 
+// Ruim één tabel op via een geïnjecteerde `pgPool`. Retourneert het aantal
+// verwijderde rijen, of `null` als de tabel (nog) niet bestaat / niet kon worden
+// opgeruimd. De fallback-logica zit hier zodat ze los van de module-state in
+// server/index.js getest kan worden:
+//   • 42703 (kolom student_visible ontbreekt) → opnieuw met de kolomloze SQL;
+//   • 42P01 (tabel ontbreekt, ook na fallback) → stil `null` (geen fout);
+//   • elke andere fout → waarschuwen + `null` (breekt de andere tabellen niet af).
+export async function cleanupOrphanCourseAccessTableOnce({
+  pgPool,
+  table,
+  hasStudentVisible,
+  superuserEmail,
+  logger = console,
+} = {}) {
+  let result;
+  try {
+    result = await pgPool.query(
+      buildOrphanCourseAccessCleanupSql(table, hasStudentVisible),
+      [superuserEmail],
+    );
+  } catch (err) {
+    // 42P01 = tabel ontbreekt (oude DB); 42703 = student_visible-kolom ontbreekt
+    // toch → val terug op de variant zonder die kolom.
+    if (err && err.code === '42703') {
+      try {
+        result = await pgPool.query(
+          buildOrphanCourseAccessCleanupSql(table, false),
+          [superuserEmail],
+        );
+      } catch (err2) {
+        if (err2 && err2.code === '42P01') return null;
+        logger.warn?.(`[studiecafe-reads-cleanup] fallback (${table}) mislukt:`, err2.message);
+        return null;
+      }
+    } else {
+      if (err && err.code === '42P01') return null;
+      logger.warn?.(`[studiecafe-reads-cleanup] (${table}) mislukt:`, err.message);
+      return null;
+    }
+  }
+  return result && typeof result.rowCount === 'number' ? result.rowCount : 0;
+}
+
+// Per-tabel log-labels (na het `[studiecafe-reads-cleanup] `-prefix) voor de
+// standaard set wees-opruim-tabellen.
+export const ORPHAN_CLEANUP_TABLE_LABELS = [
+  { name: 'studiecafe_thread_reads', label: (n) => `${n} wees-leesmarkering(en) opgeruimd (toegang verlopen).` },
+  { name: 'studiecafe_last_seen', label: (n) => `${n} wees-'laatst gezien'-rij(en) opgeruimd (toegang verlopen).` },
+  { name: 'student_course_levels', label: (n) => `${n} wees-leerniveau-rij(en) opgeruimd (toegang verlopen).` },
+];
+
+// Bouwt een injecteerbare opruim-runner met een eigen overlap-gate. De pgPool,
+// hasStudentVisible en superuserEmail worden via getters geleverd zodat de runner
+// altijd de actuele module-state van server/index.js leest (die wijzigt na
+// startup-detectie). Zonder pgPool: stil no-op. Een lopende run blokkeert een
+// tweede gelijktijdige run (`isRunning()` exposeert de gate voor tests).
+export function createOrphanCourseAccessCleanupRunner({
+  getPgPool,
+  getHasStudentVisible,
+  getSuperuserEmail,
+  tables = ORPHAN_CLEANUP_TABLE_LABELS,
+  logger = console,
+} = {}) {
+  let running = false;
+  async function runOnce() {
+    if (running) return;
+    const pgPool = getPgPool?.();
+    if (!pgPool) return; // zonder directe Postgres-verbinding: niets te doen
+    running = true;
+    try {
+      const hasStudentVisible = !!getHasStudentVisible?.();
+      const superuserEmail = getSuperuserEmail?.();
+      for (const t of tables) {
+        const count = await cleanupOrphanCourseAccessTableOnce({
+          pgPool,
+          table: t.name,
+          hasStudentVisible,
+          superuserEmail,
+          logger,
+        });
+        if (count > 0) {
+          logger.log?.(`[studiecafe-reads-cleanup] ${t.label(count)}`);
+        }
+      }
+    } finally {
+      running = false;
+    }
+  }
+  runOnce.isRunning = () => running;
+  return runOnce;
+}
+
 // ── Route-registratie ───────────────────────────────────────────────────────
 export function registerStudiecafeRoutes(app, deps) {
   const {
