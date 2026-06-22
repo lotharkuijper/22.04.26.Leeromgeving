@@ -552,7 +552,7 @@ function makeSupabase(store) {
 // Registreert de echte routes op een fake app en geeft een call-helper terug.
 // `ctx` is muteerbaar zodat per test de auth-uitkomst (user, access, staff)
 // gestuurd kan worden.
-function setup(seed) {
+function setup(seed, { pgPool = null } = {}) {
   const store = makeStore(seed);
   const ctx = { userId: 'stu-1', hasAccess: true, isStaff: false };
   const routes = {};
@@ -564,7 +564,7 @@ function setup(seed) {
     requireAuthUser: async () => ({ user: { id: ctx.userId }, profile: { id: ctx.userId } }),
     userHasCourseAccess: async () => ctx.hasAccess,
     isStaffForCourse: async () => ctx.isStaff,
-    pgPool: null,
+    pgPool,
   });
 
   async function call(key, { params = {}, body = {} } = {}) {
@@ -1072,5 +1072,185 @@ describe('studiecafe endpoints — reply-bump (reply_count + last_activity_at)',
     expect(t.reply_count).toBe(3);
     expect(t.last_activity_at).not.toBe(oldActivity);
     expect(typeof t.last_activity_at).toBe('string');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// DELETE thread — transactioneel pgPool-pad (Task #310). In productie loopt de
+// thread-redactie + reply-cascade in één BEGIN/UPDATE/UPDATE/COMMIT-transactie
+// via pgPool; faalt er iets midden in, dan moet ALLES terugrollen (fail-closed,
+// geen half-geredigeerde staat die de inhoud van een verwijderde thread
+// cursus-breed leesbaar laat). Task #305 dekte alleen het fallback-pad
+// (pgPool=null). Hier injecteren we een mock pg-client die de echte SQL-mutaties
+// op de in-memory store toepast én de query-volgorde vastlegt.
+// ───────────────────────────────────────────────────────────────────────────
+
+// Mock pg-pool die de twee UPDATE's uit het transactie-pad echt uitvoert op de
+// store. `failOnSql` (regex) laat een query midden in de transactie falen zodat
+// we de ROLLBACK + 500 kunnen aantonen. `log` bevat de volgorde van commando's.
+function makeTxPool(store, { failOnSql = null } = {}) {
+  const log = [];
+  const tables = {
+    studiecafe_threads: store.studiecafe_threads,
+    studiecafe_replies: store.studiecafe_replies,
+  };
+  return {
+    log,
+    released: 0,
+    async connect() {
+      const self = this;
+      return {
+        async query(sql, params) {
+          const trimmed = sql.trim();
+          const verb = /^(BEGIN|COMMIT|ROLLBACK)/i.test(trimmed)
+            ? trimmed.split(/\s+/)[0].toUpperCase()
+            : (/UPDATE\s+studiecafe_threads/i.test(sql) ? 'UPDATE_THREADS'
+              : /UPDATE\s+studiecafe_replies/i.test(sql) ? 'UPDATE_REPLIES' : 'OTHER');
+          log.push(verb);
+          if (failOnSql && failOnSql.test(sql)) {
+            throw new Error('tx boom');
+          }
+          if (verb === 'UPDATE_THREADS') {
+            const [threadId, ts, userId] = params;
+            for (const r of tables.studiecafe_threads) {
+              if (r.id === threadId) {
+                Object.assign(r, {
+                  deleted_at: ts, deleted_by: userId, body: '', title: '',
+                  author_id: null, kudos_by: null, kudos_at: null, reactions: {}, updated_at: ts,
+                });
+              }
+            }
+          } else if (verb === 'UPDATE_REPLIES') {
+            const [threadId, ts, userId] = params;
+            for (const r of tables.studiecafe_replies) {
+              if (r.thread_id === threadId && (r.deleted_at === null || r.deleted_at === undefined)) {
+                Object.assign(r, {
+                  deleted_at: ts, deleted_by: userId, body: '',
+                  author_id: null, kudos_by: null, kudos_at: null, reactions: {},
+                });
+              }
+            }
+          }
+          return { rows: [], rowCount: 1 };
+        },
+        release() { self.released += 1; },
+      };
+    },
+  };
+}
+
+describe('studiecafe endpoints — DELETE thread transactioneel pgPool-pad (Task #310)', () => {
+  function seedThreadWithReplies() {
+    return {
+      studiecafe_threads: [threadRow({
+        id: 't-1', author_id: 'stu-1', title: 'Geheime titel', body: 'Geheime body',
+        reactions: { '👍': ['x'] }, kudos_by: 'staff-1', kudos_at: 'x',
+      })],
+      studiecafe_replies: [
+        replyRow({ id: 'r-1', thread_id: 't-1', body: 'reply-geheim', author_id: 'stu-3', reactions: { '❤️': ['y'] } }),
+        replyRow({ id: 'r-2', thread_id: 't-1', body: 'reply-geheim-2', author_id: 'stu-4', kudos_by: 'staff-2', kudos_at: 'x' }),
+      ],
+    };
+  }
+
+  it('redigeert thread én replies in één transactie (BEGIN→UPDATE threads→UPDATE replies→COMMIT)', async () => {
+    const seed = seedThreadWithReplies();
+    const store = makeStore(seed);
+    const pool = makeTxPool(store);
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    // setup() maakt zijn eigen store; we willen dat pool en handler dezelfde
+    // store delen. Daarom wijzen we de pool-tabellen naar de store van setup.
+    // (makeTxPool kreeg `store` met dezelfde array-referenties als `seed`.)
+    ctx.userId = 'stu-1';
+
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+
+    // Transactie-volgorde: open, beide updates, dan pas commit. Geen rollback.
+    expect(pool.log).toEqual(['BEGIN', 'UPDATE_THREADS', 'UPDATE_REPLIES', 'COMMIT']);
+    expect(pool.released).toBe(1);
+
+    const t = seed.studiecafe_threads[0];
+    expect(t.deleted_at).toBeTruthy();
+    expect(t.title).toBe('');
+    expect(t.body).toBe('');
+    expect(t.author_id).toBeNull();
+    expect(t.kudos_by).toBeNull();
+    expect(t.kudos_at).toBeNull();
+    expect(t.reactions).toEqual({});
+
+    for (const r of seed.studiecafe_replies) {
+      expect(r.deleted_at).toBeTruthy();
+      expect(r.body).toBe('');
+      expect(r.author_id).toBeNull();
+      expect(r.kudos_by).toBeNull();
+      expect(r.kudos_at).toBeNull();
+      expect(r.reactions).toEqual({});
+    }
+  });
+
+  it('faalt de reply-cascade midden in de transactie → ROLLBACK + 500, geen partiële redactie', async () => {
+    const seed = seedThreadWithReplies();
+    const store = makeStore(seed);
+    const pool = makeTxPool(store, { failOnSql: /UPDATE\s+studiecafe_replies/i });
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    ctx.userId = 'stu-1';
+
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('tx boom');
+
+    // Na de fout op de replies-update moet er een ROLLBACK volgen, geen COMMIT.
+    expect(pool.log).toEqual(['BEGIN', 'UPDATE_THREADS', 'UPDATE_REPLIES', 'ROLLBACK']);
+    expect(pool.released).toBe(1);
+  });
+
+  it('faalt de thread-update meteen → ROLLBACK + 500, replies onaangeroerd', async () => {
+    const seed = seedThreadWithReplies();
+    const store = makeStore(seed);
+    const pool = makeTxPool(store, { failOnSql: /UPDATE\s+studiecafe_threads/i });
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    ctx.userId = 'stu-1';
+
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('tx boom');
+
+    expect(pool.log).toEqual(['BEGIN', 'UPDATE_THREADS', 'ROLLBACK']);
+    expect(pool.released).toBe(1);
+    // Geen enkele rij is geredigeerd (de mutaties draaiden niet door de fout).
+    for (const r of seed.studiecafe_replies) {
+      expect(r.deleted_at).toBeNull();
+      expect(r.body).not.toBe('');
+    }
+  });
+
+  it('slaat reeds verwijderde replies over in de cascade (audit blijft intact)', async () => {
+    const seed = {
+      studiecafe_threads: [threadRow({ id: 't-1', author_id: 'stu-1' })],
+      studiecafe_replies: [
+        replyRow({ id: 'r-live', thread_id: 't-1', body: 'leeft', author_id: 'stu-3' }),
+        replyRow({
+          id: 'r-old', thread_id: 't-1', body: '', author_id: null,
+          deleted_at: '2026-06-20T08:00:00.000Z', deleted_by: 'staff-9',
+        }),
+      ],
+    };
+    const store = makeStore(seed);
+    const pool = makeTxPool(store);
+    const { call, ctx } = setup(seed, { pgPool: pool });
+    ctx.userId = 'stu-1';
+
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+
+    const live = seed.studiecafe_replies.find((r) => r.id === 'r-live');
+    const old = seed.studiecafe_replies.find((r) => r.id === 'r-old');
+    expect(live.deleted_at).toBeTruthy();
+    expect(live.body).toBe('');
+    // De al verwijderde reply behoudt zijn oorspronkelijke deleted_by/at (niet overschreven).
+    expect(old.deleted_at).toBe('2026-06-20T08:00:00.000Z');
+    expect(old.deleted_by).toBe('staff-9');
   });
 });
