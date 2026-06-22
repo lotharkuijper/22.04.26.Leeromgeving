@@ -653,16 +653,36 @@ class Builder {
     this._limit = null;
     this._insert = null;
     this._patch = null;
+    this._upsert = null;
+    this._onConflict = '';
   }
   select() { return this; }
   insert(row) { this.mode = 'insert'; this._insert = row; return this; }
   update(patch) { this.mode = 'update'; this._patch = patch; return this; }
+  upsert(row, opts = {}) { this.mode = 'upsert'; this._upsert = row; this._onConflict = opts.onConflict || ''; return this; }
+  delete() { this.mode = 'delete'; return this; }
   eq(c, v) { this._filters.push(['eq', c, v]); return this; }
   is(c, v) { this._filters.push(['is', c, v]); return this; }
   in(c, v) { this._filters.push(['in', c, v]); return this; }
   order(c, o) { this._orders.push([c, o]); return this; }
   limit(n) { this._limit = n; return this; }
   _rows() { return this.store[this.table] || (this.store[this.table] = []); }
+  // Simuleert een oude DB waar een nog-niet-gemigreerde kolom ontbreekt: als de
+  // schrijf-payload zo'n kolom bevat, geeft de query een PostgREST-achtige fout
+  // terug (i.p.v. te schrijven) zodat de defensieve kolom-fallbacks in de routes
+  // worden uitgeoefend.
+  _rejectError() {
+    const cols = this.store._rejectColumns;
+    if (!cols) return null;
+    const payload = this._insert || this._patch || this._upsert;
+    if (!payload) return null;
+    for (const c of cols) {
+      if (Object.prototype.hasOwnProperty.call(payload, c)) {
+        return { message: `column "${c}" does not exist` };
+      }
+    }
+    return null;
+  }
   _match(row) {
     return this._filters.every(([op, c, v]) => {
       if (op === 'eq') return row[c] === v;
@@ -681,6 +701,28 @@ class Builder {
       const affected = this._rows().filter((r) => this._match(r));
       for (const r of affected) Object.assign(r, this._patch);
       return affected.map((r) => ({ ...r }));
+    }
+    if (this.mode === 'upsert') {
+      const conflictCols = this._onConflict.split(',').map((s) => s.trim()).filter(Boolean);
+      const rows = this._rows();
+      const existing = conflictCols.length
+        ? rows.find((r) => conflictCols.every((c) => r[c] === this._upsert[c]))
+        : null;
+      if (existing) {
+        Object.assign(existing, this._upsert);
+        return [{ ...existing }];
+      }
+      const row = { id: `${this.table}-${this.store._seq++}`, ...this._upsert };
+      rows.push(row);
+      return [{ ...row }];
+    }
+    if (this.mode === 'delete') {
+      const rows = this._rows();
+      const removed = [];
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (this._match(rows[i])) removed.push(rows.splice(i, 1)[0]);
+      }
+      return removed;
     }
     let rows = this._rows().filter((r) => this._match(r)).map((r) => ({ ...r }));
     for (const [c, o] of [...this._orders].reverse()) {
@@ -707,6 +749,8 @@ class Builder {
   }
   then(resolve, reject) {
     try {
+      const rejErr = this._rejectError();
+      if (rejErr) { resolve({ data: null, error: rejErr }); return; }
       resolve({ data: this._apply(), error: null });
     } catch (e) {
       if (reject) reject(e);
@@ -722,8 +766,9 @@ function makeSupabase(store) {
 // Registreert de echte routes op een fake app en geeft een call-helper terug.
 // `ctx` is muteerbaar zodat per test de auth-uitkomst (user, access, staff)
 // gestuurd kan worden.
-function setup(seed, { pgPool = null } = {}) {
+function setup(seed, { pgPool = null, rejectColumns = null } = {}) {
   const store = makeStore(seed);
+  if (rejectColumns) store._rejectColumns = rejectColumns;
   const ctx = { userId: 'stu-1', hasAccess: true, isStaff: false };
   const routes = {};
   const reg = (method) => (path, handler) => { routes[`${method} ${path}`] = handler; };
@@ -765,6 +810,9 @@ const R = {
   reaction: 'POST /api/studiecafe/:courseId/reactions',
   kudos: 'POST /api/studiecafe/:courseId/kudos',
   unread: 'GET /api/studiecafe/:courseId/unread',
+  markRead: 'POST /api/studiecafe/:courseId/threads/:threadId/read',
+  markUnread: 'POST /api/studiecafe/:courseId/threads/:threadId/unread',
+  seen: 'POST /api/studiecafe/:courseId/seen',
 };
 
 function threadRow(over = {}) {
@@ -1925,5 +1973,188 @@ describe('studiecafe endpoints — GET /unread telling', () => {
     const res = await call(R.unread, { params: { courseId: COURSE_A } });
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(1);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Schrijf-routes voor de leesstatus (Task #340). Task #337 testte alleen het
+// LEZENDE GET /unread; de routes die de leesstatus VERANDEREN hadden geen test.
+// Een regressie hier (verkeerde kolom, ontbrekende clear van manual_unread, of
+// een kapotte legacy-fallback) zou het verse /unread-getal stilletjes verkeerd
+// maken terwijl de /unread-test zelf groen blijft. We jagen de échte handlers
+// (POST /threads/:id/read, /threads/:id/unread, /seen) door de in-memory harness
+// en controleren wat ze naar studiecafe_thread_reads / studiecafe_last_seen
+// schrijven, inclusief het kolomloze fallback-pad (oude DB zonder manual_unread).
+// ───────────────────────────────────────────────────────────────────────────
+describe('studiecafe endpoints — POST /threads/:threadId/read (Task #340)', () => {
+  it('zonder cursustoegang → 403, niets geschreven', async () => {
+    const { ctx, call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    ctx.hasAccess = false;
+    const res = await call(R.markRead, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+  });
+
+  it('een thread uit een andere cursus → 404 (geen read-rij)', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    const res = await call(R.markRead, { params: { courseId: COURSE_A, threadId: 't-B' } });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+  });
+
+  it('een onbekende thread → 404', async () => {
+    const { call } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    const res = await call(R.markRead, { params: { courseId: COURSE_A, threadId: 'ontbreekt' } });
+    expect(res.status).toBe(404);
+  });
+
+  it('upsert een nieuwe read-rij met read_at + manual_unread=false', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    const res = await call(R.markRead, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.readAt).toBeTruthy();
+    expect(store.studiecafe_thread_reads).toHaveLength(1);
+    const row = store.studiecafe_thread_reads[0];
+    expect(row).toMatchObject({
+      user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1',
+      read_at: res.body.readAt, manual_unread: false,
+    });
+  });
+
+  it('openen heft een eerdere bewust-ongelezen markering op (manual_unread→false)', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1' })],
+      studiecafe_thread_reads: [{
+        user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1',
+        read_at: '2026-06-20T09:00:00.000Z', manual_unread: true,
+      }],
+    });
+    const res = await call(R.markRead, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    // Geen dubbele rij: de bestaande (user,thread)-rij wordt geüpdatet.
+    expect(store.studiecafe_thread_reads).toHaveLength(1);
+    const row = store.studiecafe_thread_reads[0];
+    expect(row.manual_unread).toBe(false);
+    expect(row.read_at).toBe(res.body.readAt);
+    expect(row.read_at).not.toBe('2026-06-20T09:00:00.000Z');
+  });
+
+  it('legacy DB zonder manual_unread-kolom: schrijft read_at via de fallback', async () => {
+    const { call, store } = setup(
+      { studiecafe_threads: [threadRow({ id: 't-1' })] },
+      { rejectColumns: ['manual_unread'] },
+    );
+    const res = await call(R.markRead, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_thread_reads).toHaveLength(1);
+    const row = store.studiecafe_thread_reads[0];
+    expect(row.read_at).toBe(res.body.readAt);
+    // De fallback-upsert laat de kolom bewust weg.
+    expect('manual_unread' in row).toBe(false);
+  });
+});
+
+describe('studiecafe endpoints — POST /threads/:threadId/unread (Task #340)', () => {
+  it('zonder cursustoegang → 403, niets geschreven', async () => {
+    const { ctx, call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    ctx.hasAccess = false;
+    const res = await call(R.markUnread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+  });
+
+  it('een thread uit een andere cursus → 404 (geen markering)', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    const res = await call(R.markUnread, { params: { courseId: COURSE_A, threadId: 't-B' } });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+  });
+
+  it('zet manual_unread=true op een nieuwe rij (ook zonder bestaande read)', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-1' })] });
+    const res = await call(R.markUnread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(store.studiecafe_thread_reads).toHaveLength(1);
+    expect(store.studiecafe_thread_reads[0]).toMatchObject({
+      user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1', manual_unread: true,
+    });
+  });
+
+  it('zet manual_unread=true op een bestaande read-rij en behoudt read_at', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1' })],
+      studiecafe_thread_reads: [{
+        user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1',
+        read_at: '2026-06-21T10:00:00.000Z', manual_unread: false,
+      }],
+    });
+    const res = await call(R.markUnread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_thread_reads).toHaveLength(1);
+    const row = store.studiecafe_thread_reads[0];
+    expect(row.manual_unread).toBe(true);
+    expect(row.read_at).toBe('2026-06-21T10:00:00.000Z');
+  });
+
+  it('legacy DB zonder manual_unread-kolom: valt terug op het verwijderen van de read-rij', async () => {
+    const { call, store } = setup(
+      {
+        studiecafe_threads: [threadRow({ id: 't-1' })],
+        studiecafe_thread_reads: [{
+          user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1',
+          read_at: '2026-06-21T10:00:00.000Z',
+        }],
+      },
+      { rejectColumns: ['manual_unread'] },
+    );
+    const res = await call(R.markUnread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    // Zonder de kolom kan de marker niet gezet worden → de read-rij wordt
+    // verwijderd zodat de thread (mits ná de vloer) weer als ongelezen telt.
+    expect(store.studiecafe_thread_reads).toHaveLength(0);
+  });
+});
+
+describe('studiecafe endpoints — POST /seen (Task #340)', () => {
+  it('zonder cursustoegang → 403, niets geschreven', async () => {
+    const { ctx, call, store } = setup();
+    ctx.hasAccess = false;
+    const res = await call(R.seen, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_last_seen).toHaveLength(0);
+  });
+
+  it('upsert een nieuwe last_seen_at-rij voor (gebruiker, cursus)', async () => {
+    const { call, store } = setup();
+    const res = await call(R.seen, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.lastSeenAt).toBeTruthy();
+    expect(store.studiecafe_last_seen).toHaveLength(1);
+    expect(store.studiecafe_last_seen[0]).toMatchObject({
+      user_id: 'stu-1', course_id: COURSE_A, last_seen_at: res.body.lastSeenAt,
+    });
+  });
+
+  it('werkt de bestaande last_seen_at-rij bij (geen dubbele rij)', async () => {
+    const { call, store } = setup({
+      studiecafe_last_seen: [{ user_id: 'stu-1', course_id: COURSE_A, last_seen_at: '2026-06-20T08:00:00.000Z' }],
+    });
+    const res = await call(R.seen, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_last_seen).toHaveLength(1);
+    const row = store.studiecafe_last_seen[0];
+    expect(row.last_seen_at).toBe(res.body.lastSeenAt);
+    expect(row.last_seen_at).not.toBe('2026-06-20T08:00:00.000Z');
+  });
+
+  it('een ontbrekende last_seen-tabel → ok:false maar geen crash (defensief)', async () => {
+    const { call } = setup(undefined, { rejectColumns: ['last_seen_at'] });
+    const res = await call(R.seen, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.lastSeenAt).toBeTruthy();
   });
 });
