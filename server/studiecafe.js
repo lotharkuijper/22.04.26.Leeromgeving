@@ -15,6 +15,13 @@
 // server/__tests__/studiecafe.test.js.
 // ───────────────────────────────────────────────────────────────────────────
 
+import {
+  buildDedupKey,
+  normalizeNotificationPrefs,
+  computeAnnouncementAudience,
+  DEFAULT_NOTIFICATION_PREFS,
+} from './notifications.js';
+
 export const STUDIECAFE_CATEGORIES = ['vraag', 'discussie', 'samenwerken'];
 // Bewuste allowlist: voorkomt willekeurige/agressieve emoji-payloads.
 export const ALLOWED_REACTION_EMOJI = ['👍', '❤️', '🎉', '🤔', '✅', '🙌'];
@@ -243,6 +250,186 @@ export function registerStudiecafeRoutes(app, deps) {
     isStaffForCourse,
     pgPool,
   } = deps;
+
+  // ── Meldingen (Task #311) ─────────────────────────────────────────────────
+  // Zet meldingen in studiecafe_notifications; de digest-worker (server/index.js)
+  // batcht ze later tot één e-mail per gebruiker. Best-effort: een falende enqueue
+  // mag NOOIT de hoofd-actie (reactie/thread plaatsen) breken. Ontdubbeling via de
+  // partiële unieke index op dedup_key (WHERE sent_at IS NULL): zolang er nog een
+  // onverzonden melding voor dezelfde (ontvanger, thread, soort) staat, voegen we
+  // er geen extra bij — zo overspoelt een druk gesprek de inbox niet.
+  const MAX_ANNOUNCE_AUDIENCE = 5000;
+  const ENQUEUE_CHUNK = 500; // rijen per bulk-insert (8 params/rij, ruim onder de pg-limiet)
+
+  // Bulk-insert van meldingen in één multi-row statement per chunk (i.p.v. één
+  // query per ontvanger), zodat een aankondiging met een grote doelgroep snel
+  // wegschrijft. Ontdubbeling via de partiële unieke index op dedup_key.
+  async function enqueueNotifications(items) {
+    if (!Array.isArray(items) || !items.length) return;
+    const rows = items
+      .filter((it) => it && it.userId && it.courseId && it.kind)
+      .map((it) => ({
+        user_id: it.userId,
+        course_id: it.courseId,
+        kind: it.kind,
+        thread_id: it.threadId || null,
+        reply_id: it.replyId || null,
+        actor_id: it.actorId || null,
+        thread_title: it.threadTitle || null,
+        dedup_key: buildDedupKey(it.kind, it.threadId, it.userId),
+      }));
+    if (!rows.length) return;
+    try {
+      for (let i = 0; i < rows.length; i += ENQUEUE_CHUNK) {
+        const chunk = rows.slice(i, i + ENQUEUE_CHUNK);
+        if (pgPool) {
+          const params = [];
+          const valueGroups = chunk.map((r) => {
+            const base = params.length;
+            params.push(r.user_id, r.course_id, r.kind, r.thread_id, r.reply_id, r.actor_id, r.thread_title, r.dedup_key);
+            return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8})`;
+          });
+          await pgPool
+            .query(
+              `INSERT INTO studiecafe_notifications
+                 (user_id, course_id, kind, thread_id, reply_id, actor_id, thread_title, dedup_key)
+               VALUES ${valueGroups.join(',')}
+               ON CONFLICT (dedup_key) WHERE sent_at IS NULL DO NOTHING`,
+              params,
+            )
+            .catch((e) => console.warn('[studiecafe] enqueue melding (bulk) mislukt:', e.message));
+        } else {
+          // Fallback zonder pgPool (bv. testomgeving): best-effort insert zonder de
+          // partiële-index-ontdubbeling (die kan PostgREST niet uitdrukken).
+          await supabaseAdmin
+            .from('studiecafe_notifications')
+            .insert(chunk)
+            .then(({ error }) => {
+              if (error) console.warn('[studiecafe] enqueue melding (fallback) mislukt:', error.message);
+            });
+        }
+      }
+    } catch (e) {
+      console.warn('[studiecafe] enqueue melding onverwacht:', e.message);
+    }
+  }
+
+  // Bepaal de doelgroep voor een aankondiging volgens het ZICHTBAARHEIDS-model
+  // (zie canAccessCourseContent): een actieve + zichtbare cursus is open voor
+  // ÁLLE studenten (de meesten hebben géén course_members-rij), dus die krijgen
+  // állemaal de aankondiging. Bij een verborgen of inactieve cursus zien alleen
+  // ingeschreven leden de inhoud, dus beperken we de doelgroep tot course_members.
+  // De afzender wordt uitgesloten; het geheel wordt gecapt op MAX_ANNOUNCE_AUDIENCE.
+  async function announcementAudience(courseId, excludeUserId) {
+    // Cursus-status (defensief: student_visible kan ontbreken op een oude DB).
+    let isActive = true;
+    let studentVisible = true;
+    try {
+      const { data: course } = await supabaseAdmin
+        .from('courses')
+        .select('*')
+        .eq('id', courseId)
+        .maybeSingle();
+      if (course) {
+        if (typeof course.is_active === 'boolean') isActive = course.is_active;
+        if (typeof course.student_visible === 'boolean') studentVisible = course.student_visible;
+      }
+    } catch (e) {
+      console.warn('[studiecafe] aankondiging-doelgroep (cursus) mislukt:', e.message);
+    }
+
+    // Ingeschreven leden (docenten + expliciet toegevoegde studenten).
+    const memberIds = [];
+    try {
+      const { data: members } = await supabaseAdmin
+        .from('course_members')
+        .select('user_id')
+        .eq('course_id', courseId);
+      for (const r of members || []) if (r.user_id) memberIds.push(r.user_id);
+    } catch (e) {
+      console.warn('[studiecafe] aankondiging-doelgroep (members) mislukt:', e.message);
+    }
+
+    // Alle studenten — alleen relevant als de cursus open is (actief + zichtbaar).
+    const studentIds = [];
+    if (studentVisible !== false && isActive === true) {
+      try {
+        const { data: students } = await supabaseAdmin
+          .from('profiles')
+          .select('id')
+          .eq('role', 'student')
+          .limit(MAX_ANNOUNCE_AUDIENCE);
+        for (const r of students || []) if (r.id) studentIds.push(r.id);
+      } catch (e) {
+        console.warn('[studiecafe] aankondiging-doelgroep (studenten) mislukt:', e.message);
+      }
+    }
+
+    return computeAnnouncementAudience({
+      memberIds,
+      studentIds,
+      isActive,
+      studentVisible,
+      excludeUserId,
+      max: MAX_ANNOUNCE_AUDIENCE,
+    });
+  }
+
+  async function enqueueAnnouncement({ courseId, threadId, title, actorId }) {
+    const audience = await announcementAudience(courseId, actorId);
+    if (!audience.length) return;
+    await enqueueNotifications(
+      audience.map((userId) => ({
+        userId,
+        courseId,
+        kind: 'announcement',
+        threadId,
+        actorId,
+        threadTitle: title,
+      })),
+    );
+  }
+
+  // GET/PATCH meldingsvoorkeuren (per gebruiker, niet cursus-gebonden). Bewust
+  // vóór de :courseId-routes geregistreerd zodat 'notification-prefs' niet als
+  // courseId wordt opgevat.
+  app.get('/api/studiecafe/notification-prefs', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    try {
+      const { data } = await supabaseAdmin
+        .from('studiecafe_notification_prefs')
+        .select('email_replies, email_announcements')
+        .eq('user_id', auth.user.id)
+        .maybeSingle();
+      return res.json(normalizeNotificationPrefs(data));
+    } catch {
+      return res.json(DEFAULT_NOTIFICATION_PREFS);
+    }
+  });
+
+  app.patch('/api/studiecafe/notification-prefs', async (req, res) => {
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const b = req.body || {};
+    const update = { user_id: auth.user.id, updated_at: new Date().toISOString() };
+    if (typeof b.emailReplies === 'boolean') update.email_replies = b.emailReplies;
+    if (typeof b.emailAnnouncements === 'boolean') update.email_announcements = b.emailAnnouncements;
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('studiecafe_notification_prefs')
+        .upsert(update, { onConflict: 'user_id' })
+        .select('email_replies, email_announcements')
+        .single();
+      if (error) {
+        console.warn('[studiecafe] prefs upsert mislukt:', error.message);
+        return res.json(normalizeNotificationPrefs(update));
+      }
+      return res.json(normalizeNotificationPrefs(data));
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
 
   const THREAD_COLS =
     'id, course_id, author_id, title, body, category, is_pinned, is_locked, is_announcement, is_resolved, kudos_by, kudos_at, reactions, reply_count, last_activity_at, created_at, updated_at';
@@ -505,6 +692,16 @@ export function registerStudiecafeRoutes(app, deps) {
         console.error('[studiecafe] create thread error:', error.message);
         return res.status(500).json({ error: error.message });
       }
+      // Aankondiging? Meld het aan de doelgroep. Fire-and-forget: het opbouwen
+      // van een grote doelgroep mag het plaatsen van de aankondiging niet ophouden.
+      if (isAnnouncement) {
+        void enqueueAnnouncement({
+          courseId,
+          threadId: data.id,
+          title: data.title,
+          actorId: auth.user.id,
+        }).catch((e) => console.warn('[studiecafe] enqueue aankondiging mislukt:', e.message));
+      }
       const nameFor = await buildNameResolver([data.author_id, data.kudos_by]);
       return res.json({ thread: shapeThread(data, nameFor, auth.user.id) });
     } catch (err) {
@@ -527,7 +724,7 @@ export function registerStudiecafeRoutes(app, deps) {
       const isStaff = await isStaffForCourse(auth.user, auth.profile, courseId);
       const { data: thread } = await supabaseAdmin
         .from('studiecafe_threads')
-        .select('id, course_id, is_locked, reply_count, deleted_at')
+        .select('id, course_id, is_locked, reply_count, deleted_at, author_id, title')
         .eq('id', threadId)
         .maybeSingle();
       if (!thread || thread.course_id !== courseId || thread.deleted_at) {
@@ -561,6 +758,20 @@ export function registerStudiecafeRoutes(app, deps) {
           .from('studiecafe_threads')
           .update({ reply_count: (thread.reply_count || 0) + 1, last_activity_at: await nowIso() })
           .eq('id', threadId);
+      }
+      // Meld de thread-auteur (niet jezelf) dat er een reactie is (best-effort).
+      if (thread.author_id && thread.author_id !== auth.user.id) {
+        await enqueueNotifications([
+          {
+            userId: thread.author_id,
+            courseId,
+            kind: 'reply',
+            threadId,
+            replyId: data.id,
+            actorId: auth.user.id,
+            threadTitle: thread.title,
+          },
+        ]).catch((e) => console.warn('[studiecafe] enqueue reactie-melding mislukt:', e.message));
       }
       const nameFor = await buildNameResolver([data.author_id, data.kudos_by]);
       return res.json({ reply: shapeReply(data, nameFor, auth.user.id) });
@@ -765,7 +976,7 @@ export function registerStudiecafeRoutes(app, deps) {
     try {
       const { data: thread } = await supabaseAdmin
         .from('studiecafe_threads')
-        .select('id, course_id, author_id, deleted_at')
+        .select('id, course_id, author_id, deleted_at, is_announcement')
         .eq('id', threadId)
         .maybeSingle();
       if (!thread || thread.course_id !== courseId || thread.deleted_at) {
@@ -817,6 +1028,16 @@ export function registerStudiecafeRoutes(app, deps) {
       if (error) {
         console.error('[studiecafe] patch thread error:', error.message);
         return res.status(500).json({ error: error.message });
+      }
+      // Nieuw als aankondiging gemarkeerd? Meld de doelgroep. Fire-and-forget
+      // zodat een grote doelgroep de PATCH-respons niet ophoudt.
+      if (update.is_announcement === true && thread.is_announcement !== true) {
+        void enqueueAnnouncement({
+          courseId,
+          threadId: data.id,
+          title: data.title,
+          actorId: auth.user.id,
+        }).catch((e) => console.warn('[studiecafe] enqueue aankondiging (patch) mislukt:', e.message));
       }
       const nameFor = await buildNameResolver([data.author_id, data.kudos_by]);
       return res.json({ thread: shapeThread(data, nameFor, auth.user.id) });

@@ -82,6 +82,14 @@ import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
 import { registerStudiecafeRoutes } from './studiecafe.js';
+import {
+  groupPendingByUser,
+  partitionByPrefs,
+  normalizeNotificationPrefs,
+  buildDigestEmail,
+  getEmailConfig,
+  sendEmailViaResend,
+} from './notifications.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
 import {
@@ -12988,6 +12996,144 @@ if (fs.existsSync(path.join(distPath, 'index.html'))) {
   });
 }
 
+// ── Studiecafé digest-worker (Task #311) ────────────────────────────────────
+// Batcht de onverzonden meldingen uit studiecafe_notifications periodiek tot één
+// e-mail per gebruiker. Respecteert de per-gebruiker opt-out (prefs): wie een
+// soort melding uit heeft, krijgt die rijen NIET gemaild maar ze worden wel als
+// verzonden gemarkeerd zodat ze niet eindeloos terugkomen. Faalt zacht: zonder
+// geconfigureerde e-mail (Resend) blijft de wachtrij staan tot het wel kan.
+const DIGEST_INTERVAL_MS = Number(process.env.STUDIECAFE_DIGEST_INTERVAL_MS) || 300000;
+const DIGEST_BATCH_LIMIT = 1000;
+
+function resolveAppBaseUrl() {
+  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/+$/, '');
+  if (process.env.REPLIT_DEV_DOMAIN) return `https://${process.env.REPLIT_DEV_DOMAIN}`;
+  return '';
+}
+
+async function markNotificationsSent(ids) {
+  if (!ids.length) return;
+  try {
+    await supabaseAdmin
+      .from('studiecafe_notifications')
+      .update({ sent_at: new Date().toISOString() })
+      .in('id', ids);
+  } catch (e) {
+    console.warn('[studiecafe-digest] markeren als verzonden mislukt:', e.message);
+  }
+}
+
+let digestRunning = false;
+async function runStudiecafeDigestOnce() {
+  if (digestRunning) return;
+  digestRunning = true;
+  try {
+    // 1. Haal onverzonden meldingen op.
+    let pending;
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('studiecafe_notifications')
+        .select('id, user_id, course_id, kind, thread_id, reply_id, actor_id, thread_title')
+        .is('sent_at', null)
+        .order('created_at', { ascending: true })
+        .limit(DIGEST_BATCH_LIMIT);
+      if (error) {
+        // Ontbrekende tabel (oude DB) → stil overslaan.
+        if (!/relation .* does not exist|schema cache/i.test(error.message || '')) {
+          console.warn('[studiecafe-digest] ophalen mislukt:', error.message);
+        }
+        return;
+      }
+      pending = data || [];
+    } catch (e) {
+      console.warn('[studiecafe-digest] ophalen onverwacht:', e.message);
+      return;
+    }
+    if (!pending.length) return;
+
+    // 2. E-mail geconfigureerd? Zo niet: laat de wachtrij staan tot het wel kan.
+    const emailCfg = await getEmailConfig();
+    if (!emailCfg) {
+      console.warn(
+        `[studiecafe-digest] ${pending.length} melding(en) wachten, maar e-mail is niet geconfigureerd (RESEND_API_KEY / Resend-connector). Wachtrij blijft staan.`,
+      );
+      return;
+    }
+
+    const baseUrl = resolveAppBaseUrl();
+    const byUser = groupPendingByUser(pending);
+
+    for (const [userId, rows] of byUser) {
+      // 3. Voorkeuren laden + toepassen.
+      let prefs = normalizeNotificationPrefs(null);
+      try {
+        const { data: prefRow } = await supabaseAdmin
+          .from('studiecafe_notification_prefs')
+          .select('email_replies, email_announcements')
+          .eq('user_id', userId)
+          .maybeSingle();
+        prefs = normalizeNotificationPrefs(prefRow);
+      } catch {
+        /* default: alles aan */
+      }
+      const { allowed, suppressed } = partitionByPrefs(rows, prefs);
+
+      // Onderdrukte meldingen meteen afvinken (niet mailen, niet herhalen).
+      if (suppressed.length) await markNotificationsSent(suppressed.map((r) => r.id));
+      if (!allowed.length) continue;
+
+      // 4. E-mailadres + naam + taal van de ontvanger ophalen.
+      let profile = null;
+      try {
+        const { data } = await supabaseAdmin
+          .from('profiles')
+          .select('email, full_name, preferred_lang')
+          .eq('id', userId)
+          .maybeSingle();
+        profile = data;
+      } catch {
+        /* val terug op auth-email hieronder */
+      }
+      let email = profile && profile.email ? profile.email : null;
+      if (!email) {
+        try {
+          const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
+          email = authUser && authUser.user ? authUser.user.email : null;
+        } catch {
+          /* geen adres → overslaan, laat staan voor latere poging */
+        }
+      }
+      if (!email) continue;
+
+      const lang = profile && profile.preferred_lang === 'nl' ? 'nl' : profile && profile.preferred_lang === 'en' ? 'en' : 'nl';
+      const userName = (profile && profile.full_name && String(profile.full_name).split(' ')[0]) || '';
+
+      // 5. Digest bouwen + versturen.
+      const mail = buildDigestEmail(allowed, { userName, lang, baseUrl });
+      if (!mail) {
+        await markNotificationsSent(allowed.map((r) => r.id));
+        continue;
+      }
+      const result = await sendEmailViaResend({
+        apiKey: emailCfg.apiKey,
+        from: emailCfg.from,
+        to: email,
+        subject: mail.subject,
+        html: mail.html,
+        text: mail.text,
+      });
+      if (result.ok) {
+        await markNotificationsSent(allowed.map((r) => r.id));
+      } else {
+        console.warn(`[studiecafe-digest] verzenden mislukt (${email}): ${result.error}`);
+        // Laat de rijen staan voor de volgende cyclus.
+      }
+    }
+  } finally {
+    digestRunning = false;
+  }
+}
+
 // In de testomgeving importeren we de app zonder de poort te openen of de
 // schema-detectie/seeding te draaien; integratietests mounten `app` zelf op een
 // efemere poort (zie server/__tests__/chatEndpoint.test.js).
@@ -13014,6 +13160,11 @@ if (process.env.NODE_ENV !== 'test') {
     // Wacht kort tot promptsHasSection geinitialiseerd is alvorens quiz-prompts
     // aan te maken (initChatbotPromptSection draait async).
     setTimeout(() => { initQuizPromptDefaults(); }, 2000);
+    // Studiecafé digest-worker (Task #311): periodiek meldingen batchen + mailen.
+    const digestTimer = setInterval(() => {
+      runStudiecafeDigestOnce().catch((e) => console.warn('[studiecafe-digest] cyclus mislukt:', e.message));
+    }, DIGEST_INTERVAL_MS);
+    if (typeof digestTimer.unref === 'function') digestTimer.unref();
   });
 }
 

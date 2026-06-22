@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Coffee, Send, Loader2, Pin, PinOff, Lock, Unlock, Trash2, CheckCircle2,
   Award, Megaphone, Smile, MessageCircle, HelpCircle, MessagesSquare, Users,
-  Pencil, X, Search,
+  Pencil, X, Search, Bell,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -124,6 +124,15 @@ export function StudiecafePage() {
   // Emoji-picker: welk doel staat open ('thread:<id>' | 'reply:<id>' | null).
   const [pickerFor, setPickerFor] = useState<string | null>(null);
 
+  // Meldingsvoorkeuren (Task #311) — e-mail-digest opt-out per gebruiker.
+  const [showNotifPrefs, setShowNotifPrefs] = useState(false);
+  const [notifPrefs, setNotifPrefs] = useState<{ emailReplies: boolean; emailAnnouncements: boolean }>({
+    emailReplies: true,
+    emailAnnouncements: true,
+  });
+  const [notifPrefsLoaded, setNotifPrefsLoaded] = useState(false);
+  const [savingNotifPrefs, setSavingNotifPrefs] = useState(false);
+
   const getToken = useCallback(async (): Promise<string | null> => {
     if (session?.access_token) return session.access_token;
     const { data } = await supabase.auth.getSession();
@@ -137,6 +146,47 @@ export function StudiecafePage() {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     return fetch(path, { ...init, headers });
   }, [getToken]);
+
+  const loadNotifPrefs = useCallback(async () => {
+    try {
+      const r = await apiFetch('/api/studiecafe/notification-prefs');
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d && typeof d === 'object') {
+        setNotifPrefs({
+          emailReplies: d.email_replies !== false,
+          emailAnnouncements: d.email_announcements !== false,
+        });
+      }
+    } catch { /* stille terugval op defaults */ } finally {
+      setNotifPrefsLoaded(true);
+    }
+  }, [apiFetch]);
+
+  const saveNotifPref = useCallback(
+    async (patch: Partial<{ emailReplies: boolean; emailAnnouncements: boolean }>) => {
+      const next = { ...notifPrefs, ...patch };
+      setNotifPrefs(next); // optimistisch
+      setSavingNotifPrefs(true);
+      try {
+        const r = await apiFetch('/api/studiecafe/notification-prefs', {
+          method: 'PATCH',
+          body: JSON.stringify(patch),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d && typeof d === 'object') {
+          setNotifPrefs({
+            emailReplies: d.email_replies !== false,
+            emailAnnouncements: d.email_announcements !== false,
+          });
+        }
+      } catch { /* houd optimistische waarde */ } finally {
+        setSavingNotifPrefs(false);
+      }
+    },
+    [apiFetch, notifPrefs],
+  );
+
+  useEffect(() => { loadNotifPrefs(); }, [loadNotifPrefs]);
 
   const loadThreads = useCallback(async () => {
     if (!courseId) return;
@@ -502,11 +552,71 @@ export function StudiecafePage() {
           <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
             <Coffee className="w-6 h-6" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold leading-tight" data-testid="text-studiecafe-title">{t('studiecafe.title')}</h1>
             <p className="text-white/90 text-sm">
               {activeCourse?.name ? `${activeCourse.name} · ` : ''}{t('studiecafe.subtitle')}
             </p>
+          </div>
+          <div className="relative ml-auto shrink-0">
+            <button
+              onClick={() => setShowNotifPrefs((v) => !v)}
+              className="w-10 h-10 rounded-xl bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+              title={t('studiecafe.notifications.title')}
+              aria-label={t('studiecafe.notifications.title')}
+              aria-expanded={showNotifPrefs}
+              data-testid="button-notification-prefs"
+            >
+              <Bell className="w-5 h-5" />
+            </button>
+            {showNotifPrefs && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setShowNotifPrefs(false)}
+                  data-testid="overlay-notification-prefs"
+                />
+                <div
+                  className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-white text-slate-700 rounded-2xl ring-1 ring-slate-200 shadow-xl z-20 p-4"
+                  data-testid="popover-notification-prefs"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <h2 className="font-semibold text-slate-900">{t('studiecafe.notifications.title')}</h2>
+                    {savingNotifPrefs && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+                  </div>
+                  <p className="text-xs text-slate-500 mb-3">{t('studiecafe.notifications.subtitle')}</p>
+                  <label className="flex items-start gap-3 py-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 w-4 h-4 accent-amber-500"
+                      checked={notifPrefs.emailReplies}
+                      disabled={!notifPrefsLoaded || savingNotifPrefs}
+                      onChange={(e) => saveNotifPref({ emailReplies: e.target.checked })}
+                      data-testid="switch-email-replies"
+                    />
+                    <span className="text-sm">
+                      <span className="block font-medium text-slate-800">{t('studiecafe.notifications.repliesLabel')}</span>
+                      <span className="block text-xs text-slate-500">{t('studiecafe.notifications.repliesHint')}</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-3 py-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 w-4 h-4 accent-amber-500"
+                      checked={notifPrefs.emailAnnouncements}
+                      disabled={!notifPrefsLoaded || savingNotifPrefs}
+                      onChange={(e) => saveNotifPref({ emailAnnouncements: e.target.checked })}
+                      data-testid="switch-email-announcements"
+                    />
+                    <span className="text-sm">
+                      <span className="block font-medium text-slate-800">{t('studiecafe.notifications.announcementsLabel')}</span>
+                      <span className="block text-xs text-slate-500">{t('studiecafe.notifications.announcementsHint')}</span>
+                    </span>
+                  </label>
+                  <p className="text-[11px] text-slate-400 mt-2">{t('studiecafe.notifications.digestNote')}</p>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
