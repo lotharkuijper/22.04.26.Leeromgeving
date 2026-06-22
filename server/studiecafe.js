@@ -284,10 +284,10 @@ export function buildSoftDeleteRedaction({ ts, userId, isThread } = {}) {
   return fields;
 }
 
-// ── Opruimen van wees-leesmarkeringen (Task #323) ───────────────────────────
+// ── Opruimen van wees-toegangsrijen (Task #323 + #325) ──────────────────────
 // Toegang tot een cursus is ZICHTBAARHEIDS-gebaseerd (zie userHasCourseAccess /
-// canAccessCourseContent), niet membership-gebaseerd. Daardoor blijven
-// studiecafe_thread_reads-rijen achter wanneer een student de toegang verliest
+// canAccessCourseContent), niet membership-gebaseerd. Daardoor blijven per-
+// (gebruiker, cursus)-rijen achter wanneer een student de toegang verliest
 // ZONDER dat de cursus wordt verwijderd (de ON DELETE CASCADE op course_id dekt
 // alleen echte cursus-verwijdering). Concreet verliest een student toegang als:
 //   - de cursus verborgen wordt (student_visible=false) → alleen docenten houden
@@ -295,13 +295,25 @@ export function buildSoftDeleteRedaction({ ts, userId, isThread } = {}) {
 //   - de cursus gearchiveerd wordt (is_active=false) → alleen leden + docenten.
 // Een actieve, zichtbare cursus is open voor iedereen, dus daar wordt nooit iets
 // opgeruimd. Deze SQL spiegelt canAccessCourseContent exact en verwijdert elke
-// read-rij waarvan de gebruiker geen toegang meer heeft. Admins/superuser houden
+// rij waarvan de gebruiker geen toegang meer heeft. Admins/superuser houden
 // altijd toegang en worden nooit opgeruimd.
+//
+// Geldt voor twee tabellen met dezelfde (user_id, course_id)-vorm:
+//   - studiecafe_thread_reads (per-thread leesmarkeringen, Task #323);
+//   - studiecafe_last_seen   (per-cursus zachte-uitrol-vloer, Task #325).
+// Beide laten wees-rijen achter bij toegangsverlies; dezelfde regels gelden.
 //
 // `hasStudentVisible` schakelt de student_visible-tak uit op een oude DB zonder
 // die kolom (dan geldt elke cursus als zichtbaar → enkel de archief-regel telt).
 // $1 = superuser-e-mailadres.
-export function buildOrphanThreadReadsCleanupSql(hasStudentVisible = true) {
+export const ORPHAN_CLEANUP_TABLES = ['studiecafe_thread_reads', 'studiecafe_last_seen'];
+
+export function buildOrphanCourseAccessCleanupSql(table, hasStudentVisible = true) {
+  // Whitelist de tabelnaam vóór interpolatie (defensief tegen injectie, ook al
+  // komt de naam uit een server-side constante).
+  if (!ORPHAN_CLEANUP_TABLES.includes(table)) {
+    throw new Error(`buildOrphanCourseAccessCleanupSql: ongeldige tabel "${table}"`);
+  }
   const notAdmin = `NOT EXISTS (
       SELECT 1 FROM profiles p
       WHERE p.id = r.user_id AND (p.role = 'admin' OR p.email = $1)
@@ -309,7 +321,7 @@ export function buildOrphanThreadReadsCleanupSql(hasStudentVisible = true) {
   if (!hasStudentVisible) {
     // Zonder student_visible: alleen gearchiveerde cursussen ruimen op; leden
     // (incl. docenten) houden toegang.
-    return `DELETE FROM studiecafe_thread_reads r
+    return `DELETE FROM ${table} r
   USING courses c
   WHERE r.course_id = c.id
     AND c.is_active = false
@@ -319,7 +331,7 @@ export function buildOrphanThreadReadsCleanupSql(hasStudentVisible = true) {
       WHERE m.course_id = c.id AND m.user_id = r.user_id
     )`;
   }
-  return `DELETE FROM studiecafe_thread_reads r
+  return `DELETE FROM ${table} r
   USING courses c
   WHERE r.course_id = c.id
     AND (c.student_visible = false OR c.is_active = false)
@@ -332,6 +344,11 @@ export function buildOrphanThreadReadsCleanupSql(hasStudentVisible = true) {
           OR (c.student_visible IS DISTINCT FROM false AND c.is_active = false)
         )
     )`;
+}
+
+// Backwards-compat wrapper voor de oorspronkelijke thread_reads-opruimer.
+export function buildOrphanThreadReadsCleanupSql(hasStudentVisible = true) {
+  return buildOrphanCourseAccessCleanupSql('studiecafe_thread_reads', hasStudentVisible);
 }
 
 // ── Route-registratie ───────────────────────────────────────────────────────

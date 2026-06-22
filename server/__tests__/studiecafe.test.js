@@ -19,6 +19,8 @@ import {
   canReplyToThread,
   buildSoftDeleteRedaction,
   buildOrphanThreadReadsCleanupSql,
+  buildOrphanCourseAccessCleanupSql,
+  ORPHAN_CLEANUP_TABLES,
   toggleReactionAtomicPg,
   toggleKudosAtomicPg,
   REACTION_TABLES,
@@ -238,6 +240,39 @@ describe('buildOrphanThreadReadsCleanupSql (Task #323)', () => {
     expect(sql).not.toContain('student_visible');
     // Elk lid (ongeacht rol) blijft gespaard op een oude DB.
     expect(sql).toContain('FROM course_members m');
+  });
+});
+
+describe('buildOrphanCourseAccessCleanupSql (Task #325)', () => {
+  it('ondersteunt studiecafe_last_seen met dezelfde toegangsregels', () => {
+    const sql = buildOrphanCourseAccessCleanupSql('studiecafe_last_seen', true);
+    expect(sql).toContain('DELETE FROM studiecafe_last_seen');
+    expect(sql).toContain('USING courses c');
+    expect(sql).toContain('c.student_visible = false OR c.is_active = false');
+    expect(sql).toContain("c.student_visible = false AND m.member_role = 'teacher'");
+    expect(sql).toContain("p.role = 'admin' OR p.email = $1");
+  });
+  it('zonder student_visible-kolom: alleen gearchiveerde cursussen voor last_seen', () => {
+    const sql = buildOrphanCourseAccessCleanupSql('studiecafe_last_seen', false);
+    expect(sql).toContain('DELETE FROM studiecafe_last_seen');
+    expect(sql).toContain('c.is_active = false');
+    expect(sql).not.toContain('student_visible');
+  });
+  it('de thread_reads-wrapper produceert identieke SQL als de generieke vorm', () => {
+    expect(buildOrphanThreadReadsCleanupSql(true)).toBe(
+      buildOrphanCourseAccessCleanupSql('studiecafe_thread_reads', true),
+    );
+    expect(buildOrphanThreadReadsCleanupSql(false)).toBe(
+      buildOrphanCourseAccessCleanupSql('studiecafe_thread_reads', false),
+    );
+  });
+  it('weigert een niet-gewhiteliste tabelnaam (injectie-bescherming)', () => {
+    expect(() => buildOrphanCourseAccessCleanupSql('courses; DROP TABLE x', true)).toThrow();
+    expect(() => buildOrphanCourseAccessCleanupSql('profiles', true)).toThrow();
+  });
+  it('whitelist bevat beide tabellen', () => {
+    expect(ORPHAN_CLEANUP_TABLES).toContain('studiecafe_thread_reads');
+    expect(ORPHAN_CLEANUP_TABLES).toContain('studiecafe_last_seen');
   });
 });
 

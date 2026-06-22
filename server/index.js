@@ -81,7 +81,7 @@ import {
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
-import { registerStudiecafeRoutes, buildOrphanThreadReadsCleanupSql } from './studiecafe.js';
+import { registerStudiecafeRoutes, buildOrphanCourseAccessCleanupSql } from './studiecafe.js';
 import {
   groupPendingByUser,
   partitionByPrefs,
@@ -13134,45 +13134,65 @@ async function runStudiecafeDigestOnce() {
   }
 }
 
-// ── Studiecafé: opruimen van wees-leesmarkeringen (Task #323) ───────────────
+// ── Studiecafé: opruimen van wees-toegangsrijen (Task #323 + #325) ──────────
 // Een student verliest toegang tot een cursus wanneer die verborgen of
 // gearchiveerd wordt (toegang is zichtbaarheids-gebaseerd, dus er is geen
 // course_members-rij om op te cascaden). De ON DELETE CASCADE op course_id ruimt
 // alleen op bij echte cursus-VERWIJDERING. Deze periodieke job verwijdert daarom
-// studiecafe_thread_reads-rijen waarvan de gebruiker geen toegang meer heeft
-// (gespiegeld op canAccessCourseContent). Vereist pgPool (directe Postgres-
-// verbinding) voor het set-gewijze NOT EXISTS-werk; zonder pgPool wordt de cyclus
-// stil overgeslagen. Defensief: ontbrekende tabel/kolom breekt niets af.
+// per-(gebruiker, cursus)-rijen waarvan de gebruiker geen toegang meer heeft
+// (gespiegeld op canAccessCourseContent), uit twee tabellen met dezelfde vorm:
+//   - studiecafe_thread_reads (per-thread leesmarkeringen, Task #323);
+//   - studiecafe_last_seen   (per-cursus zachte-uitrol-vloer, Task #325).
+// Vereist pgPool (directe Postgres-verbinding) voor het set-gewijze NOT EXISTS-
+// werk; zonder pgPool wordt de cyclus stil overgeslagen. Defensief: een
+// ontbrekende tabel/kolom breekt niets af en stopt de andere tabel niet.
 const READS_CLEANUP_INTERVAL_MS = Number(process.env.STUDIECAFE_READS_CLEANUP_INTERVAL_MS) || 21600000; // 6 uur
 let readsCleanupRunning = false;
+
+// Ruim één tabel op. Retourneert het aantal verwijderde rijen, of null als de
+// tabel (nog) niet bestaat / niet kon worden opgeruimd.
+async function cleanupOrphanTableOnce(table) {
+  let result;
+  try {
+    result = await pgPool.query(
+      buildOrphanCourseAccessCleanupSql(table, coursesHasStudentVisible),
+      [SUPERUSER_EMAIL],
+    );
+  } catch (err) {
+    // 42P01 = tabel ontbreekt (oude DB); 42703 = student_visible-kolom ontbreekt
+    // toch → val terug op de variant zonder die kolom.
+    if (err && err.code === '42703') {
+      try {
+        result = await pgPool.query(
+          buildOrphanCourseAccessCleanupSql(table, false),
+          [SUPERUSER_EMAIL],
+        );
+      } catch (err2) {
+        if (err2 && err2.code === '42P01') return null;
+        console.warn(`[studiecafe-reads-cleanup] fallback (${table}) mislukt:`, err2.message);
+        return null;
+      }
+    } else {
+      if (err && err.code === '42P01') return null;
+      console.warn(`[studiecafe-reads-cleanup] (${table}) mislukt:`, err.message);
+      return null;
+    }
+  }
+  return result && typeof result.rowCount === 'number' ? result.rowCount : 0;
+}
+
 async function runOrphanThreadReadsCleanupOnce() {
   if (readsCleanupRunning) return;
   if (!pgPool) return; // zonder directe Postgres-verbinding: niets te doen
   readsCleanupRunning = true;
   try {
-    let result;
-    try {
-      result = await pgPool.query(buildOrphanThreadReadsCleanupSql(coursesHasStudentVisible), [SUPERUSER_EMAIL]);
-    } catch (err) {
-      // 42P01 = tabel ontbreekt (oude DB); 42703 = student_visible-kolom ontbreekt
-      // toch → val terug op de variant zonder die kolom.
-      if (err && err.code === '42703') {
-        try {
-          result = await pgPool.query(buildOrphanThreadReadsCleanupSql(false), [SUPERUSER_EMAIL]);
-        } catch (err2) {
-          if (err2 && err2.code === '42P01') return;
-          console.warn('[studiecafe-reads-cleanup] fallback mislukt:', err2.message);
-          return;
-        }
-      } else {
-        if (err && err.code === '42P01') return;
-        console.warn('[studiecafe-reads-cleanup] mislukt:', err.message);
-        return;
-      }
+    const reads = await cleanupOrphanTableOnce('studiecafe_thread_reads');
+    if (reads > 0) {
+      console.log(`[studiecafe-reads-cleanup] ${reads} wees-leesmarkering(en) opgeruimd (toegang verlopen).`);
     }
-    const removed = result && typeof result.rowCount === 'number' ? result.rowCount : 0;
-    if (removed > 0) {
-      console.log(`[studiecafe-reads-cleanup] ${removed} wees-leesmarkering(en) opgeruimd (toegang verlopen).`);
+    const lastSeen = await cleanupOrphanTableOnce('studiecafe_last_seen');
+    if (lastSeen > 0) {
+      console.log(`[studiecafe-reads-cleanup] ${lastSeen} wees-'laatst gezien'-rij(en) opgeruimd (toegang verlopen).`);
     }
   } finally {
     readsCleanupRunning = false;
