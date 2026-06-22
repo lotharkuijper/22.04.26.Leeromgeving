@@ -2255,4 +2255,39 @@ describe('studiecafe endpoints — POST /read-all (Task #342)', () => {
       expect('manual_unread' in row).toBe(false);
     }
   });
+
+  // Task #345: "alles als gelezen" moet idempotent blijven onder herhaalde clicks.
+  // De student klikt de knop twee keer snel achter elkaar; de tweede call mag GEEN
+  // dubbele read-rijen aanmaken (upsert op user_id,thread_id) en moet nog steeds
+  // ok=true met de volledige threadIds-lijst teruggeven, zodat de nav-badge op 0
+  // blijft i.p.v. door een lost-update/duplicaat weer op te lichten.
+  it('twee keer klikken maakt geen dubbele read-rijen en blijft volledig ok', async () => {
+    const { call, store } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-1' }),
+        threadRow({ id: 't-2' }),
+      ],
+    });
+    const first = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(first.status).toBe(200);
+    expect(first.body.ok).toBe(true);
+    expect(first.body.threadIds.sort()).toEqual(['t-1', 't-2']);
+    expect(store.studiecafe_thread_reads).toHaveLength(2);
+
+    const second = await call(R.readAll, { params: { courseId: COURSE_A } });
+    expect(second.status).toBe(200);
+    expect(second.body.ok).toBe(true);
+    expect(second.body.threadIds.sort()).toEqual(['t-1', 't-2']);
+    // Geen extra rijen: de upsert op (user_id, thread_id) dedupliceert.
+    expect(store.studiecafe_thread_reads).toHaveLength(2);
+    // Precies één read-rij per thread voor deze gebruiker.
+    const keys = store.studiecafe_thread_reads.map((r) => `${r.user_id}:${r.thread_id}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const row of store.studiecafe_thread_reads) {
+      expect(row).toMatchObject({
+        user_id: 'stu-1', course_id: COURSE_A,
+        read_at: second.body.readAt, manual_unread: false,
+      });
+    }
+  });
 });
