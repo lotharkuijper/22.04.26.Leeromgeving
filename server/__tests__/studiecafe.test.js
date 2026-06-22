@@ -636,6 +636,8 @@ function makeStore(seed = {}) {
   return {
     studiecafe_threads: seed.studiecafe_threads || [],
     studiecafe_replies: seed.studiecafe_replies || [],
+    studiecafe_last_seen: seed.studiecafe_last_seen || [],
+    studiecafe_thread_reads: seed.studiecafe_thread_reads || [],
     profiles: seed.profiles || [],
     _seq: 1,
   };
@@ -762,6 +764,7 @@ const R = {
   patchThread: 'PATCH /api/studiecafe/:courseId/threads/:threadId',
   reaction: 'POST /api/studiecafe/:courseId/reactions',
   kudos: 'POST /api/studiecafe/:courseId/kudos',
+  unread: 'GET /api/studiecafe/:courseId/unread',
 };
 
 function threadRow(over = {}) {
@@ -1781,5 +1784,146 @@ describe('studiecafe endpoints — DELETE reply transactioneel pgPool-pad (Task 
     expect(pool.log).toEqual([]);
     expect(seed.studiecafe_threads[0].reply_count).toBe(3);
     expect(seed.studiecafe_replies[0].deleted_by).toBe('staff-9');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// GET /unread — server-side nav-badge telling (Task #337). De client-hook
+// (useStudiecafeUnread) toont alleen wat dit endpoint berekent, dus de combinatie
+// van zachte-uitrol-vloer (lastSeenAt), per-thread leesstatus (reads) en de
+// handmatige manual_unread-override moet hier kloppen, anders toont de badge een
+// verkeerd getal terwijl de hook-test groen blijft.
+// ───────────────────────────────────────────────────────────────────────────
+describe('studiecafe endpoints — GET /unread telling', () => {
+  const FLOOR = '2026-06-21T00:00:00.000Z';
+
+  function lastSeenRow(over = {}) {
+    return { user_id: 'stu-1', course_id: COURSE_A, last_seen_at: FLOOR, ...over };
+  }
+  function readRow(over = {}) {
+    return {
+      user_id: 'stu-1', course_id: COURSE_A, thread_id: 't-1',
+      read_at: null, manual_unread: false, ...over,
+    };
+  }
+
+  it('zonder cursustoegang → 403', async () => {
+    const { ctx, call } = setup();
+    ctx.hasAccess = false;
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(403);
+  });
+
+  it('zonder lastSeenAt (nooit bezocht) → count 0 (zachte uitrol onderdrukt backlog)', async () => {
+    const { call } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-new', last_activity_at: '2026-06-22T10:00:00.000Z' }),
+        threadRow({ id: 't-old', last_activity_at: '2026-06-20T10:00:00.000Z' }),
+      ],
+    });
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(0);
+    expect(res.body.announcementCount).toBe(0);
+    expect(res.body.lastSeenAt).toBeNull();
+    expect(res.body.latestActivityAt).toBe('2026-06-22T10:00:00.000Z');
+  });
+
+  it('telt threads/replies met activiteit ná de vloer; backlog vóór de vloer telt niet', async () => {
+    const { call } = setup({
+      studiecafe_last_seen: [lastSeenRow()],
+      studiecafe_threads: [
+        threadRow({ id: 't-after', last_activity_at: '2026-06-22T10:00:00.000Z' }),
+        threadRow({ id: 't-after2', last_activity_at: '2026-06-21T12:00:00.000Z' }),
+        // Activiteit vóór de vloer (backlog) → onderdrukt.
+        threadRow({ id: 't-before', last_activity_at: '2026-06-20T10:00:00.000Z' }),
+        // Activiteit precies op de vloer → gelezen (≤ floor).
+        threadRow({ id: 't-on-floor', last_activity_at: FLOOR }),
+      ],
+    });
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(2);
+    expect(res.body.lastSeenAt).toBe(FLOOR);
+  });
+
+  it('een geopende (gelezen) thread telt niet meer mee', async () => {
+    const { call } = setup({
+      studiecafe_last_seen: [lastSeenRow()],
+      studiecafe_threads: [
+        threadRow({ id: 't-read', last_activity_at: '2026-06-22T10:00:00.000Z' }),
+        threadRow({ id: 't-unread', last_activity_at: '2026-06-22T11:00:00.000Z' }),
+      ],
+      // t-read is na zijn laatste activiteit geopend → gelezen.
+      studiecafe_thread_reads: [
+        readRow({ thread_id: 't-read', read_at: '2026-06-22T10:30:00.000Z' }),
+      ],
+    });
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+  });
+
+  it('een read ouder dan de activiteit (nieuwe reply na openen) telt weer mee', async () => {
+    const { call } = setup({
+      studiecafe_last_seen: [lastSeenRow()],
+      studiecafe_threads: [
+        threadRow({ id: 't-1', last_activity_at: '2026-06-22T12:00:00.000Z' }),
+      ],
+      // Gelezen vóór de nieuwste activiteit → opnieuw ongelezen.
+      studiecafe_thread_reads: [
+        readRow({ thread_id: 't-1', read_at: '2026-06-22T09:00:00.000Z' }),
+      ],
+    });
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+  });
+
+  it('een manual_unread-override dwingt een backlog-thread tóch tot ongelezen', async () => {
+    const { call } = setup({
+      studiecafe_last_seen: [lastSeenRow()],
+      studiecafe_threads: [
+        // Backlog vóór de vloer: normaal onderdrukt...
+        threadRow({ id: 't-backlog', last_activity_at: '2026-06-20T10:00:00.000Z' }),
+      ],
+      // ...maar bewust weer als ongelezen gemarkeerd → telt mee, vloer omzeild.
+      studiecafe_thread_reads: [
+        readRow({ thread_id: 't-backlog', read_at: '2026-06-22T09:00:00.000Z', manual_unread: true }),
+      ],
+    });
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+  });
+
+  it('announcementCount wordt apart geteld binnen de ongelezen-telling', async () => {
+    const { call } = setup({
+      studiecafe_last_seen: [lastSeenRow()],
+      studiecafe_threads: [
+        threadRow({ id: 't-ann', is_announcement: true, last_activity_at: '2026-06-22T10:00:00.000Z' }),
+        threadRow({ id: 't-norm', is_announcement: false, last_activity_at: '2026-06-22T11:00:00.000Z' }),
+        // Aankondiging vóór de vloer → telt niet mee (ook niet in announcementCount).
+        threadRow({ id: 't-ann-old', is_announcement: true, last_activity_at: '2026-06-20T10:00:00.000Z' }),
+      ],
+    });
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(2);
+    expect(res.body.announcementCount).toBe(1);
+  });
+
+  it('is gescoped op de cursus en negeert verwijderde threads', async () => {
+    const { call } = setup({
+      studiecafe_last_seen: [lastSeenRow()],
+      studiecafe_threads: [
+        threadRow({ id: 't-A', course_id: COURSE_A, last_activity_at: '2026-06-22T10:00:00.000Z' }),
+        threadRow({ id: 't-A-del', course_id: COURSE_A, last_activity_at: '2026-06-22T11:00:00.000Z', deleted_at: '2026-06-22T11:30:00.000Z' }),
+        threadRow({ id: 't-B', course_id: COURSE_B, last_activity_at: '2026-06-22T12:00:00.000Z' }),
+      ],
+    });
+    const res = await call(R.unread, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
   });
 });
