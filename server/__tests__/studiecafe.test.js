@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   STUDIECAFE_CATEGORIES,
   ALLOWED_REACTION_EMOJI,
@@ -23,6 +23,7 @@ import {
   REACTION_TABLES,
   summarizeUnread,
   isThreadUnread,
+  registerStudiecafeRoutes,
 } from '../studiecafe.js';
 
 describe('sanitizeCategory', () => {
@@ -437,5 +438,488 @@ describe('toggleKudosAtomicPg — race-veiligheid', () => {
     expect(await toggleKudosAtomicPg({ ...base, userId: 'uA', table: 'evil_table' })).toEqual({ invalid: true });
     expect(await toggleKudosAtomicPg({ ...base, userId: null })).toEqual({ invalid: true });
     expect(pool.queryCount).toBe(0);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Endpoint-tests (Task #305) — bewaken de écht beveiligingskritische
+// route-poortwachters van het Studiecafé-forum: cross-course IDOR, staff-only
+// moderatie, auteur-of-staff acties, gesloten-thread-blokkade en
+// soft-delete-redactie. De pure helpers hierboven dekken de beslislogica; deze
+// tests dekken de BEDRADING in de route-handlers (een regressie in een guard
+// zou een student uit cursus A in cursus B kunnen laten lezen/muteren of een
+// niet-docent laten modereren).
+//
+// Aanpak: we registreren de échte handlers via registerStudiecafeRoutes op een
+// fake `app` die per method+pad de handler vangt, en injecteren een in-memory
+// Supabase + gemockte auth-helpers (requireAuthUser / userHasCourseAccess /
+// isStaffForCourse). pgPool=null dwingt de testbare fallback-paden af. Geen
+// netwerk-, DB- of HTTP-laag nodig.
+// ───────────────────────────────────────────────────────────────────────────
+
+const COURSE_A = 'course-A';
+const COURSE_B = 'course-B';
+
+// Minimale in-memory Supabase die de query-chains uit studiecafe.js ondersteunt:
+// select(...).eq/is/in(...).order(...).limit(...) (await → {data,error}),
+// .maybeSingle()/.single(), insert(...).select(...).single(),
+// update(...).eq(...)[.is(...)] (await → {error}) en update(...).eq().select().single().
+function makeStore(seed = {}) {
+  return {
+    studiecafe_threads: seed.studiecafe_threads || [],
+    studiecafe_replies: seed.studiecafe_replies || [],
+    profiles: seed.profiles || [],
+    _seq: 1,
+  };
+}
+
+class Builder {
+  constructor(store, table) {
+    this.store = store;
+    this.table = table;
+    this.mode = 'select';
+    this._filters = [];
+    this._orders = [];
+    this._limit = null;
+    this._insert = null;
+    this._patch = null;
+  }
+  select() { return this; }
+  insert(row) { this.mode = 'insert'; this._insert = row; return this; }
+  update(patch) { this.mode = 'update'; this._patch = patch; return this; }
+  eq(c, v) { this._filters.push(['eq', c, v]); return this; }
+  is(c, v) { this._filters.push(['is', c, v]); return this; }
+  in(c, v) { this._filters.push(['in', c, v]); return this; }
+  order(c, o) { this._orders.push([c, o]); return this; }
+  limit(n) { this._limit = n; return this; }
+  _rows() { return this.store[this.table] || (this.store[this.table] = []); }
+  _match(row) {
+    return this._filters.every(([op, c, v]) => {
+      if (op === 'eq') return row[c] === v;
+      if (op === 'is') return v === null ? row[c] === null || row[c] === undefined : row[c] === v;
+      if (op === 'in') return v.includes(row[c]);
+      return true;
+    });
+  }
+  _apply() {
+    if (this.mode === 'insert') {
+      const row = { id: `${this.table}-${this.store._seq++}`, ...this._insert };
+      this._rows().push(row);
+      return [{ ...row }];
+    }
+    if (this.mode === 'update') {
+      const affected = this._rows().filter((r) => this._match(r));
+      for (const r of affected) Object.assign(r, this._patch);
+      return affected.map((r) => ({ ...r }));
+    }
+    let rows = this._rows().filter((r) => this._match(r)).map((r) => ({ ...r }));
+    for (const [c, o] of [...this._orders].reverse()) {
+      const asc = !(o && o.ascending === false);
+      rows.sort((a, b) => {
+        const av = a[c];
+        const bv = b[c];
+        if (av === bv) return 0;
+        return (av > bv ? 1 : -1) * (asc ? 1 : -1);
+      });
+    }
+    if (this._limit != null) rows = rows.slice(0, this._limit);
+    return rows;
+  }
+  async maybeSingle() {
+    const r = this._apply();
+    return { data: r[0] ? { ...r[0] } : null, error: null };
+  }
+  async single() {
+    const r = this._apply();
+    return r[0]
+      ? { data: { ...r[0] }, error: null }
+      : { data: null, error: { message: 'no rows' } };
+  }
+  then(resolve, reject) {
+    try {
+      resolve({ data: this._apply(), error: null });
+    } catch (e) {
+      if (reject) reject(e);
+      else throw e;
+    }
+  }
+}
+
+function makeSupabase(store) {
+  return { from: (table) => new Builder(store, table) };
+}
+
+// Registreert de echte routes op een fake app en geeft een call-helper terug.
+// `ctx` is muteerbaar zodat per test de auth-uitkomst (user, access, staff)
+// gestuurd kan worden.
+function setup(seed) {
+  const store = makeStore(seed);
+  const ctx = { userId: 'stu-1', hasAccess: true, isStaff: false };
+  const routes = {};
+  const reg = (method) => (path, handler) => { routes[`${method} ${path}`] = handler; };
+  const app = { get: reg('GET'), post: reg('POST'), patch: reg('PATCH'), delete: reg('DELETE') };
+
+  registerStudiecafeRoutes(app, {
+    supabaseAdmin: makeSupabase(store),
+    requireAuthUser: async () => ({ user: { id: ctx.userId }, profile: { id: ctx.userId } }),
+    userHasCourseAccess: async () => ctx.hasAccess,
+    isStaffForCourse: async () => ctx.isStaff,
+    pgPool: null,
+  });
+
+  async function call(key, { params = {}, body = {} } = {}) {
+    const handler = routes[key];
+    if (!handler) throw new Error(`no route registered for ${key}`);
+    const res = {
+      statusCode: 200,
+      body: undefined,
+      status(c) { this.statusCode = c; return this; },
+      json(obj) { this.body = obj; return this; },
+    };
+    await handler({ params, body }, res);
+    return { status: res.statusCode, body: res.body };
+  }
+
+  return { store, ctx, call };
+}
+
+const R = {
+  feed: 'GET /api/studiecafe/:courseId/threads',
+  replies: 'GET /api/studiecafe/:courseId/threads/:threadId/replies',
+  createThread: 'POST /api/studiecafe/:courseId/threads',
+  createReply: 'POST /api/studiecafe/:courseId/threads/:threadId/replies',
+  delThread: 'DELETE /api/studiecafe/:courseId/threads/:threadId',
+  delReply: 'DELETE /api/studiecafe/:courseId/replies/:replyId',
+  patchReply: 'PATCH /api/studiecafe/:courseId/replies/:replyId',
+  patchThread: 'PATCH /api/studiecafe/:courseId/threads/:threadId',
+  reaction: 'POST /api/studiecafe/:courseId/reactions',
+  kudos: 'POST /api/studiecafe/:courseId/kudos',
+};
+
+function threadRow(over = {}) {
+  return {
+    id: 't-1', course_id: COURSE_A, author_id: 'stu-1', title: 'Titel', body: 'Body',
+    category: 'vraag', is_pinned: false, is_locked: false, is_announcement: false,
+    is_resolved: false, kudos_by: null, kudos_at: null, reactions: {}, reply_count: 0,
+    last_activity_at: '2026-06-21T10:00:00.000Z', deleted_at: null, deleted_by: null,
+    created_at: '2026-06-21T09:00:00.000Z', updated_at: '2026-06-21T09:00:00.000Z', ...over,
+  };
+}
+function replyRow(over = {}) {
+  return {
+    id: 'r-1', thread_id: 't-1', course_id: COURSE_A, author_id: 'stu-1', body: 'Reactie',
+    kudos_by: null, kudos_at: null, reactions: {}, deleted_at: null, deleted_by: null,
+    created_at: '2026-06-21T10:00:00.000Z', ...over,
+  };
+}
+
+describe('studiecafe endpoints — cursustoegang', () => {
+  it('zonder cursustoegang → 403 op de feed', async () => {
+    const { ctx, call } = setup();
+    ctx.hasAccess = false;
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(403);
+  });
+
+  it('feed is gescoped op de cursus en laat verwijderde threads weg', async () => {
+    const { call } = setup({
+      studiecafe_threads: [
+        threadRow({ id: 't-A', course_id: COURSE_A }),
+        threadRow({ id: 't-A-del', course_id: COURSE_A, deleted_at: '2026-06-21T11:00:00.000Z' }),
+        threadRow({ id: 't-B', course_id: COURSE_B }),
+      ],
+    });
+    const res = await call(R.feed, { params: { courseId: COURSE_A } });
+    expect(res.status).toBe(200);
+    const ids = res.body.threads.map((t) => t.id);
+    expect(ids).toEqual(['t-A']);
+  });
+});
+
+describe('studiecafe endpoints — cross-course IDOR (gelekt id uit andere cursus)', () => {
+  // Telkens: de gebruiker heeft toegang tot cursus A, maar het doel-id hoort bij
+  // cursus B. De handler moet 404 geven (niet de rij uit B teruggeven/muteren).
+  it('GET replies van een thread uit een andere cursus → 404', async () => {
+    const { call } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-B' } });
+    expect(res.status).toBe(404);
+  });
+
+  it('POST reply op een thread uit een andere cursus → 404', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    const res = await call(R.createReply, {
+      params: { courseId: COURSE_A, threadId: 't-B' }, body: { body: 'hoi' },
+    });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_replies).toHaveLength(0);
+  });
+
+  it('DELETE thread uit een andere cursus → 404 (geen redactie)', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-B' } });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_threads[0].deleted_at).toBeNull();
+    expect(store.studiecafe_threads[0].body).toBe('Body');
+  });
+
+  it('DELETE reply uit een andere cursus → 404 (geen redactie)', async () => {
+    const { call, store } = setup({ studiecafe_replies: [replyRow({ id: 'r-B', course_id: COURSE_B })] });
+    const res = await call(R.delReply, { params: { courseId: COURSE_A, replyId: 'r-B' } });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_replies[0].deleted_at).toBeNull();
+  });
+
+  it('PATCH thread uit een andere cursus → 404 (geen mutatie)', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    ctx.isStaff = true; // zelfs staff mag niet door het IDOR-gat
+    const res = await call(R.patchThread, {
+      params: { courseId: COURSE_A, threadId: 't-B' }, body: { isPinned: true },
+    });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_threads[0].is_pinned).toBe(false);
+  });
+
+  it('PATCH reply uit een andere cursus → 404', async () => {
+    const { call } = setup({ studiecafe_replies: [replyRow({ id: 'r-B', course_id: COURSE_B })] });
+    const res = await call(R.patchReply, {
+      params: { courseId: COURSE_A, replyId: 'r-B' }, body: { body: 'gewijzigd' },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('reactie op een doel uit een andere cursus → 404 (geen mutatie)', async () => {
+    const { call, store } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    const res = await call(R.reaction, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-B', emoji: '👍' },
+    });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_threads[0].reactions).toEqual({});
+  });
+
+  it('pluim op een doel uit een andere cursus → 404 (geen mutatie)', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ id: 't-B', course_id: COURSE_B })] });
+    ctx.isStaff = true; // staff in cursus A, maar doel hoort bij B
+    const res = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-B' },
+    });
+    expect(res.status).toBe(404);
+    expect(store.studiecafe_threads[0].kudos_at).toBeNull();
+  });
+});
+
+describe('studiecafe endpoints — staff-only moderatie', () => {
+  it('pinnen door een niet-docent → 403', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow()] });
+    ctx.isStaff = false;
+    const res = await call(R.patchThread, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { isPinned: true },
+    });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_threads[0].is_pinned).toBe(false);
+  });
+
+  it('sluiten (lock) door een niet-docent → 403', async () => {
+    const { call, ctx } = setup({ studiecafe_threads: [threadRow()] });
+    ctx.isStaff = false;
+    const res = await call(R.patchThread, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { isLocked: true },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('aankondiging beheren door een niet-docent → 403', async () => {
+    const { call, ctx } = setup({ studiecafe_threads: [threadRow()] });
+    ctx.isStaff = false;
+    const res = await call(R.patchThread, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { isAnnouncement: true },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('pluim (kudos) door een niet-docent → 403', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow()] });
+    ctx.isStaff = false;
+    const res = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1' },
+    });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_threads[0].kudos_at).toBeNull();
+  });
+
+  it('staff mág pinnen', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow()] });
+    ctx.isStaff = true;
+    const res = await call(R.patchThread, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { isPinned: true },
+    });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_threads[0].is_pinned).toBe(true);
+  });
+
+  it('staff mág een pluim geven', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow()] });
+    ctx.isStaff = true;
+    const res = await call(R.kudos, {
+      params: { courseId: COURSE_A }, body: { targetType: 'thread', targetId: 't-1' },
+    });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_threads[0].kudos_at).toBeTruthy();
+    expect(store.studiecafe_threads[0].kudos_by).toBe('stu-1');
+  });
+
+  it('niet-docent kan bij thread-creatie geen aankondiging forceren', async () => {
+    const { call, ctx, store } = setup();
+    ctx.isStaff = false;
+    const res = await call(R.createThread, {
+      params: { courseId: COURSE_A }, body: { title: 'Hoi', body: 'Tekst', isAnnouncement: true },
+    });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_threads[0].is_announcement).toBe(false);
+  });
+});
+
+describe('studiecafe endpoints — auteur-of-staff acties', () => {
+  it('verwijderen door een vreemde (niet-auteur, niet-staff) → 403', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ author_id: 'stu-1' })] });
+    ctx.userId = 'stu-2';
+    ctx.isStaff = false;
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_threads[0].deleted_at).toBeNull();
+  });
+
+  it('verwijderen door de auteur → ok', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ author_id: 'stu-1' })] });
+    ctx.userId = 'stu-1';
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_threads[0].deleted_at).toBeTruthy();
+  });
+
+  it('verwijderen door staff (niet-auteur) → ok', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ author_id: 'stu-1' })] });
+    ctx.userId = 'staff-9';
+    ctx.isStaff = true;
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_threads[0].deleted_at).toBeTruthy();
+  });
+
+  it('"opgelost"-markering door een vreemde → 403', async () => {
+    const { call, ctx } = setup({ studiecafe_threads: [threadRow({ author_id: 'stu-1' })] });
+    ctx.userId = 'stu-2';
+    ctx.isStaff = false;
+    const res = await call(R.patchThread, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { isResolved: true },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('"opgelost"-markering door de auteur → ok', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ author_id: 'stu-1' })] });
+    ctx.userId = 'stu-1';
+    const res = await call(R.patchThread, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { isResolved: true },
+    });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_threads[0].is_resolved).toBe(true);
+  });
+
+  it('reactie bewerken door een vreemde → 403', async () => {
+    const { call, ctx, store } = setup({ studiecafe_replies: [replyRow({ author_id: 'stu-1' })] });
+    ctx.userId = 'stu-2';
+    ctx.isStaff = false;
+    const res = await call(R.patchReply, {
+      params: { courseId: COURSE_A, replyId: 'r-1' }, body: { body: 'gehackt' },
+    });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_replies[0].body).toBe('Reactie');
+  });
+});
+
+describe('studiecafe endpoints — gesloten thread', () => {
+  it('reageren op een gesloten thread door een niet-docent → 403', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ is_locked: true })] });
+    ctx.isStaff = false;
+    const res = await call(R.createReply, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { body: 'mag dit?' },
+    });
+    expect(res.status).toBe(403);
+    expect(store.studiecafe_replies).toHaveLength(0);
+  });
+
+  it('staff mág reageren op een gesloten thread', async () => {
+    const { call, ctx, store } = setup({ studiecafe_threads: [threadRow({ is_locked: true })] });
+    ctx.isStaff = true;
+    const res = await call(R.createReply, {
+      params: { courseId: COURSE_A, threadId: 't-1' }, body: { body: 'docent-reactie' },
+    });
+    expect(res.status).toBe(200);
+    expect(store.studiecafe_replies).toHaveLength(1);
+  });
+});
+
+describe('studiecafe endpoints — soft-delete redactie (geen lek van inhoud)', () => {
+  it('een verwijderde reply komt als placeholder terug zonder body/auteur', async () => {
+    const { call } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1' })],
+      studiecafe_replies: [
+        replyRow({ id: 'r-live', body: 'zichtbaar' }),
+        replyRow({
+          id: 'r-del', body: 'GEHEIM', author_id: 'stu-7',
+          deleted_at: '2026-06-21T12:00:00.000Z', deleted_by: 'staff-1',
+        }),
+      ],
+    });
+    const res = await call(R.replies, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    const del = res.body.replies.find((r) => r.id === 'r-del');
+    expect(del.deleted).toBe(true);
+    expect(del.body).toBe('');
+    expect(del.authorName).toBeNull();
+    expect(del.authorId).toBeUndefined();
+    expect(del.reactions).toEqual([]);
+    // De levende reply lekt niet mee in de redactie.
+    const live = res.body.replies.find((r) => r.id === 'r-live');
+    expect(live.body).toBe('zichtbaar');
+  });
+
+  it('thread verwijderen redigeert de thread én cascadeert naar alle replies', async () => {
+    const { call, ctx, store } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', author_id: 'stu-1', title: 'Geheime titel', body: 'Geheime body', reactions: { '👍': ['x'] }, kudos_by: 'staff-1', kudos_at: 'x' })],
+      studiecafe_replies: [
+        replyRow({ id: 'r-1', body: 'reply-geheim', author_id: 'stu-3', reactions: { '❤️': ['y'] } }),
+        replyRow({ id: 'r-2', body: 'reply-geheim-2', author_id: 'stu-4' }),
+      ],
+    });
+    ctx.userId = 'stu-1';
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+
+    const t = store.studiecafe_threads[0];
+    expect(t.deleted_at).toBeTruthy();
+    expect(t.title).toBe('');
+    expect(t.body).toBe('');
+    expect(t.author_id).toBeNull();
+    expect(t.kudos_by).toBeNull();
+    expect(t.kudos_at).toBeNull();
+    expect(t.reactions).toEqual({});
+
+    for (const r of store.studiecafe_replies) {
+      expect(r.deleted_at).toBeTruthy();
+      expect(r.body).toBe('');
+      expect(r.author_id).toBeNull();
+      expect(r.reactions).toEqual({});
+    }
+  });
+
+  it('een al verwijderde thread opnieuw verwijderen is idempotent (ok, geen 403)', async () => {
+    const { call, ctx } = setup({
+      studiecafe_threads: [threadRow({ id: 't-1', author_id: 'stu-1', deleted_at: '2026-06-21T12:00:00.000Z' })],
+    });
+    ctx.userId = 'stu-2'; // niet-auteur: zou normaal 403 zijn, maar al verwijderd → vroege ok
+    const res = await call(R.delThread, { params: { courseId: COURSE_A, threadId: 't-1' } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
   });
 });
