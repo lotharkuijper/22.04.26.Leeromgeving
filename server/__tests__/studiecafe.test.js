@@ -1243,7 +1243,8 @@ function makeTxPool(store, { failOnSql = null } = {}) {
           const verb = /^(BEGIN|COMMIT|ROLLBACK)/i.test(trimmed)
             ? trimmed.split(/\s+/)[0].toUpperCase()
             : (/UPDATE\s+studiecafe_threads/i.test(sql) ? 'UPDATE_THREADS'
-              : /UPDATE\s+studiecafe_replies/i.test(sql) ? 'UPDATE_REPLIES' : 'OTHER');
+              : /UPDATE\s+studiecafe_replies/i.test(sql) ? 'UPDATE_REPLIES'
+              : /DELETE\s+FROM\s+studiecafe_thread_reads/i.test(sql) ? 'DELETE_READS' : 'OTHER');
           log.push(verb);
           if (failOnSql && failOnSql.test(sql)) {
             throw new Error('tx boom');
@@ -1305,8 +1306,9 @@ describe('studiecafe endpoints — DELETE thread transactioneel pgPool-pad (Task
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
 
-    // Transactie-volgorde: open, beide updates, dan pas commit. Geen rollback.
-    expect(pool.log).toEqual(['BEGIN', 'UPDATE_THREADS', 'UPDATE_REPLIES', 'COMMIT']);
+    // Transactie-volgorde: open, beide updates, leesmarkeringen opruimen (Task
+    // #315), dan pas commit. Geen rollback.
+    expect(pool.log).toEqual(['BEGIN', 'UPDATE_THREADS', 'UPDATE_REPLIES', 'DELETE_READS', 'COMMIT']);
     expect(pool.released).toBe(1);
 
     const t = seed.studiecafe_threads[0];

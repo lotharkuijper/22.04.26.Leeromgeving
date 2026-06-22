@@ -957,6 +957,18 @@ export function registerStudiecafeRoutes(app, deps) {
              WHERE thread_id = $1 AND deleted_at IS NULL`,
             [threadId, ts, auth.user.id],
           );
+          // Task #315: een soft-delete laat de thread-rij staan, dus de
+          // ON DELETE CASCADE naar studiecafe_thread_reads vuurt nooit. Ruim de
+          // per-(gebruiker, thread) leesmarkeringen hier expliciet op zodat ze
+          // niet onbeperkt blijven opstapelen voor verwijderde threads.
+          // Defensief: ontbrekende tabel (oude DB) breekt de transactie niet af.
+          try {
+            await client.query(`DELETE FROM studiecafe_thread_reads WHERE thread_id = $1`, [
+              threadId,
+            ]);
+          } catch (readErr) {
+            if (readErr && readErr.code !== '42P01') throw readErr;
+          }
           await client.query('COMMIT');
         } catch (txErr) {
           await client.query('ROLLBACK').catch(() => {});
@@ -987,6 +999,14 @@ export function registerStudiecafeRoutes(app, deps) {
       if (delErr) {
         console.error('[studiecafe] delete thread error:', delErr.message);
         return res.status(500).json({ error: delErr.message });
+      }
+      // Task #315: ruim de per-(gebruiker, thread) leesmarkeringen op (de
+      // ON DELETE CASCADE vuurt niet bij een soft-delete). Defensief: stil falen
+      // bij ontbrekende tabel/fout zodat de delete zelf geslaagd blijft.
+      try {
+        await supabaseAdmin.from('studiecafe_thread_reads').delete().eq('thread_id', threadId);
+      } catch (readErr) {
+        console.warn('[studiecafe] delete thread read-cleanup error:', readErr.message);
       }
       return res.json({ ok: true });
     } catch (err) {
