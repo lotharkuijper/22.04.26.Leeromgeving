@@ -112,7 +112,11 @@ function AssistantMessageBody({
         title: s.title,
         documentId: s.documentId,
       })),
-      meta: { module: 'chat' },
+      meta: {
+        module: 'chat',
+        ...(activeCourse ? { courseId: activeCourse } : {}),
+        capturedAt: new Date().toISOString(),
+      },
     };
     stashStudiecafeHandoff({
       v: 1,

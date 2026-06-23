@@ -139,7 +139,6 @@ export function StudiecafePage() {
   // Reply-composer per uitgeklapte thread.
   const [replyBody, setReplyBody] = useState('');
   const [replying, setReplying] = useState(false);
-  const [replyAttachment, setReplyAttachment] = useState<ChatExcerptAttachment | null>(null);
   const replyRef = useRef<HTMLTextAreaElement>(null);
 
   // Emoji-picker: welk doel staat open ('thread:<id>' | 'reply:<id>' | null).
@@ -442,7 +441,6 @@ export function StudiecafePage() {
     if (expandedId === threadId) { setExpandedId(null); return; }
     setExpandedId(threadId);
     setReplyBody('');
-    setReplyAttachment(null);
     // Openen = gelezen (Task #312): alleen deze thread verliest zijn markering.
     markRead(threadId);
     if (!repliesByThread[threadId]) await loadReplies(threadId);
@@ -454,12 +452,11 @@ export function StudiecafePage() {
     try {
       const r = await apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}/replies`, {
         method: 'POST',
-        body: JSON.stringify({ body: replyBody, attachments: replyAttachment ? [replyAttachment] : [] }),
+        body: JSON.stringify({ body: replyBody }),
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         setReplyBody('');
-        setReplyAttachment(null);
         await loadReplies(threadId);
         await loadThreads();
       } else {
@@ -1206,12 +1203,6 @@ export function StudiecafePage() {
                       <p className="text-sm text-slate-400 flex items-center gap-1.5" data-testid={`text-locked-${th.id}`}><Lock className="w-3.5 h-3.5" />{t('studiecafe.lockedHint')}</p>
                     ) : (
                       <div className="space-y-2 pt-1">
-                        {replyAttachment && (
-                          <ChatExcerptCard
-                            attachment={replyAttachment}
-                            onRemove={() => setReplyAttachment(null)}
-                          />
-                        )}
                         <FormulaEditor
                           value={replyBody}
                           onChange={setReplyBody}

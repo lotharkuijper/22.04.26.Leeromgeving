@@ -37,6 +37,7 @@ export const MAX_ATTACHMENT_SOURCES = 12;
 export const MAX_ATTACHMENT_TITLE_LEN = 300;
 export const MAX_ATTACHMENT_DOCUMENT_ID_LEN = 200;
 export const MAX_ATTACHMENT_MODULE_LEN = 40;
+export const MAX_ATTACHMENT_COURSE_ID_LEN = 64;
 
 export function sanitizeCategory(cat) {
   return STUDIECAFE_CATEGORIES.includes(cat) ? cat : 'vraag';
@@ -72,10 +73,23 @@ function sanitizeAttachmentItem(raw) {
     .filter(Boolean);
   const item = { type, content };
   if (sources.length) item.sources = sources;
+  // Herkomst-metadata (Task #351): module + cursus + tijdstip waarop het fragment
+  // is geciteerd. Alles tolerant + begrensd; ongeldige velden worden weggegooid.
+  const meta = {};
   const module = raw?.meta?.module;
   if (typeof module === 'string' && module.trim()) {
-    item.meta = { module: module.trim().slice(0, MAX_ATTACHMENT_MODULE_LEN) };
+    meta.module = module.trim().slice(0, MAX_ATTACHMENT_MODULE_LEN);
   }
+  const courseId = raw?.meta?.courseId;
+  if (typeof courseId === 'string' && courseId.trim()) {
+    meta.courseId = courseId.trim().slice(0, MAX_ATTACHMENT_COURSE_ID_LEN);
+  }
+  const capturedAt = raw?.meta?.capturedAt;
+  if (typeof capturedAt === 'string' && capturedAt.trim()) {
+    const d = new Date(capturedAt.trim());
+    if (!Number.isNaN(d.getTime())) meta.capturedAt = d.toISOString();
+  }
+  if (Object.keys(meta).length) item.meta = meta;
   return item;
 }
 
@@ -694,10 +708,51 @@ export function registerStudiecafeRoutes(app, deps) {
     }
   });
 
+  // Bijlagen-kolom (Task #351) kan ontbreken op een nog-niet-gemigreerde DB. We
+  // detecteren dat één keer (gememoïseerd) en laten 'attachments' dan weg uit
+  // zowel de SELECT-kolommen als de INSERT-payload — net als de manual_unread-
+  // fallback elders in dit bestand, zodat oude DB's niet stil 500'en.
   const THREAD_COLS =
-    'id, course_id, author_id, title, body, category, attachments, is_pinned, is_locked, is_announcement, is_resolved, kudos_by, kudos_at, reactions, reply_count, last_activity_at, created_at, updated_at';
+    'id, course_id, author_id, title, body, category, is_pinned, is_locked, is_announcement, is_resolved, kudos_by, kudos_at, reactions, reply_count, last_activity_at, created_at, updated_at';
   const REPLY_COLS =
-    'id, thread_id, course_id, author_id, body, attachments, kudos_by, kudos_at, reactions, deleted_at, created_at';
+    'id, thread_id, course_id, author_id, body, kudos_by, kudos_at, reactions, deleted_at, created_at';
+  let attachmentsColReady = null;   // null = nog onbekend
+  let attachmentsColProbe = null;   // gedeelde probe-promise (één keer)
+  async function attachmentsReady() {
+    if (attachmentsColReady !== null) return attachmentsColReady;
+    if (!attachmentsColProbe) {
+      attachmentsColProbe = (async () => {
+        try {
+          const { error } = await supabaseAdmin
+            .from('studiecafe_threads')
+            .select('attachments')
+            .limit(1);
+          // 42703 = kolom ontbreekt (oude DB) → fail-closed. Andere (transiente)
+          // fouten → optimistisch true, zodat we bijlagen niet stil weggooien.
+          if (error && (error.code === '42703' || /attachments/i.test(error.message || ''))) {
+            return false;
+          }
+          return true;
+        } catch {
+          return true;
+        }
+      })();
+    }
+    attachmentsColReady = await attachmentsColProbe;
+    return attachmentsColReady;
+  }
+  async function threadCols() {
+    return (await attachmentsReady()) ? `${THREAD_COLS}, attachments` : THREAD_COLS;
+  }
+  async function replyCols() {
+    return (await attachmentsReady()) ? `${REPLY_COLS}, attachments` : REPLY_COLS;
+  }
+  // Voegt sanitized bijlagen toe aan een insert-payload, maar alleen als de kolom
+  // bestaat (anders 500't de INSERT op een oude DB).
+  async function withAttachments(insert, rawAttachments) {
+    if (await attachmentsReady()) insert.attachments = sanitizeAttachments(rawAttachments);
+    return insert;
+  }
 
   async function buildNameResolver(ids) {
     const uniq = [...new Set((ids || []).filter(Boolean))];
@@ -897,7 +952,7 @@ export function registerStudiecafeRoutes(app, deps) {
       const isStaff = await isStaffForCourse(auth.user, auth.profile, courseId);
       const { data: rows, error } = await supabaseAdmin
         .from('studiecafe_threads')
-        .select(THREAD_COLS)
+        .select(await threadCols())
         .eq('course_id', courseId)
         .is('deleted_at', null)
         .order('is_pinned', { ascending: false })
@@ -1185,7 +1240,7 @@ export function registerStudiecafeRoutes(app, deps) {
       }
       const { data: rows, error } = await supabaseAdmin
         .from('studiecafe_replies')
-        .select(REPLY_COLS)
+        .select(await replyCols())
         .eq('thread_id', threadId)
         .order('created_at', { ascending: true })
         .limit(500);
@@ -1217,20 +1272,19 @@ export function registerStudiecafeRoutes(app, deps) {
     try {
       const isStaff = await isStaffForCourse(auth.user, auth.profile, courseId);
       const isAnnouncement = !!(req.body && req.body.isAnnouncement) && isStaff;
-      const insert = {
+      const insert = await withAttachments({
         course_id: courseId,
         author_id: auth.user.id,
         title: v.value.title,
         body: v.value.body,
         category: sanitizeCategory(req.body && req.body.category),
-        attachments: sanitizeAttachments(req.body && req.body.attachments),
         is_announcement: isAnnouncement,
         last_activity_at: await nowIso(),
-      };
+      }, req.body && req.body.attachments);
       const { data, error } = await supabaseAdmin
         .from('studiecafe_threads')
         .insert(insert)
-        .select(THREAD_COLS)
+        .select(await threadCols())
         .single();
       if (error) {
         console.error('[studiecafe] create thread error:', error.message);
@@ -1283,16 +1337,16 @@ export function registerStudiecafeRoutes(app, deps) {
       if (!canReplyToThread({ isStaff, isLocked: thread.is_locked })) {
         return res.status(403).json({ error: 'Deze thread is gesloten' });
       }
+      const replyInsert = await withAttachments({
+        thread_id: threadId,
+        course_id: courseId,
+        author_id: auth.user.id,
+        body: v.value.body,
+      }, req.body && req.body.attachments);
       const { data, error } = await supabaseAdmin
         .from('studiecafe_replies')
-        .insert({
-          thread_id: threadId,
-          course_id: courseId,
-          author_id: auth.user.id,
-          body: v.value.body,
-          attachments: sanitizeAttachments(req.body && req.body.attachments),
-        })
-        .select(REPLY_COLS)
+        .insert(replyInsert)
+        .select(await replyCols())
         .single();
       if (error) {
         console.error('[studiecafe] create reply error:', error.message);
@@ -1527,7 +1581,7 @@ export function registerStudiecafeRoutes(app, deps) {
         .from('studiecafe_replies')
         .update({ body: v.value.body })
         .eq('id', replyId)
-        .select(REPLY_COLS)
+        .select(await replyCols())
         .single();
       if (error) {
         console.error('[studiecafe] patch reply error:', error.message);
@@ -1600,7 +1654,7 @@ export function registerStudiecafeRoutes(app, deps) {
         .from('studiecafe_threads')
         .update(update)
         .eq('id', threadId)
-        .select(THREAD_COLS)
+        .select(await threadCols())
         .single();
       if (error) {
         console.error('[studiecafe] patch thread error:', error.message);

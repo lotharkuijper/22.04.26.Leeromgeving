@@ -105,6 +105,22 @@ describe('sanitizeAttachments (Task #351)', () => {
     ]);
     expect(out[0].sources).toEqual([{ title: 'Geldig' }]);
   });
+
+  it('bewaart courseId + capturedAt in meta en negeert ongeldige capturedAt', () => {
+    const out = sanitizeAttachments([
+      {
+        type: 'chat_excerpt',
+        content: 'tekst',
+        meta: { module: 'chat', courseId: 'course-1', capturedAt: '2026-06-23T10:00:00.000Z' },
+      },
+    ]);
+    expect(out[0].meta).toEqual({ module: 'chat', courseId: 'course-1', capturedAt: '2026-06-23T10:00:00.000Z' });
+
+    const bad = sanitizeAttachments([
+      { type: 'chat_excerpt', content: 'tekst', meta: { capturedAt: 'niet-een-datum' } },
+    ]);
+    expect(bad[0].meta).toBeUndefined();
+  });
 });
 
 describe('validateThreadInput', () => {

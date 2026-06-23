@@ -17,7 +17,7 @@ export interface ChatExcerptAttachment {
   type: 'chat_excerpt';
   content: string;
   sources?: AttachmentSource[];
-  meta?: { module?: string };
+  meta?: { module?: string; courseId?: string; capturedAt?: string };
 }
 
 interface ChatExcerptCardProps {
