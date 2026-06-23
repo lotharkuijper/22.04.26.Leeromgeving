@@ -64,12 +64,15 @@ const RETRIEVED_CONTEXT = {
   ],
 };
 
-function renderBody(onRequestSource = vi.fn()) {
+function renderBody(
+  onRequestSource = vi.fn(),
+  content = 'Het gemiddelde is de som gedeeld door het aantal waarnemingen.',
+) {
   render(
     <LanguageProvider>
       <AssistantMessageBody
         messageId="msg-1"
-        content="Het gemiddelde is de som gedeeld door het aantal waarnemingen."
+        content={content}
         retrievedContext={RETRIEVED_CONTEXT}
         onRequestSource={onRequestSource}
       />
@@ -108,6 +111,29 @@ describe('AssistantMessageBody — broncitaties', () => {
     expect(screen.getByTestId('list-sources')).toBeInTheDocument();
     expect(screen.getByTestId('link-source-1')).toHaveTextContent('Hoofdstuk 3 — t-toets');
     expect(screen.getByTestId('link-source-2')).toHaveTextContent('College 5 — variantie');
+  });
+
+  it('klapt de bronnenlijst uit wanneer je op een in-tekst citatie klikt', async () => {
+    const user = userEvent.setup();
+    renderBody(
+      vi.fn(),
+      'De t-toets vergelijkt twee gemiddelden [1]. De variantie meet de spreiding [2].',
+    );
+
+    // Bronnenlijst staat ingeklapt: list-sources is nog niet zichtbaar.
+    expect(screen.queryByTestId('list-sources')).not.toBeInTheDocument();
+
+    // De in-tekst citatiemarkers renderen als klikbare superscripts.
+    expect(screen.getByTestId('citation-1')).toBeInTheDocument();
+    expect(screen.getByTestId('citation-2')).toBeInTheDocument();
+
+    // Klik op citatie [1] → handleCitationClick opent de SourceList.
+    await user.click(screen.getByTestId('citation-1'));
+
+    expect(screen.getByTestId('list-sources')).toBeInTheDocument();
+    // De bijbehorende bron is nu zichtbaar en scrollbaar (id source-msg-1-1).
+    expect(document.getElementById('source-msg-1-1')).not.toBeNull();
+    expect(screen.getByTestId('link-source-1')).toHaveTextContent('Hoofdstuk 3 — t-toets');
   });
 
   it('roept onRequestSource aan met de bron bij het klikken op een bron', async () => {
