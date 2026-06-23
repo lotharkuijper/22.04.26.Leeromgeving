@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} respuestas",
   "chat.replyPicker.chooseOnPage": "Prefiero elegir en la página de Studiecafé",
   "chat.replyPicker.targetGone": "El tema elegido ya no está disponible (eliminado o cerrado). Elige otro tema a continuación.",
+  "chat.replyPicker.targetGoneDismiss": "Cerrar notificación",
   "chat.replyPicker.postHint": "Haz clic para publicar esta respuesta directamente como reacción",
   "chat.replyPicker.posting": "Publicando…",
   "chat.replyPicker.posted": "Publicado en '{title}'.",

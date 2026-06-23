@@ -332,7 +332,14 @@ function AssistantMessageBody({
                   data-testid={`reply-target-gone-${messageId}`}
                 >
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span>{t('chat.replyPicker.targetGone')}</span>
+                  <span className="flex-1">{t('chat.replyPicker.targetGone')}</span>
+                  <button
+                    onClick={() => setTargetGone(false)}
+                    className="inline-flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded text-[11px] font-medium text-rose-700 hover:bg-rose-100 transition-colors"
+                    data-testid={`button-dismiss-reply-target-gone-${messageId}`}
+                  >
+                    <X className="w-3 h-3" />{t('chat.replyPicker.targetGoneDismiss')}
+                  </button>
                 </div>
               )}
               <input

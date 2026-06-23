@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} yanıt",
   "chat.replyPicker.chooseOnPage": "Studiecafé sayfasında seçmeyi tercih et",
   "chat.replyPicker.targetGone": "Seçilen konu artık mevcut değil (silinmiş veya kapatılmış). Aşağıdan başka bir konu seç.",
+  "chat.replyPicker.targetGoneDismiss": "Bildirimi kapat",
   "chat.replyPicker.postHint": "Bu yanıtı hemen cevap olarak paylaşmak için tıkla",
   "chat.replyPicker.posting": "Paylaşılıyor…",
   "chat.replyPicker.posted": "'{title}' içinde paylaşıldı.",

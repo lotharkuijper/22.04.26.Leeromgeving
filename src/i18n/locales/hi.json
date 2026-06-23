@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} प्रतिक्रियाएँ",
   "chat.replyPicker.chooseOnPage": "बेहतर होगा Studiecafé-पेज पर चुनो",
   "chat.replyPicker.targetGone": "चुना गया टॉपिक अब उपलब्ध नहीं है (हटा दिया गया है या बंद कर दिया गया है)। नीचे कोई दूसरा टॉपिक चुनो।",
+  "chat.replyPicker.targetGoneDismiss": "सूचना बंद करो",
   "chat.replyPicker.postHint": "इस उत्तर को तुरंत प्रतिक्रिया के रूप में पोस्ट करने के लिए क्लिक करो",
   "chat.replyPicker.posting": "पोस्ट किया जा रहा है…",
   "chat.replyPicker.posted": "'{title}' में पोस्ट किया गया।",

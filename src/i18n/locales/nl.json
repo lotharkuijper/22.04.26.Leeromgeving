@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} reacties",
   "chat.replyPicker.chooseOnPage": "Kies liever op de Studiecafé-pagina",
   "chat.replyPicker.targetGone": "Het gekozen topic is niet meer beschikbaar (verwijderd of gesloten). Kies hieronder een ander topic.",
+  "chat.replyPicker.targetGoneDismiss": "Melding sluiten",
   "chat.replyPicker.postHint": "Klik om dit antwoord meteen als reactie te plaatsen",
   "chat.replyPicker.posting": "Plaatsen…",
   "chat.replyPicker.posted": "Geplaatst in '{title}'.",

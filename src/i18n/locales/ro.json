@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} reacții",
   "chat.replyPicker.chooseOnPage": "Alege mai degrabă pe pagina Studiecafé",
   "chat.replyPicker.targetGone": "Subiectul ales nu mai este disponibil (șters sau închis). Alege mai jos un alt subiect.",
+  "chat.replyPicker.targetGoneDismiss": "Închide notificarea",
   "chat.replyPicker.postHint": "Fă clic pentru a posta imediat acest răspuns ca reacție",
   "chat.replyPicker.posting": "Se postează…",
   "chat.replyPicker.posted": "Postat în „{title}”.",

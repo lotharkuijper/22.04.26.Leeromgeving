@@ -1482,6 +1482,7 @@
   "chat.replyPicker.replyCount": "{n} replies",
   "chat.replyPicker.chooseOnPage": "Choose on the Study Café page instead",
   "chat.replyPicker.targetGone": "The topic you chose is no longer available (deleted or closed). Pick another topic below.",
+  "chat.replyPicker.targetGoneDismiss": "Dismiss notice",
   "chat.replyPicker.postHint": "Click to post this answer as a reply right away",
   "chat.replyPicker.posting": "Posting…",
   "chat.replyPicker.posted": "Posted in '{title}'.",

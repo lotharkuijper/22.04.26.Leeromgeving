@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} ردود",
   "chat.replyPicker.chooseOnPage": "يفضّل الاختيار من صفحة مقهى الدراسة",
   "chat.replyPicker.targetGone": "الموضوع المختار لم يعد متاحًا (تم حذفه أو إغلاقه). اختر موضوعًا آخر أدناه.",
+  "chat.replyPicker.targetGoneDismiss": "إغلاق الإشعار",
   "chat.replyPicker.postHint": "انقر لنشر هذا الرد فورًا كتعليق",
   "chat.replyPicker.posting": "جارٍ النشر…",
   "chat.replyPicker.posted": "تم النشر في '{title}'.",

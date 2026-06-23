@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} відповідей",
   "chat.replyPicker.chooseOnPage": "Краще вибери на сторінці Studiecafé",
   "chat.replyPicker.targetGone": "Вибрана тема більше недоступна (видалена або закрита). Вибери нижче іншу тему.",
+  "chat.replyPicker.targetGoneDismiss": "Закрити сповіщення",
   "chat.replyPicker.postHint": "Натисни, щоб одразу опублікувати цю відповідь як реакцію",
   "chat.replyPicker.posting": "Публікуємо…",
   "chat.replyPicker.posted": "Опубліковано в «{title}».",

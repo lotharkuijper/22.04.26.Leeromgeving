@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} 件の返信",
   "chat.replyPicker.chooseOnPage": "Studiecaféページで選ぶ",
   "chat.replyPicker.targetGone": "選択したトピックは利用できなくなりました（削除またはクローズされました）。以下から別のトピックを選んでください。",
+  "chat.replyPicker.targetGoneDismiss": "通知を閉じる",
   "chat.replyPicker.postHint": "クリックするとこの回答をすぐに返信として投稿します",
   "chat.replyPicker.posting": "投稿中…",
   "chat.replyPicker.posted": "'{title}' に投稿しました。",

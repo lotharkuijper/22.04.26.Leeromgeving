@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} reakcija",
   "chat.replyPicker.chooseOnPage": "Radije odaberi na stranici Studiecafé",
   "chat.replyPicker.targetGone": "Odabrana tema više nije dostupna (izbrisana je ili zatvorena). Odaberi drugu temu u nastavku.",
+  "chat.replyPicker.targetGoneDismiss": "Zatvori obavijest",
   "chat.replyPicker.postHint": "Klikni da odmah objaviš ovaj odgovor kao reakciju",
   "chat.replyPicker.posting": "Objavljivanje…",
   "chat.replyPicker.posted": "Objavljeno u '{title}'.",

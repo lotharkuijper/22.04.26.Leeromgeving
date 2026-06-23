@@ -222,6 +222,7 @@
   "chat.replyPicker.replyCount": "{n} 条回复",
   "chat.replyPicker.chooseOnPage": "更想在 Studiecafé 页面上选择",
   "chat.replyPicker.targetGone": "所选话题已不可用（已删除或已关闭）。请在下方选择另一个话题。",
+  "chat.replyPicker.targetGoneDismiss": "关闭通知",
   "chat.replyPicker.postHint": "点击即可将此答案立即作为回复发布",
   "chat.replyPicker.posting": "正在发布…",
   "chat.replyPicker.posted": "已发布到“{title}”。",
