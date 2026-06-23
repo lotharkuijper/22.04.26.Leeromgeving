@@ -17,6 +17,11 @@ export interface StudiecafeHandoff {
   // plaatsen — StudiecafePage toont een kies-een-topic-banner en laadt de
   // bijlage in de reply-composer van de gekozen thread.
   mode?: 'thread' | 'reply';
+  // Optioneel (Task #354): de student koos het doel-topic al in de chat. Bij
+  // reply-modus klapt StudiecafePage deze thread automatisch uit met de bijlage
+  // voorgeladen, zodat de student niet ook nog op de Studiecafé-pagina hoeft te
+  // zoeken. Leeg ⇒ de student kiest alsnog een topic op de pagina (oude flow).
+  targetThreadId?: string;
 }
 
 export function stashStudiecafeHandoff(h: StudiecafeHandoff): void {

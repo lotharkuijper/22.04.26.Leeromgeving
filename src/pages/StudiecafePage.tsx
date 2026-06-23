@@ -106,6 +106,9 @@ export function StudiecafePage() {
   const [sort, setSort] = useState<SortKey>('recent');
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Task #354: doel-topic gekozen in de chat. Wacht tot de threads geladen zijn,
+  // klap die thread dan automatisch uit (met de reply-bijlage voorgeladen).
+  const [pendingExpandId, setPendingExpandId] = useState<string | null>(null);
 
   // Ongelezen-markering (Task #307/#312): seenBaseline = de zachte-uitrol-vloer
   // (per-cursus last_seen). We bevriezen die bij binnenkomst. `reads` houdt per
@@ -291,6 +294,9 @@ export function StudiecafePage() {
     // composer openen.
     if (handoff.mode === 'reply') {
       setReplyAttachment(handoff.attachment);
+      // Task #354: de student koos het doel-topic al in de chat. Onthoud het id;
+      // zodra de threads geladen zijn klappen we die thread automatisch uit.
+      if (handoff.targetThreadId) setPendingExpandId(handoff.targetThreadId);
       return;
     }
     setNewAttachment(handoff.attachment);
@@ -456,6 +462,28 @@ export function StudiecafePage() {
     markRead(threadId);
     if (!repliesByThread[threadId]) await loadReplies(threadId);
   };
+
+  // Task #354: zodra de threads geladen zijn, klap het in de chat gekozen
+  // doel-topic automatisch uit en scroll het in beeld. Faalt het topic te
+  // bestaan (verwijderd/gesloten), dan valt het terug op de kies-banner.
+  useEffect(() => {
+    if (!pendingExpandId) return;
+    if (!threads.some((th) => th.id === pendingExpandId)) {
+      if (!loading) setPendingExpandId(null);
+      return;
+    }
+    const targetId = pendingExpandId;
+    setPendingExpandId(null);
+    setExpandedId(targetId);
+    setReplyBody('');
+    markRead(targetId);
+    if (!repliesByThread[targetId]) loadReplies(targetId);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`thread-${targetId}`);
+      if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads, pendingExpandId, loading]);
 
   const submitReply = async (threadId: string) => {
     if (!courseId || !replyBody.trim()) return;
@@ -989,6 +1017,7 @@ export function StudiecafePage() {
             return (
               <div
                 key={th.id}
+                id={`thread-${th.id}`}
                 className={`bg-white rounded-2xl ring-1 shadow-sm overflow-hidden ${th.isAnnouncement ? 'ring-amber-300' : 'ring-slate-200'}`}
                 data-testid={`thread-${th.id}`}
               >

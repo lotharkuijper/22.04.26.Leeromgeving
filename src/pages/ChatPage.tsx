@@ -53,6 +53,15 @@ const RAG_DEFAULTS: RagSettings = {
   project: { similarity_threshold: 0.60, match_count: 7, rag_strict_mode: false },
 };
 
+// Minimale vorm van een Studiecafé-thread voor de in-chat topic-kiezer (Task #354).
+interface ReplyThreadOption {
+  id: string;
+  title: string;
+  category: string;
+  isLocked: boolean;
+  replyCount: number;
+}
+
 function AssistantMessageBody({
   messageId,
   content,
@@ -69,6 +78,22 @@ function AssistantMessageBody({
   const { activeCourseId: activeCourse } = useActiveCourse();
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  // In-chat topic-kiezer (Task #354): de student kan een bestaand open topic van
+  // de actieve cursus kiezen vóór hij naar het Studiecafé gaat.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [threads, setThreads] = useState<ReplyThreadOption[]>([]);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadsError, setThreadsError] = useState(false);
+  const [threadSearch, setThreadSearch] = useState('');
+  const pickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [pickerOpen]);
   const dispRaw: SourceItem[] = (retrievedContext?.displaySources as SourceItem[] | undefined)
     ?? (retrievedContext?.chunks
           ? dedupeSourcesByDocument(
@@ -127,14 +152,53 @@ function AssistantMessageBody({
     });
     navigate('/studiecafe');
   };
+  const loadThreads = async () => {
+    if (!activeCourse) { setThreads([]); return; }
+    setThreadsLoading(true);
+    setThreadsError(false);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const r = await fetch(`/api/studiecafe/${activeCourse}/threads`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) throw new Error('threads');
+      const d = await r.json();
+      const list: ReplyThreadOption[] = (Array.isArray(d.threads) ? d.threads : [])
+        .filter((th: any) => !th.isLocked)
+        .map((th: any) => ({
+          id: th.id,
+          title: th.title,
+          category: th.category,
+          isLocked: !!th.isLocked,
+          replyCount: th.replyCount || 0,
+        }));
+      setThreads(list);
+    } catch {
+      setThreadsError(true);
+      setThreads([]);
+    } finally {
+      setThreadsLoading(false);
+    }
+  };
   const handleCheckLLMReply = () => {
+    const next = !pickerOpen;
+    setPickerOpen(next);
+    if (next) {
+      setThreadSearch('');
+      loadThreads();
+    }
+  };
+  const handlePickThread = (threadId: string | null) => {
     stashStudiecafeHandoff({
       v: 1,
       courseId: activeCourse ?? null,
       category: 'check-llm',
       attachment: buildExcerptAttachment(),
       mode: 'reply',
+      ...(threadId ? { targetThreadId: threadId } : {}),
     });
+    setPickerOpen(false);
     navigate('/studiecafe');
   };
   return (
@@ -169,16 +233,70 @@ function AssistantMessageBody({
           <Coffee className="w-3.5 h-3.5" />
           {t('chat.checkLLM')}
         </button>
-        <button
-          type="button"
-          onClick={handleCheckLLMReply}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-200 hover:bg-amber-100 transition-colors"
-          title={t('chat.checkLLMReplyHint')}
-          data-testid={`button-check-llm-reply-${messageId}`}
-        >
-          <MessageSquare className="w-3.5 h-3.5" />
-          {t('chat.checkLLMReply')}
-        </button>
+        <div className="relative" ref={pickerRef}>
+          <button
+            type="button"
+            onClick={handleCheckLLMReply}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-200 hover:bg-amber-100 transition-colors"
+            title={t('chat.checkLLMReplyHint')}
+            data-testid={`button-check-llm-reply-${messageId}`}
+            aria-expanded={pickerOpen}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            {t('chat.checkLLMReply')}
+          </button>
+          {pickerOpen && (
+            <div
+              className="absolute z-20 mt-1 left-0 w-72 max-w-[90vw] bg-white rounded-xl ring-1 ring-slate-200 shadow-lg p-2"
+              data-testid={`thread-picker-${messageId}`}
+            >
+              <p className="text-xs font-medium text-slate-600 px-1 pb-1.5">{t('chat.replyPicker.title')}</p>
+              <input
+                type="text"
+                value={threadSearch}
+                onChange={(e) => setThreadSearch(e.target.value)}
+                placeholder={t('chat.replyPicker.searchPlaceholder')}
+                className="w-full px-2.5 py-1.5 text-sm rounded-lg ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-300 outline-none mb-1.5"
+                data-testid={`input-thread-search-${messageId}`}
+              />
+              <div className="max-h-56 overflow-y-auto space-y-0.5">
+                {threadsLoading ? (
+                  <p className="text-xs text-slate-400 px-1 py-2 flex items-center gap-1.5" data-testid={`thread-picker-loading-${messageId}`}>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />{t('chat.replyPicker.loading')}
+                  </p>
+                ) : threadsError ? (
+                  <p className="text-xs text-red-500 px-1 py-2" data-testid={`thread-picker-error-${messageId}`}>{t('chat.replyPicker.error')}</p>
+                ) : (() => {
+                  const q = threadSearch.trim().toLowerCase();
+                  const filtered = q ? threads.filter((th) => th.title.toLowerCase().includes(q)) : threads;
+                  if (filtered.length === 0) {
+                    return <p className="text-xs text-slate-400 px-1 py-2" data-testid={`thread-picker-empty-${messageId}`}>{t('chat.replyPicker.empty')}</p>;
+                  }
+                  return filtered.map((th) => (
+                    <button
+                      key={th.id}
+                      type="button"
+                      onClick={() => handlePickThread(th.id)}
+                      className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors"
+                      data-testid={`button-pick-thread-${th.id}`}
+                    >
+                      <span className="block text-sm text-slate-700 truncate">{th.title}</span>
+                      <span className="block text-[11px] text-slate-400">{t('chat.replyPicker.replyCount').replace('{n}', String(th.replyCount))}</span>
+                    </button>
+                  ));
+                })()}
+              </div>
+              <button
+                type="button"
+                onClick={() => handlePickThread(null)}
+                className="w-full text-left mt-1.5 pt-1.5 border-t border-slate-100 px-2 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50 rounded-lg transition-colors"
+                data-testid={`button-pick-in-studiecafe-${messageId}`}
+              >
+                {t('chat.replyPicker.chooseOnPage')}
+              </button>
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={handleCopyMarkdown}
