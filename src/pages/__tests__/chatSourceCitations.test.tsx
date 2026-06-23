@@ -1,0 +1,125 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, cleanup } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+// ── Mocks ───────────────────────────────────────────────────────────────────
+// Net als chatReplyPicker.test.tsx, maar nu mét retrievedContext.chunks zodat de
+// bronnenlijst (SourceList) daadwerkelijk rendert.
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ session: { access_token: 'test-token' } }),
+}));
+
+vi.mock('../../contexts/ActiveCourseContext', () => ({
+  useActiveCourse: () => ({ activeCourseId: 'course-1', activeCourse: { name: 'Statistiek' } }),
+}));
+
+vi.mock('../../lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-token' } } }),
+    },
+  },
+}));
+
+// rag.service: in deze test rendert AssistantMessageBody mét chunks, dus de
+// chunk→bron-helpers moeten realistische waarden teruggeven (de echte logica is
+// elders getest; hier stubben we ze deterministisch).
+vi.mock('../../services/rag.service', () => ({
+  searchRelevantChunksWithStats: vi.fn(),
+  buildContextWithCap: vi.fn(),
+  dedupeSourcesByDocument: vi.fn((arr: any[]) =>
+    [...arr].sort((a, b) => b.similarity - a.similarity),
+  ),
+  chunkToDisplaySource: vi.fn((c: any) => ({
+    title: c.documentTitle,
+    similarity: c.similarity,
+    documentId: c.documentId,
+  })),
+  ragDocumentDownloadUrl: vi.fn((id?: string) =>
+    id ? `/api/rag/documents/${id}/download` : undefined,
+  ),
+  openRagDocument: vi.fn(),
+  chunkToSourceItem: vi.fn(),
+}));
+
+// DocumentViewer trekt pdfjs-dist mee (DOMMatrix bestaat niet in jsdom).
+vi.mock('../../components/DocumentViewer', () => ({
+  DocumentViewer: () => null,
+}));
+
+// react-router-dom: alleen useNavigate is nodig in AssistantMessageBody.
+const navigateMock = vi.fn();
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => navigateMock,
+}));
+
+import { AssistantMessageBody } from '../ChatPage';
+import { LanguageProvider } from '../../i18n';
+
+const RETRIEVED_CONTEXT = {
+  chunks: [
+    { documentTitle: 'Hoofdstuk 3 — t-toets', similarity: 0.82, documentId: 'doc-1' },
+    { documentTitle: 'College 5 — variantie', similarity: 0.74, documentId: 'doc-2' },
+  ],
+};
+
+function renderBody(onRequestSource = vi.fn()) {
+  render(
+    <LanguageProvider>
+      <AssistantMessageBody
+        messageId="msg-1"
+        content="Het gemiddelde is de som gedeeld door het aantal waarnemingen."
+        retrievedContext={RETRIEVED_CONTEXT}
+        onRequestSource={onRequestSource}
+      />
+    </LanguageProvider>,
+  );
+  return onRequestSource;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  try {
+    localStorage.clear();
+    localStorage.setItem('lair-vu-lang', 'nl');
+    sessionStorage.clear();
+  } catch { /* noop */ }
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('AssistantMessageBody — broncitaties', () => {
+  it('rendert de bronnenlijst wanneer retrievedContext chunks bevat', async () => {
+    const user = userEvent.setup();
+    renderBody();
+
+    // De bronnenlijst-container rendert (ingeklapt: alleen de toggle-knop).
+    expect(screen.getByTestId('source-list')).toBeInTheDocument();
+    expect(screen.getByTestId('btn-toggle-sources')).toBeInTheDocument();
+    // Ingeklapt → de items zijn nog niet zichtbaar.
+    expect(screen.queryByTestId('link-source-1')).not.toBeInTheDocument();
+
+    // Uitklappen toont de bron-items, gesorteerd op similarity (doc-1 eerst).
+    await user.click(screen.getByTestId('btn-toggle-sources'));
+    expect(screen.getByTestId('list-sources')).toBeInTheDocument();
+    expect(screen.getByTestId('link-source-1')).toHaveTextContent('Hoofdstuk 3 — t-toets');
+    expect(screen.getByTestId('link-source-2')).toHaveTextContent('College 5 — variantie');
+  });
+
+  it('roept onRequestSource aan met de bron bij het klikken op een bron', async () => {
+    const user = userEvent.setup();
+    const onRequestSource = renderBody();
+
+    await user.click(screen.getByTestId('btn-toggle-sources'));
+    await user.click(screen.getByTestId('link-source-1'));
+
+    expect(onRequestSource).toHaveBeenCalledTimes(1);
+    expect(onRequestSource).toHaveBeenCalledWith(
+      expect.objectContaining({ documentId: 'doc-1', title: 'Hoofdstuk 3 — t-toets' }),
+    );
+  });
+});
