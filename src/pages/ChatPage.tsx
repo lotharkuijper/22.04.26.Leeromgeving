@@ -62,7 +62,7 @@ interface ReplyThreadOption {
   replyCount: number;
 }
 
-function AssistantMessageBody({
+export function AssistantMessageBody({
   messageId,
   content,
   retrievedContext,
