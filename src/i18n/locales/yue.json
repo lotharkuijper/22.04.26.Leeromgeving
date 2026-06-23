@@ -221,6 +221,7 @@
   "chat.replyPicker.empty": "搵唔到開放主題。",
   "chat.replyPicker.replyCount": "{n} 個回覆",
   "chat.replyPicker.chooseOnPage": "不如喺 Studiecafé 頁面揀",
+  "chat.replyPicker.targetGone": "所揀嘅主題已經唔再可用（已刪除或已關閉）。請喺下面揀另一個主題。",
   "chat.replyPicker.postHint": "撳一下即刻將呢個答案作為回應發佈",
   "chat.replyPicker.posting": "發佈中…",
   "chat.replyPicker.posted": "已發佈喺「{title}」。",

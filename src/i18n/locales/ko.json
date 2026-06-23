@@ -221,6 +221,7 @@
   "chat.replyPicker.empty": "열린 토픽을 찾을 수 없어.",
   "chat.replyPicker.replyCount": "댓글 {n}개",
   "chat.replyPicker.chooseOnPage": "Studiecafé 페이지에서 선택할래",
+  "chat.replyPicker.targetGone": "선택한 주제는 더 이상 사용할 수 없어(삭제되었거나 닫혔어). 아래에서 다른 주제를 선택해.",
   "chat.replyPicker.postHint": "클릭하면 이 답변을 바로 댓글로 게시해",
   "chat.replyPicker.posting": "게시 중…",
   "chat.replyPicker.posted": "'{title}'에 게시됐어.",

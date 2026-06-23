@@ -221,6 +221,7 @@
   "chat.replyPicker.empty": "Keine offenen Themen gefunden.",
   "chat.replyPicker.replyCount": "{n} Antworten",
   "chat.replyPicker.chooseOnPage": "Wähle lieber auf der Studiecafé-Seite",
+  "chat.replyPicker.targetGone": "Das ausgewählte Thema ist nicht mehr verfügbar (gelöscht oder geschlossen). Wähle unten ein anderes Thema aus.",
   "chat.replyPicker.postHint": "Klicken, um diese Antwort direkt als Reaktion zu posten",
   "chat.replyPicker.posting": "Wird gepostet…",
   "chat.replyPicker.posted": "In „{title}“ gepostet.",

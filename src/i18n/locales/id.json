@@ -221,6 +221,7 @@
   "chat.replyPicker.empty": "Tidak ada topik terbuka yang ditemukan.",
   "chat.replyPicker.replyCount": "{n} balasan",
   "chat.replyPicker.chooseOnPage": "Lebih baik pilih di halaman Studiecafé",
+  "chat.replyPicker.targetGone": "Topik yang dipilih tidak lagi tersedia (dihapus atau ditutup). Pilih topik lain di bawah ini.",
   "chat.replyPicker.postHint": "Klik untuk langsung memposting jawaban ini sebagai balasan",
   "chat.replyPicker.posting": "Memposting…",
   "chat.replyPicker.posted": "Diposting di '{title}'.",

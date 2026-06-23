@@ -89,6 +89,10 @@ function AssistantMessageBody({
   // als reactie in het gekozen topic, zonder eerst naar het Studiecafé te gaan.
   const [postingThreadId, setPostingThreadId] = useState<string | null>(null);
   const [postResult, setPostResult] = useState<{ ok: boolean; threadId?: string; title?: string } | null>(null);
+  // Task #361: het in de chat gekozen doel-topic blijkt al verdwenen/gesloten bij
+  // de keuze. Toon dan meteen een inline melding in de kiezer i.p.v. de verrassing
+  // pas op de Studiecafé-pagina te tonen (#359).
+  const [targetGone, setTargetGone] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!pickerOpen) return;
@@ -156,28 +160,34 @@ function AssistantMessageBody({
     });
     navigate('/studiecafe');
   };
+  // Haalt de actuele lijst open topics op (zonder state te muteren) zodat we hem
+  // zowel voor de kiezer als voor de verse validatie bij een keuze (Task #361)
+  // kunnen gebruiken. Gooit bij een fout zodat de aanroeper kan beslissen.
+  const fetchThreadOptions = async (): Promise<ReplyThreadOption[]> => {
+    if (!activeCourse) return [];
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    const r = await fetch(`/api/studiecafe/${activeCourse}/threads`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!r.ok) throw new Error('threads');
+    const d = await r.json();
+    return (Array.isArray(d.threads) ? d.threads : [])
+      .filter((th: any) => !th.isLocked)
+      .map((th: any) => ({
+        id: th.id,
+        title: th.title,
+        category: th.category,
+        isLocked: !!th.isLocked,
+        replyCount: th.replyCount || 0,
+      }));
+  };
   const loadThreads = async () => {
     if (!activeCourse) { setThreads([]); return; }
     setThreadsLoading(true);
     setThreadsError(false);
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      const r = await fetch(`/api/studiecafe/${activeCourse}/threads`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!r.ok) throw new Error('threads');
-      const d = await r.json();
-      const list: ReplyThreadOption[] = (Array.isArray(d.threads) ? d.threads : [])
-        .filter((th: any) => !th.isLocked)
-        .map((th: any) => ({
-          id: th.id,
-          title: th.title,
-          category: th.category,
-          isLocked: !!th.isLocked,
-          replyCount: th.replyCount || 0,
-        }));
-      setThreads(list);
+      setThreads(await fetchThreadOptions());
     } catch {
       setThreadsError(true);
       setThreads([]);
@@ -190,10 +200,29 @@ function AssistantMessageBody({
     setPickerOpen(next);
     if (next) {
       setThreadSearch('');
+      setTargetGone(false);
       loadThreads();
     }
   };
-  const handlePickThread = (threadId: string | null) => {
+  const handlePickThread = async (threadId: string | null) => {
+    // Task #361: koos de student een specifiek doel-topic, valideer dan eerst dat
+    // het nog bestaat/zichtbaar is vóór we de overdracht stallen. Zo verschijnt de
+    // "topic verdwenen"-melding meteen hier i.p.v. pas op het Studiecafé (#359).
+    if (threadId) {
+      setTargetGone(false);
+      let fresh: ReplyThreadOption[];
+      try {
+        fresh = await fetchThreadOptions();
+      } catch {
+        setThreadsError(true);
+        return;
+      }
+      setThreads(fresh);
+      if (!fresh.some((th) => th.id === threadId)) {
+        setTargetGone(true);
+        return;
+      }
+    }
     stashStudiecafeHandoff({
       v: 1,
       courseId: activeCourse ?? null,
@@ -210,6 +239,7 @@ function AssistantMessageBody({
     if (!activeCourse || postingThreadId) return;
     setPostingThreadId(thread.id);
     setPostResult(null);
+    setTargetGone(false);
     try {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
@@ -224,6 +254,15 @@ function AssistantMessageBody({
           attachments: [buildExcerptAttachment()],
         }),
       });
+      // Task #361: het topic is intussen verdwenen/gesloten (verwijderd → 404,
+      // gesloten of cursus verborgen → 403). Ververs de lijst en toon de inline
+      // melding zodat de student meteen een ander topic kan kiezen.
+      if (r.status === 404 || r.status === 403) {
+        setPostingThreadId(null);
+        try { setThreads(await fetchThreadOptions()); } catch { /* lijst blijft staan */ }
+        setTargetGone(true);
+        return;
+      }
       if (!r.ok) throw new Error('post');
       setPostResult({ ok: true, threadId: thread.id, title: thread.title });
       setPickerOpen(false);
@@ -287,6 +326,15 @@ function AssistantMessageBody({
               data-testid={`thread-picker-${messageId}`}
             >
               <p className="text-xs font-medium text-slate-600 px-1 pb-1.5">{t('chat.replyPicker.title')}</p>
+              {targetGone && (
+                <div
+                  className="flex items-start gap-1.5 mb-1.5 px-2 py-1.5 rounded-lg text-[11px] bg-rose-50 text-rose-700 ring-1 ring-rose-200"
+                  data-testid={`reply-target-gone-${messageId}`}
+                >
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{t('chat.replyPicker.targetGone')}</span>
+                </div>
+              )}
               <input
                 type="text"
                 value={threadSearch}
