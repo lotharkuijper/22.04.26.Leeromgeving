@@ -45,3 +45,24 @@ client should ever write this table directly.
 
 **How to apply:** never add a client-facing write policy here. New write paths must use
 `supabaseAdmin` (service role) behind an admin/superuser check, not the caller's anon client.
+
+## No surrogate `id` column — and don't re-check membership after isCourseTeacher
+
+`course_members` has **no `id` column**. Its columns are exactly `user_id, course_id, role,
+member_role` and its PK is the composite `(user_id, course_id)`. Any `.select('id')` on it
+throws Postgres `42703` ("column course_members.id does not exist"). Always select an existing
+column (`user_id`) for existence checks.
+
+**The trap that bit us:** a server endpoint guarded by `isCourseTeacher(user.id, courseId)`
+(correct: filters `member_role='teacher'`, selects `user_id`) then added a *redundant*
+teacher-only second membership check that did `.select('id')` → 42703 → HTTP 500. It ran only
+in the `isDocent && !isAdmin` branch, so the bug was **teacher-only** (admins skipped it) and
+invisible to admin testing.
+
+**Why:** the role gate `isAdmin || isCourseTeacher(...)` is already sufficient and role-aware;
+a second `course_members` lookup is both weaker (no role filter) and a fresh chance to hit the
+missing-`id` schema mistake.
+
+**How to apply:** don't bolt extra `course_members` existence checks onto an endpoint that
+already passed `isCourseTeacher` / `isStaffForCourse`. If you must query the table, never
+`.select('id')` — select `user_id`.

@@ -4632,25 +4632,14 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
     }
 
     const isAdmin = profile.role === 'admin' || profile.email === SUPERUSER_EMAIL;
+    // isCourseTeacher controleert course_members op (user_id, course_id, member_role='teacher')
+    // en bevestigt daarmee al dat de docent lid is van precies deze cursus. Een extra
+    // lidmaatschaps-dubbelcheck is dus overbodig (en queryde voorheen de niet-bestaande
+    // kolom course_members.id → 42703 → 500 "Cursustoestemming kon niet worden gecontroleerd",
+    // uitsluitend voor docenten omdat dat blok alleen in de docent-tak liep).
     const isDocent = !isAdmin && await isCourseTeacher(user.id, courseId);
     if (!isAdmin && !isDocent) {
       return res.status(403).json({ error: 'Geen docent-toegang tot deze cursus' });
-    }
-
-    if (isDocent && !isAdmin) {
-      const { data: membership, error: memberErr } = await supabaseAdmin
-        .from('course_members')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('course_id', courseId)
-        .maybeSingle();
-      if (memberErr) {
-        console.error('[extract-concepts] Course membership check error:', memberErr);
-        return res.status(500).json({ error: 'Cursustoestemming kon niet worden gecontroleerd' });
-      }
-      if (!membership) {
-        return res.status(403).json({ error: 'Geen toegang tot deze cursus' });
-      }
     }
 
     // BELANGRIJK: de replace-actie (oude RAG-begrippen verwijderen) is
