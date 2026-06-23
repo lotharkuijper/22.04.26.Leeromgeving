@@ -307,6 +307,15 @@ export function StudiecafePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Diepe link vanuit de chat (Task #358): ?thread=<id> klapt het zojuist
+  // beantwoorde topic automatisch uit zodra de threads geladen zijn.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const threadId = params.get('thread');
+    if (threadId) setPendingExpandId(threadId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Markeer één thread als gelezen (Task #312): optimistisch lokaal + persisteren.
   // Nudge de nav-badge zodat hij meteen meedaalt zonder op de poll te wachten.
   const markRead = useCallback((threadId: string) => {

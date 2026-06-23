@@ -85,6 +85,10 @@ function AssistantMessageBody({
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [threadsError, setThreadsError] = useState(false);
   const [threadSearch, setThreadSearch] = useState('');
+  // Direct plaatsen (Task #358): de student plaatst het AI-antwoord met één klik
+  // als reactie in het gekozen topic, zonder eerst naar het Studiecafé te gaan.
+  const [postingThreadId, setPostingThreadId] = useState<string | null>(null);
+  const [postResult, setPostResult] = useState<{ ok: boolean; threadId?: string; title?: string } | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!pickerOpen) return;
@@ -201,6 +205,38 @@ function AssistantMessageBody({
     setPickerOpen(false);
     navigate('/studiecafe');
   };
+  // Task #358: plaats het AI-antwoord direct als reactie in het gekozen topic.
+  const handlePostReply = async (thread: ReplyThreadOption) => {
+    if (!activeCourse || postingThreadId) return;
+    setPostingThreadId(thread.id);
+    setPostResult(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const r = await fetch(`/api/studiecafe/${activeCourse}/threads/${thread.id}/replies`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          body: t('chat.replyPicker.defaultBody'),
+          attachments: [buildExcerptAttachment()],
+        }),
+      });
+      if (!r.ok) throw new Error('post');
+      setPostResult({ ok: true, threadId: thread.id, title: thread.title });
+      setPickerOpen(false);
+    } catch {
+      setPostResult({ ok: false });
+    } finally {
+      setPostingThreadId(null);
+    }
+  };
+  const handleViewPostedTopic = () => {
+    if (!postResult?.threadId) { navigate('/studiecafe'); return; }
+    navigate(`/studiecafe?thread=${encodeURIComponent(postResult.threadId)}`);
+  };
   return (
     <>
       <MarkdownMessage
@@ -276,12 +312,19 @@ function AssistantMessageBody({
                     <button
                       key={th.id}
                       type="button"
-                      onClick={() => handlePickThread(th.id)}
-                      className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors"
+                      onClick={() => handlePostReply(th)}
+                      disabled={!!postingThreadId}
+                      title={t('chat.replyPicker.postHint')}
+                      className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-60 disabled:cursor-wait"
                       data-testid={`button-pick-thread-${th.id}`}
                     >
-                      <span className="block text-sm text-slate-700 truncate">{th.title}</span>
-                      <span className="block text-[11px] text-slate-400">{t('chat.replyPicker.replyCount').replace('{n}', String(th.replyCount))}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm text-slate-700 truncate">{th.title}</span>
+                        <span className="block text-[11px] text-slate-400">{t('chat.replyPicker.replyCount').replace('{n}', String(th.replyCount))}</span>
+                      </span>
+                      {postingThreadId === th.id
+                        ? <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-amber-600" />
+                        : <Send className="w-3.5 h-3.5 shrink-0 text-amber-500" />}
                     </button>
                   ));
                 })()}
@@ -308,6 +351,34 @@ function AssistantMessageBody({
           {copied ? t('chat.copied') : t('chat.copyMarkdown')}
         </button>
       </div>
+      {postResult && (
+        postResult.ok ? (
+          <div
+            className="mt-2 flex flex-wrap items-center gap-2 text-xs text-green-700 bg-green-50 ring-1 ring-green-200 rounded-lg px-2.5 py-1.5"
+            data-testid={`reply-post-success-${messageId}`}
+          >
+            <Check className="w-3.5 h-3.5 shrink-0" />
+            <span>{t('chat.replyPicker.posted').replace('{title}', postResult.title ?? '')}</span>
+            <button
+              type="button"
+              onClick={handleViewPostedTopic}
+              className="ml-auto inline-flex items-center gap-1 font-medium text-green-800 underline hover:no-underline"
+              data-testid={`button-view-posted-topic-${messageId}`}
+            >
+              <Coffee className="w-3.5 h-3.5" />
+              {t('chat.replyPicker.viewTopic')}
+            </button>
+          </div>
+        ) : (
+          <div
+            className="mt-2 flex items-center gap-2 text-xs text-red-700 bg-red-50 ring-1 ring-red-200 rounded-lg px-2.5 py-1.5"
+            data-testid={`reply-post-error-${messageId}`}
+          >
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>{t('chat.replyPicker.postError')}</span>
+          </div>
+        )
+      )}
     </>
   );
 }
