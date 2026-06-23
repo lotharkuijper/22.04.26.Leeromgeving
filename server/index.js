@@ -50,6 +50,7 @@ import {
   processPptxCore as processPptxCoreImpl,
   processPlainRagDocument as processPlainRagDocumentImpl,
 } from './ragProcessing.js';
+import { embeddingsRequestWithRetry, EMBEDDINGS_RATE_LIMIT_MSG } from './embeddingsRetry.js';
 import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
 import { normalizeMix } from './quizSourcesMix.js';
 import {
@@ -905,32 +906,19 @@ app.post('/api/embeddings', async (req, res) => {
   }
 
   try {
-    const response = await fetch(OPENAI_EMBEDDINGS_URL, {
-      method: 'POST',
-      headers: embeddingAuthHeaders(),
-      body: JSON.stringify({
-        model: 'text-embedding-3-small',
-        input: texts,
-      }),
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      console.error('[/api/embeddings] Azure embeddings error response:', response.status, JSON.stringify(errData));
-      return res.status(response.status).json({ error: errData.error?.message || errData.error || `Azure embeddings error ${response.status}` });
-    }
-
-    const data = await response.json();
-    if (!data.data || !Array.isArray(data.data)) {
-      console.error('[/api/embeddings] Unexpected Azure response shape:', JSON.stringify(data));
-      return res.status(500).json({ error: 'Unexpected response from Azure embeddings API' });
-    }
+    const data = await embedBatchWithRetry(texts);
     const embeddings = data.data.map((item) => item.embedding);
     console.log(`[/api/embeddings] Generated ${embeddings.length} embeddings via Azure (dim=${embeddings[0]?.length})`);
     return res.json({ embeddings, provider: 'azure' });
   } catch (err) {
+    if (err.isRateLimit) {
+      console.warn('[/api/embeddings] Azure-snelheidslimiet na alle pogingen:', err.azureMessage || err.message);
+      res.set('Retry-After', '30');
+      return res.status(429).json({ error: EMBEDDINGS_RATE_LIMIT_MSG });
+    }
     console.error('[/api/embeddings] Azure embeddings request failed:', err.message);
-    return res.status(500).json({ error: err.message });
+    const status = Number.isInteger(err.status) && err.status >= 400 ? err.status : 500;
+    return res.status(status).json({ error: err.message });
   }
 });
 
@@ -2112,22 +2100,37 @@ app.delete('/api/admin/documents/:documentId', async (req, res) => {
   }
 });
 
-// Embed een lijst teksten via OpenAI (text-embedding-3-small), gebatcht.
+// Kleine pauze tussen embedding-batches om bursts richting de Azure-limiet te
+// dempen (vooral bij documenten met veel chunks).
+const EMBEDDINGS_BATCH_PACING_MS = 250;
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Één embeddings-batch via Azure met herhaalpoging + backoff bij 429
+// (snelheidslimiet). Injecteert de echte server-afhankelijkheden in de
+// testbare helper uit ./embeddingsRetry.js.
+function embedBatchWithRetry(input) {
+  return embeddingsRequestWithRetry(input, {
+    fetchImpl: fetch,
+    url: OPENAI_EMBEDDINGS_URL,
+    headers: embeddingAuthHeaders,
+    sleep: sleepMs,
+    log: (msg) => console.warn(msg),
+  });
+}
+
+// Embed een lijst teksten via Azure (text-embedding-3-small), gebatcht. Bij een
+// Azure-snelheidslimiet (HTTP 429) wacht elke batch automatisch de gevraagde
+// tijd en probeert opnieuw i.p.v. het hele document te laten falen.
 async function embedTextsServer(texts, _openaiKey, batchSize = 64) {
   if (!AZURE_EMBEDDINGS_READY) throw new Error(EMBEDDINGS_NOT_CONFIGURED_MSG);
   const out = [];
   for (let i = 0; i < texts.length; i += batchSize) {
     const batch = texts.slice(i, i + batchSize);
-    const resp = await fetch(OPENAI_EMBEDDINGS_URL, {
-      method: 'POST',
-      headers: embeddingAuthHeaders(),
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: batch }),
-    });
-    const data = await resp.json();
-    if (!resp.ok || !Array.isArray(data?.data)) {
-      throw new Error(data?.error?.message || data?.error || `Azure embeddings error ${resp.status}`);
-    }
+    const data = await embedBatchWithRetry(batch);
     for (const row of data.data) out.push(row.embedding);
+    if (i + batchSize < texts.length) {
+      await sleepMs(EMBEDDINGS_BATCH_PACING_MS);
+    }
   }
   return out;
 }

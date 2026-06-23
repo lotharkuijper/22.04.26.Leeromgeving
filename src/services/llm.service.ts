@@ -913,6 +913,6 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   } catch (error: any) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error('Error generating embeddings:', msg);
-    throw new Error(`Failed to generate embeddings: ${msg}`);
+    throw new Error(msg);
   }
 }

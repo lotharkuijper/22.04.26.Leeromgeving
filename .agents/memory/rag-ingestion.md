@@ -11,3 +11,7 @@ description: Where document ingestion runs (client vs server) and how source cit
 
 - **LLM provider: replit.md is stale.** It says Groq, but the code uses OpenAI chat/completions (`OPENAI_CHAT_URL` + `OPENAI_MODEL`) and OpenAI embeddings. Groq is not used. Trust the code, not replit.md, on the provider.
   - For newer OpenAI models (gpt-5/o-series) the chat body uses `max_completion_tokens`, not `max_tokens` — there's a runtime switch for this; don't hardcode the param name.
+
+- **Embeddings hit Azure via TWO independent paths — any embedding-behavior change must cover both.** (1) Client-side: browser ingestion → `/api/embeddings` (the path teachers see in upload errors). (2) Server-side: `embedTextsServer` (pptx core, plain-RAG processing, web-import). Both share the retry helper in `server/embeddingsRetry.js` (DI/testable).
+  - **Why:** a 429-retry fix wired into only one path silently leaves the other failing. The Azure S0 tier throttles bursts of embedding calls; the resulting HTTP 429 ("retry after N seconds") is a RATE LIMIT, not an auth/key/permission error — don't chase it as a credential bug.
+  - **How to apply:** retries are per-batch, not globally coordinated; concurrent multi-file uploads can still exhaust the limit. If 429s persist under load, add a process-level embeddings queue/concurrency limiter rather than raising per-batch retries.
