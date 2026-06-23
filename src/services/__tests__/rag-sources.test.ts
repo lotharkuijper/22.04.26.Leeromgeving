@@ -15,6 +15,22 @@ describe('slideRangeFromMetadata', () => {
     expect(slideRangeFromMetadata({ source: 'pptx' })).toBeNull();
   });
 
+  it('geeft null voor niet-object metadata (string/number/boolean)', () => {
+    expect(slideRangeFromMetadata('pptx')).toBeNull();
+    expect(slideRangeFromMetadata(42)).toBeNull();
+    expect(slideRangeFromMetadata(true)).toBeNull();
+  });
+
+  it('geeft null wanneer slideStart geen geldig getal is (NaN)', () => {
+    expect(slideRangeFromMetadata({ source: 'pptx', slideStart: 'abc' })).toBeNull();
+    expect(slideRangeFromMetadata({ source: 'pptx', slideStart: NaN })).toBeNull();
+    expect(slideRangeFromMetadata({ source: 'pptx', slideStart: undefined })).toBeNull();
+  });
+
+  it('valt terug op slideStart wanneer slideEnd geen geldig getal is (NaN)', () => {
+    expect(slideRangeFromMetadata({ source: 'pptx', slideStart: 5, slideEnd: 'x' })).toEqual({ start: 5, end: 5 });
+  });
+
   it('leest dia-reeks uit pptx-metadata, met fallback naar één dia', () => {
     expect(slideRangeFromMetadata({ source: 'pptx', slideStart: 4, slideEnd: 6 })).toEqual({ start: 4, end: 6 });
     expect(slideRangeFromMetadata({ source: 'pptx', slideStart: 3 })).toEqual({ start: 3, end: 3 });
