@@ -22,15 +22,71 @@ import {
   DEFAULT_NOTIFICATION_PREFS,
 } from './notifications.js';
 
-export const STUDIECAFE_CATEGORIES = ['vraag', 'discussie', 'samenwerken'];
+export const STUDIECAFE_CATEGORIES = ['vraag', 'discussie', 'samenwerken', 'check-llm'];
 // Bewuste allowlist: voorkomt willekeurige/agressieve emoji-payloads.
 export const ALLOWED_REACTION_EMOJI = ['👍', '❤️', '🎉', '🤔', '✅', '🙌'];
 export const MAX_TITLE_LEN = 200;
 export const MAX_BODY_LEN = 8000;
 export const MAX_REACTION_USERS = 1000; // cap per emoji-array
 
+// Bijlagen (Task #351): geciteerde fragmenten, bijv. een AI-antwoord uit de chat.
+export const ATTACHMENT_TYPES = ['chat_excerpt'];
+export const MAX_ATTACHMENTS = 3;
+export const MAX_ATTACHMENT_CONTENT_LEN = 12000;
+export const MAX_ATTACHMENT_SOURCES = 12;
+export const MAX_ATTACHMENT_TITLE_LEN = 300;
+export const MAX_ATTACHMENT_DOCUMENT_ID_LEN = 200;
+export const MAX_ATTACHMENT_MODULE_LEN = 40;
+
 export function sanitizeCategory(cat) {
   return STUDIECAFE_CATEGORIES.includes(cat) ? cat : 'vraag';
+}
+
+// Maakt één bronvermelding schoon: index (1-based int), title (verplicht),
+// optioneel documentId. Onbekende velden worden weggegooid. Geeft null bij ongeldig.
+function sanitizeAttachmentSource(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, MAX_ATTACHMENT_TITLE_LEN) : '';
+  if (!title) return null;
+  const out = { title };
+  const idx = Number(raw.index);
+  if (Number.isFinite(idx) && idx >= 1 && idx <= 999) out.index = Math.floor(idx);
+  if (typeof raw.documentId === 'string' && raw.documentId.trim()) {
+    out.documentId = raw.documentId.trim().slice(0, MAX_ATTACHMENT_DOCUMENT_ID_LEN);
+  }
+  return out;
+}
+
+// Maakt één bijlage schoon. Alleen bekende types met niet-lege content overleven;
+// content + bronnen worden begrensd. Geeft null bij ongeldig.
+function sanitizeAttachmentItem(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const type = typeof raw.type === 'string' ? raw.type : '';
+  if (!ATTACHMENT_TYPES.includes(type)) return null;
+  const content = typeof raw.content === 'string' ? raw.content.trim().slice(0, MAX_ATTACHMENT_CONTENT_LEN) : '';
+  if (!content) return null;
+  const sourcesRaw = Array.isArray(raw.sources) ? raw.sources : [];
+  const sources = sourcesRaw
+    .slice(0, MAX_ATTACHMENT_SOURCES)
+    .map(sanitizeAttachmentSource)
+    .filter(Boolean);
+  const item = { type, content };
+  if (sources.length) item.sources = sources;
+  const module = raw?.meta?.module;
+  if (typeof module === 'string' && module.trim()) {
+    item.meta = { module: module.trim().slice(0, MAX_ATTACHMENT_MODULE_LEN) };
+  }
+  return item;
+}
+
+// Valideert + begrenst de bijlagen-array van een thread/reply. Tolerant: ongeldige
+// items worden stil weggegooid; geeft altijd een (mogelijk lege) array terug.
+export function sanitizeAttachments(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .slice(0, MAX_ATTACHMENTS)
+    .map(sanitizeAttachmentItem)
+    .filter(Boolean);
 }
 
 export function validateThreadInput({ title, body } = {}) {
@@ -639,9 +695,9 @@ export function registerStudiecafeRoutes(app, deps) {
   });
 
   const THREAD_COLS =
-    'id, course_id, author_id, title, body, category, is_pinned, is_locked, is_announcement, is_resolved, kudos_by, kudos_at, reactions, reply_count, last_activity_at, created_at, updated_at';
+    'id, course_id, author_id, title, body, category, attachments, is_pinned, is_locked, is_announcement, is_resolved, kudos_by, kudos_at, reactions, reply_count, last_activity_at, created_at, updated_at';
   const REPLY_COLS =
-    'id, thread_id, course_id, author_id, body, kudos_by, kudos_at, reactions, deleted_at, created_at';
+    'id, thread_id, course_id, author_id, body, attachments, kudos_by, kudos_at, reactions, deleted_at, created_at';
 
   async function buildNameResolver(ids) {
     const uniq = [...new Set((ids || []).filter(Boolean))];
@@ -670,6 +726,7 @@ export function registerStudiecafeRoutes(app, deps) {
       title: r.title,
       body: r.body,
       category: r.category,
+      attachments: Array.isArray(r.attachments) ? r.attachments : [],
       isPinned: !!r.is_pinned,
       isLocked: !!r.is_locked,
       isAnnouncement: !!r.is_announcement,
@@ -704,6 +761,7 @@ export function registerStudiecafeRoutes(app, deps) {
       authorId: r.author_id,
       authorName: nameFor(r.author_id),
       body: r.body,
+      attachments: Array.isArray(r.attachments) ? r.attachments : [],
       kudos: r.kudos_at ? { by: r.kudos_by, byName: nameFor(r.kudos_by), at: r.kudos_at } : null,
       reactions: summarizeReactions(r.reactions, viewerId),
       createdAt: r.created_at,
@@ -1165,6 +1223,7 @@ export function registerStudiecafeRoutes(app, deps) {
         title: v.value.title,
         body: v.value.body,
         category: sanitizeCategory(req.body && req.body.category),
+        attachments: sanitizeAttachments(req.body && req.body.attachments),
         is_announcement: isAnnouncement,
         last_activity_at: await nowIso(),
       };
@@ -1231,6 +1290,7 @@ export function registerStudiecafeRoutes(app, deps) {
           course_id: courseId,
           author_id: auth.user.id,
           body: v.value.body,
+          attachments: sanitizeAttachments(req.body && req.body.attachments),
         })
         .select(REPLY_COLS)
         .single();

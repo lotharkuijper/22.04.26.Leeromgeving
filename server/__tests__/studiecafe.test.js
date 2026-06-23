@@ -29,15 +29,21 @@ import {
   registerStudiecafeRoutes,
   isThreadUnreadFor,
   summarizeUnreadThreads,
+  sanitizeAttachments,
+  ATTACHMENT_TYPES,
+  MAX_ATTACHMENTS,
+  MAX_ATTACHMENT_CONTENT_LEN,
+  MAX_ATTACHMENT_SOURCES,
 } from '../studiecafe.js';
 
 describe('sanitizeCategory', () => {
   it('laat geldige categorieën door', () => {
     for (const c of STUDIECAFE_CATEGORIES) expect(sanitizeCategory(c)).toBe(c);
   });
-  it('kent de optie-D categorieën (samenwerken vervangt tip)', () => {
-    expect(STUDIECAFE_CATEGORIES).toEqual(['vraag', 'discussie', 'samenwerken']);
+  it('kent de optie-D categorieën + check-llm (samenwerken vervangt tip)', () => {
+    expect(STUDIECAFE_CATEGORIES).toEqual(['vraag', 'discussie', 'samenwerken', 'check-llm']);
     expect(sanitizeCategory('samenwerken')).toBe('samenwerken');
+    expect(sanitizeCategory('check-llm')).toBe('check-llm');
     // 'tip' bestaat niet meer en valt terug op de default.
     expect(sanitizeCategory('tip')).toBe('vraag');
   });
@@ -46,6 +52,58 @@ describe('sanitizeCategory', () => {
     expect(sanitizeCategory(undefined)).toBe('vraag');
     expect(sanitizeCategory(null)).toBe('vraag');
     expect(sanitizeCategory(42)).toBe('vraag');
+  });
+});
+
+describe('sanitizeAttachments (Task #351)', () => {
+  it('accepteert een geldig chat_excerpt en behoudt content + bronnen', () => {
+    const out = sanitizeAttachments([
+      {
+        type: 'chat_excerpt',
+        content: '  De gemiddelde is $\\bar{x}$.  ',
+        sources: [{ index: 2, title: 'College 1', documentId: 'doc-1' }],
+        meta: { module: 'chat' },
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({
+      type: 'chat_excerpt',
+      content: 'De gemiddelde is $\\bar{x}$.',
+      sources: [{ title: 'College 1', index: 2, documentId: 'doc-1' }],
+      meta: { module: 'chat' },
+    });
+  });
+
+  it('geeft een lege array bij niet-array of onbekende types', () => {
+    expect(sanitizeAttachments(null)).toEqual([]);
+    expect(sanitizeAttachments('x')).toEqual([]);
+    expect(sanitizeAttachments([{ type: 'evil', content: 'x' }])).toEqual([]);
+    expect(ATTACHMENT_TYPES).toContain('chat_excerpt');
+  });
+
+  it('gooit items zonder content weg en cap op MAX_ATTACHMENTS', () => {
+    const many = Array.from({ length: MAX_ATTACHMENTS + 3 }, () => ({ type: 'chat_excerpt', content: 'ok' }));
+    expect(sanitizeAttachments(many)).toHaveLength(MAX_ATTACHMENTS);
+    expect(sanitizeAttachments([{ type: 'chat_excerpt', content: '   ' }])).toEqual([]);
+  });
+
+  it('begrenst content-lengte en aantal bronnen', () => {
+    const longContent = 'a'.repeat(MAX_ATTACHMENT_CONTENT_LEN + 500);
+    const manySources = Array.from({ length: MAX_ATTACHMENT_SOURCES + 5 }, (_, i) => ({ title: `Bron ${i}` }));
+    const out = sanitizeAttachments([{ type: 'chat_excerpt', content: longContent, sources: manySources }]);
+    expect(out[0].content).toHaveLength(MAX_ATTACHMENT_CONTENT_LEN);
+    expect(out[0].sources).toHaveLength(MAX_ATTACHMENT_SOURCES);
+  });
+
+  it('laat bronnen zonder titel vallen en negeert ongeldige index', () => {
+    const out = sanitizeAttachments([
+      {
+        type: 'chat_excerpt',
+        content: 'tekst',
+        sources: [{ title: '' }, { title: 'Geldig', index: -3 }],
+      },
+    ]);
+    expect(out[0].sources).toEqual([{ title: 'Geldig' }]);
   });
 });
 

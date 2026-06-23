@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useLanguage } from '../i18n';
@@ -8,7 +9,9 @@ import { searchRelevantChunksWithStats, buildContextWithCap, dedupeSourcesByDocu
 import { SourceList, type SourceItem } from '../components/SourceList';
 import { MarkdownMessage } from '../components/MarkdownMessage';
 import { RAGDiagnostics } from '../components/RAGDiagnostics';
-import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, Trash2, X, Loader2, Eye, Download, FileText, TrendingUp } from 'lucide-react';
+import { Send, MessageSquare, Plus, AlertCircle, RefreshCw, LogOut, BookText, Trash2, X, Loader2, Eye, Download, FileText, TrendingUp, Coffee, Copy, Check } from 'lucide-react';
+import { stashStudiecafeHandoff } from '../lib/studiecafeHandoff';
+import { type ChatExcerptAttachment } from '../components/ChatExcerptCard';
 import { RAGStatusIndicator } from '../components/RAGStatusIndicator';
 import { DocumentViewer, type ViewerContext } from '../components/DocumentViewer';
 import { ViewerErrorBoundary } from '../components/ViewerErrorBoundary';
@@ -62,7 +65,10 @@ function AssistantMessageBody({
   onRequestSource: (s: { documentId?: string; title: string }) => void;
 }) {
   const { t } = useLanguage();
+  const navigate = useNavigate();
+  const { activeCourseId: activeCourse } = useActiveCourse();
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const dispRaw: SourceItem[] = (retrievedContext?.displaySources as SourceItem[] | undefined)
     ?? (retrievedContext?.chunks
           ? dedupeSourcesByDocument(
@@ -90,6 +96,32 @@ function AssistantMessageBody({
     if (!s.documentId) return;
     onRequestSource(s);
   };
+  const handleCopyMarkdown = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard niet beschikbaar */ }
+  };
+  const handleCheckLLM = () => {
+    const attachment: ChatExcerptAttachment = {
+      type: 'chat_excerpt',
+      content,
+      sources: citationSources.map((s) => ({
+        index: s.index,
+        title: s.title,
+        documentId: s.documentId,
+      })),
+      meta: { module: 'chat' },
+    };
+    stashStudiecafeHandoff({
+      v: 1,
+      courseId: activeCourse ?? null,
+      category: 'check-llm',
+      attachment,
+    });
+    navigate('/studiecafe');
+  };
   return (
     <>
       <MarkdownMessage
@@ -111,6 +143,28 @@ function AssistantMessageBody({
           slideWord={t('quiz.slideWord')}
         />
       )}
+      <div className="flex flex-wrap items-center gap-2 mt-3 pt-2 border-t border-gray-200">
+        <button
+          type="button"
+          onClick={handleCheckLLM}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-200 hover:bg-amber-100 transition-colors"
+          title={t('chat.checkLLMHint')}
+          data-testid={`button-check-llm-${messageId}`}
+        >
+          <Coffee className="w-3.5 h-3.5" />
+          {t('chat.checkLLM')}
+        </button>
+        <button
+          type="button"
+          onClick={handleCopyMarkdown}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-200 transition-colors"
+          title={t('chat.copyMarkdown')}
+          data-testid={`button-copy-markdown-${messageId}`}
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? t('chat.copied') : t('chat.copyMarkdown')}
+        </button>
+      </div>
     </>
   );
 }

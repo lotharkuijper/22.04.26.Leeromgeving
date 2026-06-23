@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Coffee, Send, Loader2, Pin, PinOff, Lock, Unlock, Trash2, CheckCircle2,
   Award, Megaphone, Smile, MessageCircle, HelpCircle, MessagesSquare, Users,
-  Pencil, X, Search, Bell, CheckCheck, Mail,
+  Pencil, X, Search, Bell, CheckCheck, Mail, ScanSearch,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -11,15 +11,21 @@ import { supabase } from '../lib/supabase';
 import { useContentTranslation, type TranslatableItem } from '../hooks/useContentTranslation';
 import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
 import { MarkdownMessage } from '../components/MarkdownMessage';
+import { ChatExcerptCard, type ChatExcerptAttachment } from '../components/ChatExcerptCard';
+import { FormulaEditor } from '../components/FormulaEditor';
+import { takeStudiecafeHandoff } from '../lib/studiecafeHandoff';
 
 // Studiecafé (Task #304) — per-cursus discussieforum. Studenten posten vragen/
 // discussies/tips, reageren, reageren met emoji en markeren vragen als opgelost.
 // Docenten modereren volledig (pinnen, sluiten, verwijderen), geven een pluim en
 // plaatsen aankondigingen. Realtime via Supabase; auto-vertaling per lezer (#288).
 
-type Category = 'vraag' | 'discussie' | 'samenwerken';
+type Category = 'vraag' | 'discussie' | 'samenwerken' | 'check-llm';
 type FilterKey = 'all' | Category | 'announcement';
 type SortKey = 'recent' | 'newest' | 'active';
+
+// De categorieën die in de composer/edit-pickers en filters verschijnen.
+const COMPOSER_CATEGORIES: Category[] = ['vraag', 'discussie', 'samenwerken', 'check-llm'];
 
 const ALLOWED_REACTION_EMOJI = ['👍', '❤️', '🎉', '🤔', '✅', '🙌'];
 
@@ -33,6 +39,7 @@ interface Thread {
   title: string;
   body: string;
   category: Category;
+  attachments?: ChatExcerptAttachment[];
   isPinned: boolean;
   isLocked: boolean;
   isAnnouncement: boolean;
@@ -51,6 +58,7 @@ interface Reply {
   authorId?: string | null;
   authorName: string | null;
   body: string;
+  attachments?: ChatExcerptAttachment[];
   kudos: Kudos | null;
   reactions: ReactionSummary[];
   createdAt: string;
@@ -80,6 +88,7 @@ const CATEGORY_META: Record<Category, { icon: typeof HelpCircle; classes: string
   vraag: { icon: HelpCircle, classes: 'bg-blue-50 text-blue-700 ring-blue-200' },
   discussie: { icon: MessagesSquare, classes: 'bg-purple-50 text-purple-700 ring-purple-200' },
   samenwerken: { icon: Users, classes: 'bg-green-50 text-green-700 ring-green-200' },
+  'check-llm': { icon: ScanSearch, classes: 'bg-amber-50 text-amber-700 ring-amber-200' },
 };
 
 export function StudiecafePage() {
@@ -123,10 +132,15 @@ export function StudiecafePage() {
   const [newCategory, setNewCategory] = useState<Category>('vraag');
   const [newAnnouncement, setNewAnnouncement] = useState(false);
   const [posting, setPosting] = useState(false);
+  // Bijlage (chat-citaat) voor de nieuwe-thread-composer (Task #351).
+  const [newAttachment, setNewAttachment] = useState<ChatExcerptAttachment | null>(null);
+  const newBodyRef = useRef<HTMLTextAreaElement>(null);
 
   // Reply-composer per uitgeklapte thread.
   const [replyBody, setReplyBody] = useState('');
   const [replying, setReplying] = useState(false);
+  const [replyAttachment, setReplyAttachment] = useState<ChatExcerptAttachment | null>(null);
+  const replyRef = useRef<HTMLTextAreaElement>(null);
 
   // Emoji-picker: welk doel staat open ('thread:<id>' | 'reply:<id>' | null).
   const [pickerFor, setPickerFor] = useState<string | null>(null);
@@ -264,6 +278,19 @@ export function StudiecafePage() {
     else setLoading(false);
   }, [courseId, loadThreads]);
 
+  // Overdracht vanuit de chat (Task #351): open de composer met het AI-citaat
+  // als bijlage en de juiste categorie voorgeselecteerd. Eenmalig bij mount.
+  useEffect(() => {
+    const handoff = takeStudiecafeHandoff();
+    if (!handoff) return;
+    setNewAttachment(handoff.attachment);
+    if (COMPOSER_CATEGORIES.includes(handoff.category as Category)) {
+      setNewCategory(handoff.category as Category);
+    }
+    setShowComposer(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Markeer één thread als gelezen (Task #312): optimistisch lokaal + persisteren.
   // Nudge de nav-badge zodat hij meteen meedaalt zonder op de poll te wachten.
   const markRead = useCallback((threadId: string) => {
@@ -390,11 +417,18 @@ export function StudiecafePage() {
     try {
       const r = await apiFetch(`/api/studiecafe/${courseId}/threads`, {
         method: 'POST',
-        body: JSON.stringify({ title: newTitle, body: newBody, category: newCategory, isAnnouncement: isStaff && newAnnouncement }),
+        body: JSON.stringify({
+          title: newTitle,
+          body: newBody,
+          category: newCategory,
+          isAnnouncement: isStaff && newAnnouncement,
+          attachments: newAttachment ? [newAttachment] : [],
+        }),
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         setNewTitle(''); setNewBody(''); setNewCategory('vraag'); setNewAnnouncement(false); setShowComposer(false);
+        setNewAttachment(null);
         await loadThreads();
       } else {
         setError(d.error || t('studiecafe.postError'));
@@ -408,6 +442,7 @@ export function StudiecafePage() {
     if (expandedId === threadId) { setExpandedId(null); return; }
     setExpandedId(threadId);
     setReplyBody('');
+    setReplyAttachment(null);
     // Openen = gelezen (Task #312): alleen deze thread verliest zijn markering.
     markRead(threadId);
     if (!repliesByThread[threadId]) await loadReplies(threadId);
@@ -419,11 +454,12 @@ export function StudiecafePage() {
     try {
       const r = await apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}/replies`, {
         method: 'POST',
-        body: JSON.stringify({ body: replyBody }),
+        body: JSON.stringify({ body: replyBody, attachments: replyAttachment ? [replyAttachment] : [] }),
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         setReplyBody('');
+        setReplyAttachment(null);
         await loadReplies(threadId);
         await loadThreads();
       } else {
@@ -601,6 +637,7 @@ export function StudiecafePage() {
     { key: 'vraag', label: t('studiecafe.filter.vraag') },
     { key: 'discussie', label: t('studiecafe.filter.discussie') },
     { key: 'samenwerken', label: t('studiecafe.filter.samenwerken') },
+    { key: 'check-llm', label: t('studiecafe.filter.check-llm') },
     { key: 'announcement', label: t('studiecafe.filter.announcement') },
   ];
 
@@ -761,6 +798,7 @@ export function StudiecafePage() {
               data-testid="input-thread-title"
             />
             <textarea
+              ref={newBodyRef}
               value={newBody}
               onChange={(e) => setNewBody(e.target.value)}
               maxLength={8000}
@@ -769,8 +807,20 @@ export function StudiecafePage() {
               className="w-full px-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none resize-y"
               data-testid="input-thread-body"
             />
+            <FormulaEditor
+              value={newBody}
+              onChange={setNewBody}
+              textareaRef={newBodyRef}
+              testidPrefix="thread"
+            />
+            {newAttachment && (
+              <ChatExcerptCard
+                attachment={newAttachment}
+                onRemove={() => setNewAttachment(null)}
+              />
+            )}
             <div className="flex flex-wrap items-center gap-2">
-              {(['vraag', 'discussie', 'samenwerken'] as Category[]).map((c) => {
+              {COMPOSER_CATEGORIES.map((c) => {
                 const Icon = CATEGORY_META[c].icon;
                 return (
                   <button
@@ -950,7 +1000,7 @@ export function StudiecafePage() {
                         data-testid={`input-edit-thread-body-${th.id}`}
                       />
                       <div className="flex flex-wrap items-center gap-2">
-                        {(['vraag', 'discussie', 'samenwerken'] as Category[]).map((c) => {
+                        {COMPOSER_CATEGORIES.map((c) => {
                           const Icon = CATEGORY_META[c].icon;
                           return (
                             <button
@@ -990,6 +1040,11 @@ export function StudiecafePage() {
                         content={tr(`t:${th.id}:body`, th.body)}
                         className="prose prose-sm max-w-none text-slate-700 prose-p:my-1.5"
                       />
+                      {(th.attachments ?? []).map((att, i) => (
+                        <div key={i} className="mt-2">
+                          <ChatExcerptCard attachment={att} />
+                        </div>
+                      ))}
                     </>
                   )}
 
@@ -1110,6 +1165,11 @@ export function StudiecafePage() {
                                 content={tr(`r:${th.id}:${rp.id}:body`, rp.body)}
                                 className="prose prose-sm max-w-none text-slate-700 prose-p:my-1"
                               />
+                              {(rp.attachments ?? []).map((att, i) => (
+                                <div key={i} className="mt-2">
+                                  <ChatExcerptCard attachment={att} />
+                                </div>
+                              ))}
                               {rp.kudos && (
                                 <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 text-[11px] ring-1 ring-rose-200" data-testid={`kudos-reply-${rp.id}`}>
                                   <Award className="w-3 h-3" /> {t('studiecafe.kudosFrom', { name: rp.kudos.byName })}
@@ -1145,24 +1205,39 @@ export function StudiecafePage() {
                     {th.isLocked && !isStaff ? (
                       <p className="text-sm text-slate-400 flex items-center gap-1.5" data-testid={`text-locked-${th.id}`}><Lock className="w-3.5 h-3.5" />{t('studiecafe.lockedHint')}</p>
                     ) : (
-                      <div className="flex items-end gap-2 pt-1">
-                        <textarea
+                      <div className="space-y-2 pt-1">
+                        {replyAttachment && (
+                          <ChatExcerptCard
+                            attachment={replyAttachment}
+                            onRemove={() => setReplyAttachment(null)}
+                          />
+                        )}
+                        <FormulaEditor
                           value={replyBody}
-                          onChange={(e) => setReplyBody(e.target.value)}
-                          rows={1}
-                          maxLength={8000}
-                          placeholder={t('studiecafe.replyPlaceholder')}
-                          className="flex-1 px-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none resize-y text-sm bg-white"
-                          data-testid={`input-reply-${th.id}`}
+                          onChange={setReplyBody}
+                          textareaRef={replyRef}
+                          testidPrefix={`reply-${th.id}`}
                         />
-                        <button
-                          onClick={() => submitReply(th.id)}
-                          disabled={replying || !replyBody.trim()}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 text-white text-sm font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors"
-                          data-testid={`button-submit-reply-${th.id}`}
-                        >
-                          {replying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                        </button>
+                        <div className="flex items-end gap-2">
+                          <textarea
+                            ref={replyRef}
+                            value={replyBody}
+                            onChange={(e) => setReplyBody(e.target.value)}
+                            rows={1}
+                            maxLength={8000}
+                            placeholder={t('studiecafe.replyPlaceholder')}
+                            className="flex-1 px-3 py-2 rounded-xl ring-1 ring-slate-200 focus:ring-2 focus:ring-amber-400 outline-none resize-y text-sm bg-white"
+                            data-testid={`input-reply-${th.id}`}
+                          />
+                          <button
+                            onClick={() => submitReply(th.id)}
+                            disabled={replying || !replyBody.trim()}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 text-white text-sm font-medium disabled:opacity-50 hover:bg-slate-800 transition-colors"
+                            data-testid={`button-submit-reply-${th.id}`}
+                          >
+                            {replying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
