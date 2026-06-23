@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Coffee, Send, Loader2, Pin, PinOff, Lock, Unlock, Trash2, CheckCircle2,
   Award, Megaphone, Smile, MessageCircle, HelpCircle, MessagesSquare, Users,
-  Pencil, X, Search, Bell, CheckCheck, Mail, ScanSearch,
+  Pencil, X, Search, Bell, CheckCheck, Mail, ScanSearch, AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
@@ -114,6 +114,10 @@ export function StudiecafePage() {
   // bij dat topic ("Je antwoord wordt als reactie in dit topic geplaatst").
   // Alleen voor de targetThreadId-flow, niet voor de "kies op de pagina"-flow.
   const [confirmedTargetThreadId, setConfirmedTargetThreadId] = useState<string | null>(null);
+  // Task #359: als het in de chat gekozen doel-topic niet (meer) bestaat tegen de
+  // tijd dat de student het Studiecafé bereikt, tonen we een korte, sluitbare
+  // melding ("het gekozen topic is niet meer beschikbaar, kies een ander").
+  const [targetGone, setTargetGone] = useState<boolean>(false);
 
   // Ongelezen-markering (Task #307/#312): seenBaseline = de zachte-uitrol-vloer
   // (per-cursus last_seen). We bevriezen die bij binnenkomst. `reads` houdt per
@@ -472,6 +476,8 @@ export function StudiecafePage() {
     // Task #357: zodra de student zelf een topic open/dicht klikt, is de
     // chat-overdracht-bevestiging niet meer relevant.
     setConfirmedTargetThreadId(null);
+    // Task #359: en de "topic verdwenen"-melding is dan ook niet meer nodig.
+    setTargetGone(false);
     if (expandedId === threadId) { setExpandedId(null); return; }
     setExpandedId(threadId);
     setReplyBody('');
@@ -486,11 +492,18 @@ export function StudiecafePage() {
   useEffect(() => {
     if (!pendingExpandId) return;
     if (!threads.some((th) => th.id === pendingExpandId)) {
-      if (!loading) setPendingExpandId(null);
+      // Task #359: pas nadat de threads écht geladen zijn weten we dat het topic
+      // verdwenen is. Toon dan een sluitbare melding i.p.v. stilletjes terug te
+      // vallen op de kies-banner. Alleen relevant bij de reply-overdracht.
+      if (!loading) {
+        setPendingExpandId(null);
+        if (replyAttachment) setTargetGone(true);
+      }
       return;
     }
     const targetId = pendingExpandId;
     setPendingExpandId(null);
+    setTargetGone(false);
     setExpandedId(targetId);
     setReplyBody('');
     // Task #357: toon de bevestig-cue bij dit topic.
@@ -839,6 +852,28 @@ export function StudiecafePage() {
       {/* REPLY-MODUS BANNER (Task #352): chat-overdracht wil dit AI-antwoord als
           reactie in een bestaand topic plaatsen. Vraag de student een topic te
           openen; de bijlage verschijnt dan in de reply-composer. */}
+      {/* Task #359: het in de chat gekozen doel-topic bestaat niet meer / is niet
+          langer zichtbaar. Korte, sluitbare uitleg + verwijzing om een ander
+          topic te kiezen. */}
+      {targetGone && (
+        <div className="bg-rose-50 ring-1 ring-rose-200 rounded-2xl p-4 mb-5" data-testid="banner-target-gone">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-rose-800" data-testid="text-target-gone-title">{t('studiecafe.replyAttachment.targetGoneTitle')}</p>
+              <p className="text-xs text-rose-700 mt-0.5">{t('studiecafe.replyAttachment.targetGoneHint')}</p>
+            </div>
+            <button
+              onClick={() => setTargetGone(false)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-700 hover:bg-rose-100 transition-colors shrink-0"
+              data-testid="button-dismiss-target-gone"
+            >
+              <X className="w-3.5 h-3.5" />{t('studiecafe.replyAttachment.targetGoneDismiss')}
+            </button>
+          </div>
+        </div>
+      )}
+
       {replyAttachment && (
         <div className="bg-amber-50 ring-1 ring-amber-200 rounded-2xl p-4 mb-5 space-y-3" data-testid="banner-reply-attachment">
           <div className="flex items-start gap-2">
