@@ -159,6 +159,27 @@ describe('AssistantMessageBody — reply-topic-kiezer', () => {
     expect(screen.queryByTestId('reply-post-success-msg-1')).not.toBeInTheDocument();
   });
 
+  it('stalt een thread-overdracht en navigeert bij "Check met het Studiecafé" (handleCheckLLM)', async () => {
+    const user = userEvent.setup();
+    // handleCheckLLM doet geen fetch; een lege stub volstaat zodat een eventuele
+    // import-afhankelijkheid niet de echte fetch raakt.
+    vi.stubGlobal('fetch', vi.fn(() => jsonRes({}, true)));
+
+    renderBody();
+
+    await user.click(screen.getByTestId('button-check-llm-msg-1'));
+
+    // De overdracht is in sessionStorage gestald in thread-modus met een
+    // chat-excerpt-bijlage en de juiste categorie.
+    await waitFor(() => expect(sessionStorage.getItem('leapvu:studiecafe-handoff')).not.toBeNull());
+    const stash = JSON.parse(sessionStorage.getItem('leapvu:studiecafe-handoff') as string);
+    expect(stash).toMatchObject({ v: 1, courseId: 'course-1', category: 'check-llm', mode: 'thread' });
+    expect(stash.targetThreadId).toBeUndefined();
+    expect(stash.attachment).toMatchObject({ type: 'chat_excerpt' });
+    // En de navigatie naar het Studiecafé.
+    expect(navigateMock).toHaveBeenCalledWith('/studiecafe');
+  });
+
   it('valideert en stalt de overdracht bij "kies op de Studiecafé-pagina" (handlePickThread)', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
