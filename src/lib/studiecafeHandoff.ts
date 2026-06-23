@@ -12,6 +12,11 @@ export interface StudiecafeHandoff {
   courseId: string | null;
   category: string;
   attachment: ChatExcerptAttachment;
+  // 'thread' (standaard): open de nieuwe-thread-composer met de bijlage.
+  // 'reply': de student wil het antwoord als reactie in een bestaand topic
+  // plaatsen — StudiecafePage toont een kies-een-topic-banner en laadt de
+  // bijlage in de reply-composer van de gekozen thread.
+  mode?: 'thread' | 'reply';
 }
 
 export function stashStudiecafeHandoff(h: StudiecafeHandoff): void {

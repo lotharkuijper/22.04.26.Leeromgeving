@@ -103,26 +103,37 @@ function AssistantMessageBody({
       setTimeout(() => setCopied(false), 1500);
     } catch { /* clipboard niet beschikbaar */ }
   };
+  const buildExcerptAttachment = (): ChatExcerptAttachment => ({
+    type: 'chat_excerpt',
+    content,
+    sources: citationSources.map((s) => ({
+      index: s.index,
+      title: s.title,
+      documentId: s.documentId,
+    })),
+    meta: {
+      module: 'chat',
+      ...(activeCourse ? { courseId: activeCourse } : {}),
+      capturedAt: new Date().toISOString(),
+    },
+  });
   const handleCheckLLM = () => {
-    const attachment: ChatExcerptAttachment = {
-      type: 'chat_excerpt',
-      content,
-      sources: citationSources.map((s) => ({
-        index: s.index,
-        title: s.title,
-        documentId: s.documentId,
-      })),
-      meta: {
-        module: 'chat',
-        ...(activeCourse ? { courseId: activeCourse } : {}),
-        capturedAt: new Date().toISOString(),
-      },
-    };
     stashStudiecafeHandoff({
       v: 1,
       courseId: activeCourse ?? null,
       category: 'check-llm',
-      attachment,
+      attachment: buildExcerptAttachment(),
+      mode: 'thread',
+    });
+    navigate('/studiecafe');
+  };
+  const handleCheckLLMReply = () => {
+    stashStudiecafeHandoff({
+      v: 1,
+      courseId: activeCourse ?? null,
+      category: 'check-llm',
+      attachment: buildExcerptAttachment(),
+      mode: 'reply',
     });
     navigate('/studiecafe');
   };
@@ -157,6 +168,16 @@ function AssistantMessageBody({
         >
           <Coffee className="w-3.5 h-3.5" />
           {t('chat.checkLLM')}
+        </button>
+        <button
+          type="button"
+          onClick={handleCheckLLMReply}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-200 hover:bg-amber-100 transition-colors"
+          title={t('chat.checkLLMReplyHint')}
+          data-testid={`button-check-llm-reply-${messageId}`}
+        >
+          <MessageSquare className="w-3.5 h-3.5" />
+          {t('chat.checkLLMReply')}
         </button>
         <button
           type="button"

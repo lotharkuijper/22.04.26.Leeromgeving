@@ -140,6 +140,10 @@ export function StudiecafePage() {
   const [replyBody, setReplyBody] = useState('');
   const [replying, setReplying] = useState(false);
   const replyRef = useRef<HTMLTextAreaElement>(null);
+  // Bijlage (chat-citaat) voor de reply-composer (Task #352). Komt binnen via de
+  // chat-overdracht met mode='reply': de student kiest een bestaand topic en het
+  // AI-antwoord wordt als reactie geplaatst i.p.v. als nieuwe thread.
+  const [replyAttachment, setReplyAttachment] = useState<ChatExcerptAttachment | null>(null);
 
   // Emoji-picker: welk doel staat open ('thread:<id>' | 'reply:<id>' | null).
   const [pickerFor, setPickerFor] = useState<string | null>(null);
@@ -282,6 +286,13 @@ export function StudiecafePage() {
   useEffect(() => {
     const handoff = takeStudiecafeHandoff();
     if (!handoff) return;
+    // Reply-modus (Task #352): laad de bijlage in de reply-composer en toon een
+    // banner zodat de student eerst een bestaand topic kiest. Geen nieuwe-thread-
+    // composer openen.
+    if (handoff.mode === 'reply') {
+      setReplyAttachment(handoff.attachment);
+      return;
+    }
     setNewAttachment(handoff.attachment);
     if (COMPOSER_CATEGORIES.includes(handoff.category as Category)) {
       setNewCategory(handoff.category as Category);
@@ -452,11 +463,15 @@ export function StudiecafePage() {
     try {
       const r = await apiFetch(`/api/studiecafe/${courseId}/threads/${threadId}/replies`, {
         method: 'POST',
-        body: JSON.stringify({ body: replyBody }),
+        body: JSON.stringify({
+          body: replyBody,
+          attachments: replyAttachment ? [replyAttachment] : [],
+        }),
       });
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         setReplyBody('');
+        setReplyAttachment(null);
         await loadReplies(threadId);
         await loadThreads();
       } else {
@@ -773,6 +788,29 @@ export function StudiecafePage() {
           </div>
         </div>
       </div>
+
+      {/* REPLY-MODUS BANNER (Task #352): chat-overdracht wil dit AI-antwoord als
+          reactie in een bestaand topic plaatsen. Vraag de student een topic te
+          openen; de bijlage verschijnt dan in de reply-composer. */}
+      {replyAttachment && (
+        <div className="bg-amber-50 ring-1 ring-amber-200 rounded-2xl p-4 mb-5 space-y-3" data-testid="banner-reply-attachment">
+          <div className="flex items-start gap-2">
+            <MessageCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-amber-800">{t('studiecafe.replyAttachment.bannerTitle')}</p>
+              <p className="text-xs text-amber-700 mt-0.5">{t('studiecafe.replyAttachment.bannerHint')}</p>
+            </div>
+            <button
+              onClick={() => setReplyAttachment(null)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-amber-700 hover:bg-amber-100 transition-colors shrink-0"
+              data-testid="button-cancel-reply-attachment"
+            >
+              <X className="w-3.5 h-3.5" />{t('studiecafe.replyAttachment.cancel')}
+            </button>
+          </div>
+          <ChatExcerptCard attachment={replyAttachment} />
+        </div>
+      )}
 
       {/* COMPOSER */}
       <div className="bg-white rounded-2xl ring-1 ring-slate-200 shadow-sm p-4 mb-5">
@@ -1203,6 +1241,18 @@ export function StudiecafePage() {
                       <p className="text-sm text-slate-400 flex items-center gap-1.5" data-testid={`text-locked-${th.id}`}><Lock className="w-3.5 h-3.5" />{t('studiecafe.lockedHint')}</p>
                     ) : (
                       <div className="space-y-2 pt-1">
+                        {expandedId === th.id && replyAttachment && (
+                          <div data-testid={`reply-attachment-preview-${th.id}`}>
+                            <p className="text-xs text-amber-700 mb-1 flex items-center gap-1.5">
+                              <MessageCircle className="w-3.5 h-3.5" />
+                              {t('studiecafe.replyAttachment.includedHint')}
+                            </p>
+                            <ChatExcerptCard
+                              attachment={replyAttachment}
+                              onRemove={() => setReplyAttachment(null)}
+                            />
+                          </div>
+                        )}
                         <FormulaEditor
                           value={replyBody}
                           onChange={setReplyBody}
