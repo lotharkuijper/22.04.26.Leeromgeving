@@ -35,6 +35,8 @@ vi.mock('../../services/rag.service', () => ({
     title: c.documentTitle,
     similarity: c.similarity,
     documentId: c.documentId,
+    ...(c.slideStart != null ? { slideStart: c.slideStart } : {}),
+    ...(c.slideEnd != null ? { slideEnd: c.slideEnd } : {}),
   })),
   ragDocumentDownloadUrl: vi.fn((id?: string) =>
     id ? `/api/rag/documents/${id}/download` : undefined,
@@ -134,6 +136,33 @@ describe('AssistantMessageBody — broncitaties', () => {
     // De bijbehorende bron is nu zichtbaar en scrollbaar (id source-msg-1-1).
     expect(document.getElementById('source-msg-1-1')).not.toBeNull();
     expect(screen.getByTestId('link-source-1')).toHaveTextContent('Hoofdstuk 3 — t-toets');
+  });
+
+  it('toont het dia-label voor PowerPoint-bronnen (enkele dia en dia-reeks)', async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider>
+        <AssistantMessageBody
+          messageId="msg-pptx"
+          content="Antwoord met PowerPoint-bronnen."
+          retrievedContext={{
+            chunks: [
+              { documentTitle: 'College 2 — verdelingen', similarity: 0.9, documentId: 'doc-a', slideStart: 4, slideEnd: 6 },
+              { documentTitle: 'College 4 — toetsen', similarity: 0.8, documentId: 'doc-b', slideStart: 2 },
+            ],
+          }}
+          onRequestSource={vi.fn()}
+        />
+      </LanguageProvider>,
+    );
+
+    await user.click(screen.getByTestId('btn-toggle-sources'));
+
+    // Eerste bron (hoogste similarity): dia-reeks 4–6.
+    expect(screen.getByTestId('text-slide-1')).toHaveTextContent('dia 4–6');
+    // Tweede bron: enkele dia (slideEnd ontbreekt → gelijk aan slideStart).
+    expect(screen.getByTestId('text-slide-2')).toHaveTextContent('dia 2');
+    expect(screen.getByTestId('text-slide-2')).not.toHaveTextContent('–');
   });
 
   it('roept onRequestSource aan met de bron bij het klikken op een bron', async () => {
