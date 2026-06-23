@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "在下方打开一个现有话题，将此回答作为回复发布。",
   "studiecafe.replyAttachment.includedHint": "此 AI 回答将作为附件一并发送。",
   "studiecafe.replyAttachment.cancel": "取消",
+  "studiecafe.replyAttachment.targetConfirm": "你的回答将作为回复发布在此话题中。",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "关闭通知",
   "studiecafe.loadError": "无法加载学习咖啡馆。",
   "studiecafe.postError": "发布失败。请重试。",
   "studiecafe.confirmDelete": "你确定要删除这个吗？",

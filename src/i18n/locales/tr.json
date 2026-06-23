@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Bu yanıtı cevap olarak göndermek için aşağıdan mevcut bir konu aç.",
   "studiecafe.replyAttachment.includedHint": "Bu AI yanıtı ek olarak gönderilecek.",
   "studiecafe.replyAttachment.cancel": "İptal",
+  "studiecafe.replyAttachment.targetConfirm": "Yanıtın bu başlıkta cevap olarak yayınlanacak.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Bildirimi kapat",
   "studiecafe.loadError": "Çalışma kafesi yüklenemedi.",
   "studiecafe.postError": "Gönderme başarısız. Tekrar dene.",
   "studiecafe.confirmDelete": "Bunu silmek istediğinden emin misin?",

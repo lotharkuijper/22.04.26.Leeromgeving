@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Open an existing topic below to post this answer as a reply.",
   "studiecafe.replyAttachment.includedHint": "This AI answer will be included as an attachment.",
   "studiecafe.replyAttachment.cancel": "Cancel",
+  "studiecafe.replyAttachment.targetConfirm": "Your answer will be posted as a reply in this topic.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Dismiss notice",
   "studiecafe.loadError": "The study café could not be loaded.",
   "studiecafe.postError": "Posting failed. Please try again.",
   "studiecafe.confirmDelete": "Are you sure you want to delete this?",

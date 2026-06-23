@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "下で既存のトピックを開いて、この回答を返信として投稿してね。",
   "studiecafe.replyAttachment.includedHint": "このAIの回答は添付として送信されます。",
   "studiecafe.replyAttachment.cancel": "キャンセル",
+  "studiecafe.replyAttachment.targetConfirm": "あなたの回答はこのトピックへの返信として投稿されます。",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "通知を閉じる",
   "studiecafe.loadError": "スタディカフェを読み込めませんでした。",
   "studiecafe.postError": "投稿に失敗しました。もう一度試してください。",
   "studiecafe.confirmDelete": "本当にこれを削除しますか？",

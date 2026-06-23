@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Відкрий нижче наявну тему, щоб опублікувати цю відповідь як коментар.",
   "studiecafe.replyAttachment.includedHint": "Цю відповідь ШІ буде надіслано як вкладення.",
   "studiecafe.replyAttachment.cancel": "Скасувати",
+  "studiecafe.replyAttachment.targetConfirm": "Твою відповідь буде опубліковано як відповідь у цій темі.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Закрити сповіщення",
   "studiecafe.loadError": "Не вдалося завантажити навчальне кафе.",
   "studiecafe.postError": "Не вдалося опублікувати. Спробуй ще раз.",
   "studiecafe.confirmDelete": "Ти впевнений, що хочеш це видалити?",

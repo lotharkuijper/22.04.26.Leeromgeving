@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "喺下面開啟一個現有主題，將呢個答案作為回覆發佈。",
   "studiecafe.replyAttachment.includedHint": "呢個 AI 答案會作為附件一併傳送。",
   "studiecafe.replyAttachment.cancel": "取消",
+  "studiecafe.replyAttachment.targetConfirm": "你嘅答案會作為回覆發佈喺呢個主題入面。",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "關閉通知",
   "studiecafe.loadError": "無法載入學習咖啡室。",
   "studiecafe.postError": "發佈失敗。請再試一次。",
   "studiecafe.confirmDelete": "你確定要刪除呢個嗎？",

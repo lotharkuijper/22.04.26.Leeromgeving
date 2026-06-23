@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Öffne unten ein bestehendes Thema, um diese Antwort als Reaktion zu posten.",
   "studiecafe.replyAttachment.includedHint": "Diese KI-Antwort wird als Anhang mitgesendet.",
   "studiecafe.replyAttachment.cancel": "Abbrechen",
+  "studiecafe.replyAttachment.targetConfirm": "Deine Antwort wird als Reaktion in diesem Thema gepostet.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Benachrichtigung schließen",
   "studiecafe.loadError": "Das Studiencafé konnte nicht geladen werden.",
   "studiecafe.postError": "Veröffentlichen fehlgeschlagen. Versuch es erneut.",
   "studiecafe.confirmDelete": "Bist du sicher, dass du dies löschen möchtest?",

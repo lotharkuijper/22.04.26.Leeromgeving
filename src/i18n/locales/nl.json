@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Open hieronder een bestaand topic om dit antwoord als reactie te plaatsen.",
   "studiecafe.replyAttachment.includedHint": "Dit AI-antwoord wordt als bijlage meegestuurd.",
   "studiecafe.replyAttachment.cancel": "Annuleren",
+  "studiecafe.replyAttachment.targetConfirm": "Je antwoord wordt als reactie in dit topic geplaatst.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Melding sluiten",
   "studiecafe.loadError": "Het studiecafé kon niet worden geladen.",
   "studiecafe.postError": "Plaatsen mislukt. Probeer het opnieuw.",
   "studiecafe.confirmDelete": "Weet je zeker dat je dit wilt verwijderen?",

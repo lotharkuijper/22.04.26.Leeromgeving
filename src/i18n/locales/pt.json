@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Abre abaixo um tópico existente para publicar esta resposta como reação.",
   "studiecafe.replyAttachment.includedHint": "Esta resposta de IA será enviada como anexo.",
   "studiecafe.replyAttachment.cancel": "Cancelar",
+  "studiecafe.replyAttachment.targetConfirm": "A tua resposta será publicada como resposta neste tópico.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Fechar notificação",
   "studiecafe.loadError": "Não foi possível carregar o café de estudo.",
   "studiecafe.postError": "Não foi possível publicar. Tenta novamente.",
   "studiecafe.confirmDelete": "Tens a certeza de que queres eliminar isto?",

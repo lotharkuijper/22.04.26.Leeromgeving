@@ -109,6 +109,11 @@ export function StudiecafePage() {
   // Task #354: doel-topic gekozen in de chat. Wacht tot de threads geladen zijn,
   // klap die thread dan automatisch uit (met de reply-bijlage voorgeladen).
   const [pendingExpandId, setPendingExpandId] = useState<string | null>(null);
+  // Task #357: bevestig-cue voor de chat-overdracht. Zodra het in de chat gekozen
+  // doel-topic automatisch is uitgeklapt, tonen we een korte, sluitbare melding
+  // bij dat topic ("Je antwoord wordt als reactie in dit topic geplaatst").
+  // Alleen voor de targetThreadId-flow, niet voor de "kies op de pagina"-flow.
+  const [confirmedTargetThreadId, setConfirmedTargetThreadId] = useState<string | null>(null);
 
   // Ongelezen-markering (Task #307/#312): seenBaseline = de zachte-uitrol-vloer
   // (per-cursus last_seen). We bevriezen die bij binnenkomst. `reads` houdt per
@@ -464,6 +469,9 @@ export function StudiecafePage() {
   };
 
   const toggleExpand = async (threadId: string) => {
+    // Task #357: zodra de student zelf een topic open/dicht klikt, is de
+    // chat-overdracht-bevestiging niet meer relevant.
+    setConfirmedTargetThreadId(null);
     if (expandedId === threadId) { setExpandedId(null); return; }
     setExpandedId(threadId);
     setReplyBody('');
@@ -485,6 +493,8 @@ export function StudiecafePage() {
     setPendingExpandId(null);
     setExpandedId(targetId);
     setReplyBody('');
+    // Task #357: toon de bevestig-cue bij dit topic.
+    setConfirmedTargetThreadId(targetId);
     markRead(targetId);
     if (!repliesByThread[targetId]) loadReplies(targetId);
     requestAnimationFrame(() => {
@@ -1193,6 +1203,21 @@ export function StudiecafePage() {
                 {/* REPLIES */}
                 {expanded && (
                   <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-3 space-y-3" data-testid={`replies-${th.id}`}>
+                    {confirmedTargetThreadId === th.id && (
+                      <div className="flex items-start gap-2 bg-amber-50 ring-1 ring-amber-200 rounded-xl px-3 py-2" data-testid={`banner-target-confirm-${th.id}`}>
+                        <CheckCircle2 className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <p className="text-xs text-amber-800 flex-1 min-w-0">{t('studiecafe.replyAttachment.targetConfirm')}</p>
+                        <button
+                          onClick={() => setConfirmedTargetThreadId(null)}
+                          className="p-0.5 rounded-md text-amber-600 hover:bg-amber-100 transition-colors shrink-0"
+                          title={t('studiecafe.replyAttachment.targetConfirmDismiss')}
+                          aria-label={t('studiecafe.replyAttachment.targetConfirmDismiss')}
+                          data-testid={`button-dismiss-target-confirm-${th.id}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                     {replies.length === 0 && (
                       <p className="text-sm text-slate-400" data-testid={`text-no-replies-${th.id}`}>{t('studiecafe.noReplies')}</p>
                     )}

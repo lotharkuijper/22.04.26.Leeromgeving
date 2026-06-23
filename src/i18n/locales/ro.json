@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Deschide mai jos un subiect existent pentru a posta acest răspuns ca reacție.",
   "studiecafe.replyAttachment.includedHint": "Acest răspuns AI va fi trimis ca atașament.",
   "studiecafe.replyAttachment.cancel": "Anulează",
+  "studiecafe.replyAttachment.targetConfirm": "Răspunsul tău va fi postat ca reacție în acest topic.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Închide notificarea",
   "studiecafe.loadError": "Cafeneaua de studiu nu a putut fi încărcată.",
   "studiecafe.postError": "Publicarea a eșuat. Încearcă din nou.",
   "studiecafe.confirmDelete": "Sigur vrei să ștergi acest lucru?",

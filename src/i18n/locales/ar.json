@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "افتح موضوعًا موجودًا أدناه لوضع هذه الإجابة كردّ.",
   "studiecafe.replyAttachment.includedHint": "سيتم إرسال إجابة الذكاء الاصطناعي هذه كمرفق.",
   "studiecafe.replyAttachment.cancel": "إلغاء",
+  "studiecafe.replyAttachment.targetConfirm": "سيتم نشر إجابتك كردّ في هذا الموضوع.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "إغلاق الإشعار",
   "studiecafe.loadError": "تعذّر تحميل مقهى الدراسة.",
   "studiecafe.postError": "فشل النشر. حاول مرة أخرى.",
   "studiecafe.confirmDelete": "هل أنت متأكد أنك تريد حذف هذا؟",

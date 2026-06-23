@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "इस उत्तर को प्रतिक्रिया के रूप में पोस्ट करने के लिए नीचे कोई मौजूदा टॉपिक खोलें।",
   "studiecafe.replyAttachment.includedHint": "यह AI उत्तर अटैचमेंट के रूप में भेजा जाएगा।",
   "studiecafe.replyAttachment.cancel": "रद्द करें",
+  "studiecafe.replyAttachment.targetConfirm": "तुम्हारा जवाब इस टॉपिक में प्रतिक्रिया के रूप में पोस्ट किया जाएगा।",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "सूचना बंद करें",
   "studiecafe.loadError": "स्टडी कैफ़े लोड नहीं किया जा सका।",
   "studiecafe.postError": "पोस्ट करना विफल रहा। फिर कोशिश करो।",
   "studiecafe.confirmDelete": "क्या तुम वाकई इसे हटाना चाहते हो?",

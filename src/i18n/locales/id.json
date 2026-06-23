@@ -29,6 +29,8 @@
   "studiecafe.replyAttachment.bannerHint": "Buka topik yang sudah ada di bawah ini untuk menempatkan jawaban ini sebagai balasan.",
   "studiecafe.replyAttachment.includedHint": "Jawaban AI ini akan dikirim sebagai lampiran.",
   "studiecafe.replyAttachment.cancel": "Batal",
+  "studiecafe.replyAttachment.targetConfirm": "Jawabanmu akan diposting sebagai balasan di topik ini.",
+  "studiecafe.replyAttachment.targetConfirmDismiss": "Tutup notifikasi",
   "studiecafe.loadError": "Kafe studi tidak dapat dimuat.",
   "studiecafe.postError": "Gagal memposting. Coba lagi.",
   "studiecafe.confirmDelete": "Yakin ingin menghapus ini?",
