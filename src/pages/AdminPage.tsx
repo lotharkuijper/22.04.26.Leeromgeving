@@ -1301,10 +1301,16 @@ export function AdminPage() {
     setLoading(false);
   };
 
-  const filteredUsers = users.filter(user =>
-    user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (user.full_name?.toLowerCase() || '').includes(searchTerm.toLowerCase())
-  );
+  const filteredUsers = users
+    .filter(user =>
+      user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (user.full_name?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+    )
+    .sort((a, b) =>
+      (a.full_name?.trim() || a.email || '').localeCompare(
+        b.full_name?.trim() || b.email || '', 'nl', { sensitivity: 'base' },
+      ),
+    );
 
 const tabs = [
   { id: 'users' as TabType, label: t('admin.tabs.users'), icon: Users, show: isAdmin },

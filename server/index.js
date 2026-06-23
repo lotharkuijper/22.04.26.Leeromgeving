@@ -36,6 +36,7 @@ import { collectMemberUserIds, mergeCourseMembers } from './courseMembers.js';
 import { pickReusableRagFolder } from './ragFolder.js';
 import { buildLanguageInstruction, localizePrompt, languageEnglishName, normalizeLang } from './languages.js';
 import { buildLevelInstructionBlock, LEVEL_LABELS, LEVEL_MIN, LEVEL_MAX, LEVEL_DEFAULT } from './learningLevel.js';
+import { computeTeacherFolderScope } from './documentScope.js';
 import {
   extractEmails,
   dedupeEmails,
@@ -1369,23 +1370,81 @@ function getFileMimeType(ext) {
   return map[ext] || 'application/octet-stream';
 }
 
-// GET /api/admin/document-tree — volledige mapboom met documentaantallen (admin only)
+// Task #335: docenten beheren de mappen van HUN cursus(sen) in de Documenten-tab
+// (src/pages/DocumentsPage.tsx). Die tab draait volledig op de admin-endpoints,
+// die supabaseAdmin (service-role) gebruiken en dus RLS bypassen — daarom scopen
+// we hier expliciet op applicatieniveau. getTeacherDocumentScope levert de set
+// folder-ids binnen de eigen-cursus-subbomen van de docent.
+//
+// Beveiliging (zie architect-review): we breiden de scope NOOIT uit naar een
+// 'course'-shell tenzij die ouder écht folder_type='course' én niet is_root is.
+// Zo kan een (foutieve) course_folder_assignments-rij waarvan de ouder de globale
+// root is nooit alle mappen ontsluiten. Bij fouten: fail-closed (lege scope).
+async function getTeacherDocumentScope(userId) {
+  const result = { folderIds: new Set() };
+  if (!userId || !supabaseAdmin) return result;
+  try {
+    const { data: memberships } = await supabaseAdmin
+      .from('course_members')
+      .select('course_id')
+      .eq('user_id', userId)
+      .eq('member_role', 'teacher');
+    const courseIds = [...new Set((memberships || []).map((m) => m.course_id).filter(Boolean))];
+    if (!courseIds.length) return result;
+
+    const { data: assigns } = await supabaseAdmin
+      .from('course_folder_assignments')
+      .select('folder_id')
+      .in('course_id', courseIds);
+    const assignedFolderIds = [...new Set((assigns || []).map((a) => a.folder_id).filter(Boolean))];
+    if (!assignedFolderIds.length) return result;
+
+    const { data: allFolders } = await supabaseAdmin
+      .from('document_folders')
+      .select('id, parent_folder_id, folder_type, is_root');
+    result.folderIds = computeTeacherFolderScope(assignedFolderIds, allFolders || []);
+    return result;
+  } catch (err) {
+    console.error('[getTeacherDocumentScope] fout:', err?.message || err);
+    return result;
+  }
+}
+
+// Bepaalt of de resolveAdminUser-uitkomst toegang heeft tot één map: admin altijd,
+// docent alleen binnen de eigen-cursus-scope. Fail-closed bij ontbrekende folderId.
+async function resolveDocFolderAccess(r, folderId) {
+  if (r.isAdmin) return true;
+  if (!r.isDocent || !folderId) return false;
+  const scope = await getTeacherDocumentScope(r.user.id);
+  return scope.folderIds.has(folderId);
+}
+
+// GET /api/admin/document-tree — volledige mapboom met documentaantallen
+// (admin: alles; docent: alleen de mappen van de eigen cursus(sen))
 app.get('/api/admin/document-tree', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Admin-rol vereist' });
+  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Admin- of docentrechten vereist' });
   try {
+    // Docenten zien alleen de mappen van hun eigen cursus(sen); admins alles.
+    let scopeIds = null;
+    if (!r.isAdmin) {
+      const scope = await getTeacherDocumentScope(r.user.id);
+      scopeIds = scope.folderIds;
+      if (scopeIds.size === 0) return res.json({ folders: [] });
+    }
     const { data: folders, error: fErr } = await supabaseAdmin
       .from('document_folders').select('id, name, parent_folder_id, folder_type, is_root, description').order('name');
     if (fErr) return res.status(500).json({ error: fErr.message });
+    const visibleFolders = scopeIds ? (folders || []).filter((f) => scopeIds.has(f.id)) : (folders || []);
     const { data: docRows } = await supabaseAdmin.from('documents').select('folder_id');
     const countMap = {};
     for (const d of docRows || []) {
       if (d.folder_id) countMap[d.folder_id] = (countMap[d.folder_id] || 0) + 1;
     }
     const nodeMap = {};
-    for (const f of folders || []) {
+    for (const f of visibleFolders) {
       nodeMap[f.id] = { ...f, document_count: countMap[f.id] || 0, children: [] };
     }
     const roots = [];
@@ -1412,7 +1471,7 @@ app.get('/api/admin/folders/:folderId/documents', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Admin-rol vereist' });
+  if (!(await resolveDocFolderAccess(r, req.params.folderId))) return res.status(403).json({ error: 'Geen toegang tot deze map' });
   try {
     const { data, error } = await supabaseAdmin
       .from('documents')
@@ -1431,13 +1490,16 @@ app.post('/api/admin/folders', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen mappen aanmaken' });
   const { name, parent_folder_id, folder_type } = req.body || {};
   if (!name || !parent_folder_id) return res.status(400).json({ error: 'name en parent_folder_id zijn verplicht' });
+  if (!(await resolveDocFolderAccess(r, parent_folder_id))) return res.status(403).json({ error: 'Geen toegang tot deze map' });
+  // Docenten mogen geen speciale maptypes (rag_sources/course/data) minten; forceer
+  // 'general'. Alleen admins bepalen het meegegeven type.
+  const resolvedFolderType = r.isAdmin ? (folder_type || 'general') : 'general';
   try {
     const { data, error } = await supabaseAdmin
       .from('document_folders')
-      .insert({ name, parent_folder_id, folder_type: folder_type || 'general', is_root: false, created_by: r.user.id })
+      .insert({ name, parent_folder_id, folder_type: resolvedFolderType, is_root: false, created_by: r.user.id })
       .select().single();
     if (error) return res.status(500).json({ error: error.message });
     await supabaseAdmin.from('folder_permissions').insert([
@@ -1456,9 +1518,17 @@ app.delete('/api/admin/folders/:folderId', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen mappen verwijderen' });
   const { folderId } = req.params;
+  if (!(await resolveDocFolderAccess(r, folderId))) return res.status(403).json({ error: 'Geen toegang tot deze map' });
   try {
+    // Docenten mogen nooit een structurele container (root of cursus-map) verwijderen.
+    if (!r.isAdmin) {
+      const { data: f } = await supabaseAdmin.from('document_folders').select('is_root, folder_type').eq('id', folderId).maybeSingle();
+      if (!f) return res.status(404).json({ error: 'Map niet gevonden' });
+      if (f.is_root === true || f.folder_type === 'course') {
+        return res.status(403).json({ error: 'Deze map kan niet worden verwijderd' });
+      }
+    }
     const { count: docCount } = await supabaseAdmin.from('documents').select('id', { count: 'exact', head: true }).eq('folder_id', folderId);
     if (docCount > 0) return res.status(409).json({ error: 'Map bevat nog documenten. Verwijder de documenten eerst.' });
     const { count: childCount } = await supabaseAdmin.from('document_folders').select('id', { count: 'exact', head: true }).eq('parent_folder_id', folderId);
@@ -1973,16 +2043,17 @@ app.get('/api/admin/documents/:documentId/download', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Admin-rol vereist' });
+  if (!r.isAdmin && !r.isDocent) return res.status(403).json({ error: 'Admin- of docentrechten vereist' });
   const { documentId } = req.params;
   try {
     // Haal metadata op via Supabase (geen binary-kolom hier)
     const { data: doc } = await supabaseAdmin
       .from('documents')
-      .select('id, title, filename, file_path, bucket, mime_type, file_type')
+      .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
       .eq('id', documentId)
       .maybeSingle();
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    if (!(await resolveDocFolderAccess(r, doc.folder_id))) return res.status(403).json({ error: 'Geen toegang tot dit document' });
     const filename = String(doc.filename || doc.title || 'download').replace(/[\r\n"]/g, '_');
     // Web-bron (Task #234): geen bestand, maar een externe URL — open in een tab.
     if ((doc.file_type || '').toLowerCase() === 'web' && doc.file_path) {
@@ -2025,10 +2096,11 @@ app.delete('/api/admin/documents/:documentId', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen documenten verwijderen' });
   const { documentId } = req.params;
   try {
-    const { data: doc } = await supabaseAdmin.from('documents').select('file_path, bucket').eq('id', documentId).maybeSingle();
+    const { data: doc } = await supabaseAdmin.from('documents').select('file_path, bucket, folder_id').eq('id', documentId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+    if (!(await resolveDocFolderAccess(r, doc.folder_id))) return res.status(403).json({ error: 'Geen toegang tot dit document' });
     if (doc?.file_path && doc.bucket) {
       await supabaseAdmin.storage.from(doc.bucket).remove([doc.file_path]);
     }
@@ -2297,8 +2369,8 @@ app.post('/api/admin/folders/:folderId/upload', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
   const r = await resolveAdminUser(req);
   if (r.error) return res.status(r.error.status).json(r.error.body);
-  if (!r.isAdmin) return res.status(403).json({ error: 'Alleen admins kunnen uploaden' });
   const { folderId } = req.params;
+  if (!(await resolveDocFolderAccess(r, folderId))) return res.status(403).json({ error: 'Geen toegang tot deze map' });
   const { filename, mimeType, data: base64Data } = req.body || {};
   if (!filename || !base64Data) return res.status(400).json({ error: 'filename en data zijn verplicht' });
   try {
