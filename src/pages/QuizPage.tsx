@@ -1097,7 +1097,7 @@ export function QuizPage() {
           </div>
           {ragSources.length > 0 && (
             <div className="text-left bg-purple-50 border border-purple-200 rounded-xl p-4">
-              <SourceList sources={ragSources} label={t('quiz.basedOnMaterial')} slideWord={t('quiz.slideWord')} />
+              <SourceList sources={ragSources} label={t('quiz.basedOnMaterial')} slideWord={t('quiz.slideWord')} pageWord={t('sources.pageWord')} />
             </div>
           )}
           {contextStats && contextStats.total > 0 && (contextStats.used < contextStats.total || contextStats.charTrimmed) && (
@@ -1466,7 +1466,7 @@ export function QuizPage() {
           </div>
           {ragSources.length > 0 && (
             <div className="mt-2">
-              <SourceList sources={ragSources} label={t('quiz.quizBasedOnMaterial')} slideWord={t('quiz.slideWord')} />
+              <SourceList sources={ragSources} label={t('quiz.quizBasedOnMaterial')} slideWord={t('quiz.slideWord')} pageWord={t('sources.pageWord')} />
             </div>
           )}
           {ragStats && (

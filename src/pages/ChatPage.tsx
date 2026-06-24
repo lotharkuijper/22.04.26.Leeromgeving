@@ -71,7 +71,7 @@ export function AssistantMessageBody({
   messageId: string;
   content: string;
   retrievedContext?: any;
-  onRequestSource: (s: { documentId?: string; title: string }) => void;
+  onRequestSource: (s: { documentId?: string; title: string; page?: number }) => void;
 }) {
   const { t } = useLanguage();
   const navigate = useNavigate();
@@ -125,9 +125,11 @@ export function AssistantMessageBody({
       if (el && 'scrollIntoView' in el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
-  const handleOpenSource = (s: { documentId?: string; title: string }) => {
+  const handleOpenSource = (s: { documentId?: string; title: string; pageStart?: number; slideStart?: number }) => {
     if (!s.documentId) return;
-    onRequestSource(s);
+    // Dia's worden in de viewer als PDF-pagina's gerenderd (pptx→PDF), dus een
+    // slidenummer mapt 1-op-1 op een viewer-pagina; val daarop terug voor pptx.
+    onRequestSource({ documentId: s.documentId, title: s.title, page: s.pageStart ?? s.slideStart });
   };
   const handleCopyMarkdown = async () => {
     try {
@@ -295,6 +297,7 @@ export function AssistantMessageBody({
           onOpenSource={handleOpenSource}
           uniqueLabel={t('chat.uniqueWord')}
           slideWord={t('quiz.slideWord')}
+          pageWord={t('sources.pageWord')}
         />
       )}
       <div className="flex flex-wrap items-center gap-2 mt-3 pt-2 border-t border-gray-200">
@@ -456,8 +459,9 @@ export function ChatPage() {
   const [feedbackError, setFeedbackError] = useState<{ title: string; detail?: string } | null>(null);
   const [contextStats, setContextStats] = useState<{ used: number; total: number; charTrimmed: boolean } | null>(null);
   const [pendingRetry, setPendingRetry] = useState<{ history: Message[]; isFirstMessage: boolean } | null>(null);
-  const [sourceChoice, setSourceChoice] = useState<{ documentId: string; title: string } | null>(null);
-  const [viewerDoc, setViewerDoc] = useState<{ documentId: string; title: string } | null>(null);
+  const [sourceChoice, setSourceChoice] = useState<{ documentId: string; title: string; page?: number } | null>(null);
+  const [viewerDoc, setViewerDoc] = useState<{ documentId: string; title: string; page?: number; seq: number } | null>(null);
+  const viewerSeqRef = useRef(0);
   const [viewerContext, setViewerContext] = useState<ViewerContext | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -740,17 +744,17 @@ export function ChatPage() {
     }
   };
 
-  const handleRequestSource = (s: { documentId?: string; title: string }) => {
+  const handleRequestSource = (s: { documentId?: string; title: string; page?: number }) => {
     if (!s.documentId) return;
     setDownloadError(null);
-    setSourceChoice({ documentId: s.documentId, title: s.title });
+    setSourceChoice({ documentId: s.documentId, title: s.title, page: s.page });
   };
 
   const handleDownloadChoice = () => {
     if (!sourceChoice) return;
-    const { documentId } = sourceChoice;
+    const { documentId, page } = sourceChoice;
     setSourceChoice(null);
-    openRagDocument(documentId).catch((err) => {
+    openRagDocument(documentId, page).catch((err) => {
       setDownloadError(err?.message || t('chat.openSourceFailed'));
     });
   };
@@ -760,7 +764,14 @@ export function ChatPage() {
     // Wis de oude viewer-context meteen zodat een nieuw bericht tijdens het laden
     // van de nieuwe bron niet per ongeluk de vorige pagina/dia meestuurt.
     setViewerContext(null);
-    setViewerDoc({ documentId: sourceChoice.documentId, title: sourceChoice.title });
+    // openSeq bumpt bij elke "Bekijk"-keuze, zodat de viewer ook bij het opnieuw
+    // openen van hetzelfde document terugspringt naar de gevraagde pagina.
+    setViewerDoc({
+      documentId: sourceChoice.documentId,
+      title: sourceChoice.title,
+      page: sourceChoice.page,
+      seq: ++viewerSeqRef.current,
+    });
     setSourceChoice(null);
   };
 
@@ -1302,6 +1313,8 @@ export function ChatPage() {
               documentId={viewerDoc.documentId}
               title={viewerDoc.title}
               lang={lang}
+              initialPage={viewerDoc.page}
+              openSeq={viewerDoc.seq}
               onClose={() => { setViewerDoc(null); setViewerContext(null); }}
               onContextChange={setViewerContext}
             />

@@ -1,5 +1,6 @@
 - [Per-course prompt/setting overrides](per-course-prompt-overrides.md) — course overrides live as reserved-name chatbot_prompts rows (`__rag_settings_<id>__`, `__explain_prompt_<id>__`), not a course_id column.
 - [RAG ingestion pipeline](rag-ingestion.md) — most formats client-side; .pptx is server-side (slides+notes, LLM chunking); LLM is OpenAI not Groq despite replit.md.
+- [pdfjs test-import crash](pdfjs-test-import-crash.md) — document-processor.service.ts imports pdfjs-dist (DOMMatrix crash in node tests); keep pure PDF helpers in pdf-pages.ts, test from there.
 - [In-app document viewer rendering](document-viewer-rendering.md) — docx/pptx→PDF via headless LibreOffice (cached), pdf.js v5 worker via Vite `?url` (cdnjs `.js` URL is stale for v5).
 - [Server auth helpers](server-auth-helpers.md) — requireAuthUser returns {user,profile} with NO role field; per-course staff checks must use isStaffForCourse, not auth.role.
 - [Supabase session rotation](supabase-session-rotation.md) — new `sb_publishable_` anon key = key rotation; cached sessions die → 401 on ALL server endpoints while client still SIGNED_IN (misreads as OpenAI error). Validate session on load, sign out only on definitive auth errors.

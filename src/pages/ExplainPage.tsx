@@ -76,10 +76,12 @@ function FeedbackBlock({
     });
   };
   const [openSourceError, setOpenSourceError] = useState<string | null>(null);
-  const handleOpenSource = (s: { documentId?: string }) => {
+  const handleOpenSource = (s: { documentId?: string; pageStart?: number; slideStart?: number }) => {
     if (!s.documentId) return;
     setOpenSourceError(null);
-    openRagDocument(s.documentId).catch((err) => {
+    // Dia's worden bij het openen als PDF-pagina's geteld (pptx→PDF), dus een
+    // slidenummer mapt 1-op-1 op een pagina; val daarop terug voor pptx.
+    openRagDocument(s.documentId, s.pageStart ?? s.slideStart).catch((err) => {
       setOpenSourceError(err?.message || 'Kon bron niet openen.');
     });
   };
@@ -128,6 +130,7 @@ function FeedbackBlock({
         idPrefix={idPrefix}
         onOpenSource={handleOpenSource}
         slideWord={t('quiz.slideWord')}
+        pageWord={t('sources.pageWord')}
         evidenceLabel={t('explain.sources.evidenceBadge')}
         evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
         snippetToggleLabel={t('explain.sources.evidenceSnippetToggle')}
@@ -1025,6 +1028,7 @@ export function ExplainPage() {
                         sources={retrievedSources}
                         showSimilarity={false}
                         slideWord={t('quiz.slideWord')}
+                        pageWord={t('sources.pageWord')}
                         evidenceLabel={t('explain.sources.evidenceBadge')}
                         evidenceTitle={t('explain.sources.evidenceBadgeTitle')}
                         snippetToggleLabel={t('explain.sources.evidenceSnippetToggle')}

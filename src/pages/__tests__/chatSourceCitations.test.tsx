@@ -37,6 +37,8 @@ vi.mock('../../services/rag.service', () => ({
     documentId: c.documentId,
     ...(c.slideStart != null ? { slideStart: c.slideStart } : {}),
     ...(c.slideEnd != null ? { slideEnd: c.slideEnd } : {}),
+    ...(c.pageStart != null ? { pageStart: c.pageStart } : {}),
+    ...(c.pageEnd != null ? { pageEnd: c.pageEnd } : {}),
   })),
   ragDocumentDownloadUrl: vi.fn((id?: string) =>
     id ? `/api/rag/documents/${id}/download` : undefined,
@@ -159,10 +161,37 @@ describe('AssistantMessageBody — broncitaties', () => {
     await user.click(screen.getByTestId('btn-toggle-sources'));
 
     // Eerste bron (hoogste similarity): dia-reeks 4–6.
-    expect(screen.getByTestId('text-slide-1')).toHaveTextContent('dia 4–6');
+    expect(screen.getByTestId('text-location-1')).toHaveTextContent('dia 4–6');
     // Tweede bron: enkele dia (slideEnd ontbreekt → gelijk aan slideStart).
-    expect(screen.getByTestId('text-slide-2')).toHaveTextContent('dia 2');
-    expect(screen.getByTestId('text-slide-2')).not.toHaveTextContent('–');
+    expect(screen.getByTestId('text-location-2')).toHaveTextContent('dia 2');
+    expect(screen.getByTestId('text-location-2')).not.toHaveTextContent('–');
+  });
+
+  it('toont het paginalabel voor PDF-bronnen (losse pagina en paginabereik)', async () => {
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider>
+        <AssistantMessageBody
+          messageId="msg-pdf"
+          content="Antwoord met PDF-bronnen."
+          retrievedContext={{
+            chunks: [
+              { documentTitle: 'Hoofdstuk 1.pdf', similarity: 0.9, documentId: 'doc-c', pageStart: 12, pageEnd: 13 },
+              { documentTitle: 'Hoofdstuk 2.pdf', similarity: 0.8, documentId: 'doc-d', pageStart: 5 },
+            ],
+          }}
+          onRequestSource={vi.fn()}
+        />
+      </LanguageProvider>,
+    );
+
+    await user.click(screen.getByTestId('btn-toggle-sources'));
+
+    // Eerste bron: paginabereik 12–13.
+    expect(screen.getByTestId('text-location-1')).toHaveTextContent('p. 12–13');
+    // Tweede bron: losse pagina (pageEnd ontbreekt → gelijk aan pageStart).
+    expect(screen.getByTestId('text-location-2')).toHaveTextContent('p. 5');
+    expect(screen.getByTestId('text-location-2')).not.toHaveTextContent('–');
   });
 
   it('roept onRequestSource aan met de bron bij het klikken op een bron', async () => {

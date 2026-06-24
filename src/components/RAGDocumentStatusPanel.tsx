@@ -128,6 +128,15 @@ export function RAGDocumentStatusPanel() {
     }
   };
 
+  // Een reeds voltooid PDF-document opnieuw verwerken zodat de chunks paginanummers
+  // krijgen (de pagina-detectie zit alleen in de ingestie). Bewust achter een
+  // bevestiging: retryFailedDocument vervangt de bestaande fragmenten en bedt ze
+  // opnieuw in (kost embeddings).
+  const handleReprocessCompleted = async (doc: { id: string; title: string }) => {
+    if (!confirm(t('rag.docStatus.reprocessCompletedConfirm', { title: doc.title }))) return;
+    await handleRetry(doc.id);
+  };
+
   const handleRetryAll = async () => {
     const failedDocs = documents.filter(docNeedsAttention);
     if (failedDocs.length === 0) return;
@@ -331,6 +340,20 @@ export function RAGDocumentStatusPanel() {
                     <span className="text-xs text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
                       {doc.chunkCount} chunks
                     </span>
+                  )}
+
+                  {doc.processing_status === 'completed' && /\.pdf$/i.test(doc.filename) && (
+                    <button
+                      onClick={() => handleReprocessCompleted(doc)}
+                      disabled={retryingDocId !== null}
+                      className="p-2 text-gray-500 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+                      title={t('rag.docStatus.reprocessPageTitle')}
+                      data-testid={`button-reprocess-doc-${doc.id}`}
+                    >
+                      <RefreshCw
+                        className={`w-4 h-4 ${retryingDocId === doc.id ? 'animate-spin' : ''}`}
+                      />
+                    </button>
                   )}
 
                   {needsAttention && (

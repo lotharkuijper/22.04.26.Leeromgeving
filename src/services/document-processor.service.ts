@@ -2,21 +2,17 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import mammoth from 'mammoth';
 import { STORAGE_CONFIG } from '../config/storage.config';
+import { assignPdfPages, normalizeForMatch, type DocumentChunk } from './pdf-pages';
+
+// Re-export zodat bestaande imports vanuit document-processor.service blijven werken.
+export { assignPdfPages, normalizeForMatch };
+export type { DocumentChunk };
 
 // pdfjs-dist v5 levert de worker uitsluitend als ES-module (`pdf.worker.min.mjs`);
 // de oude cdnjs `pdf.worker.min.js`-URL bestaat niet meer voor v5, waardoor het
 // dynamisch importeren faalde ("Setting up fake worker failed"). We laden daarom de
 // gebundelde worker lokaal via Vite `?url`, identiek aan src/components/DocumentViewer.tsx.
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-
-export interface DocumentChunk {
-  text: string;
-  metadata: {
-    pageNumber?: number;
-    startPosition: number;
-    endPosition: number;
-  };
-}
 
 export interface ProcessedDocument {
   text: string;
@@ -150,6 +146,9 @@ export async function processPDF(file: File): Promise<ProcessedDocument> {
 
     const text = textParts.join('\n\n');
     const chunks = chunkText(text);
+    // Koppel elke chunk aan zijn PDF-pagina('s) zodat bronnen straks "p. 12" tonen
+    // en de viewer direct op de juiste pagina opent.
+    assignPdfPages(textParts, chunks);
 
     return {
       text,

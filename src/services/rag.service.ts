@@ -415,25 +415,58 @@ export function slideRangeFromMetadata(metadata: unknown): SlideRange | null {
   return { start, end: Math.max(start, end) };
 }
 
-// Bouwt een bron-item uit een chunk en neemt de dia-reeks mee wanneer het een
-// PowerPoint-chunk is, zodat de student verwezen kan worden naar "dia 4–6".
+// Pagina-reeks uit chunk-metadata van een PDF-bron (pageStart/pageEnd, vastgelegd
+// tijdens het inlezen). PowerPoint-chunks (source:'pptx') gebruiken de dia-reeks
+// en worden hier overgeslagen. Geeft null bij ontbrekende/ongeldige metadata.
+export function pageRangeFromMetadata(metadata: unknown): SlideRange | null {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const m = metadata as Record<string, unknown>;
+  if (m.source === 'pptx') return null;
+  const start = Number(m.pageStart);
+  if (!Number.isFinite(start) || start < 1) return null;
+  const endRaw = Number(m.pageEnd);
+  const end = Number.isFinite(endRaw) ? endRaw : start;
+  return { start, end: Math.max(start, end) };
+}
+
+// Bouwt een bron-item uit een chunk en neemt de vindplaats mee: de dia-reeks bij
+// een PowerPoint-chunk ("dia 4–6") of de pagina-reeks bij een PDF ("p. 12–13").
 export function chunkToDisplaySource(chunk: {
   documentTitle: string;
   similarity: number;
   documentId?: string;
   metadata?: unknown;
-}): { title: string; similarity: number; documentId?: string; slideStart?: number; slideEnd?: number } {
-  const range = slideRangeFromMetadata(chunk.metadata);
+}): {
+  title: string;
+  similarity: number;
+  documentId?: string;
+  slideStart?: number;
+  slideEnd?: number;
+  pageStart?: number;
+  pageEnd?: number;
+} {
   const base = {
     title: chunk.documentTitle,
     similarity: chunk.similarity,
     documentId: chunk.documentId,
   };
-  return range ? { ...base, slideStart: range.start, slideEnd: range.end } : base;
+  const slide = slideRangeFromMetadata(chunk.metadata);
+  if (slide) return { ...base, slideStart: slide.start, slideEnd: slide.end };
+  const page = pageRangeFromMetadata(chunk.metadata);
+  if (page) return { ...base, pageStart: page.start, pageEnd: page.end };
+  return base;
 }
 
 export function dedupeSourcesByDocument<
-  T extends { title: string; similarity: number; documentId?: string; slideStart?: number; slideEnd?: number }
+  T extends {
+    title: string;
+    similarity: number;
+    documentId?: string;
+    slideStart?: number;
+    slideEnd?: number;
+    pageStart?: number;
+    pageEnd?: number;
+  }
 >(
   sources: T[],
   topN: number = 3
@@ -443,10 +476,11 @@ export function dedupeSourcesByDocument<
   for (const src of sources) {
     // Bij voorkeur dedupliceren op documentId zodat verschillende documenten met
     // dezelfde titel niet ten onrechte worden samengevoegd; fallback op titel.
-    // De dia-reeks zit in de sleutel zodat verschillende dia's uit dezelfde
-    // PowerPoint als aparte bronnen zichtbaar blijven.
+    // De dia-/pagina-reeks zit in de sleutel zodat verschillende vindplaatsen uit
+    // hetzelfde document als aparte bronnen zichtbaar blijven.
     const slidePart = src.slideStart != null ? `:s${src.slideStart}-${src.slideEnd ?? src.slideStart}` : '';
-    const key = (src.documentId ? `id:${src.documentId}` : `t:${src.title}`) + slidePart;
+    const pagePart = src.pageStart != null ? `:p${src.pageStart}-${src.pageEnd ?? src.pageStart}` : '';
+    const key = (src.documentId ? `id:${src.documentId}` : `t:${src.title}`) + slidePart + pagePart;
     const existing = bestPerDoc.get(key);
     if (!existing || src.similarity > existing.similarity) {
       bestPerDoc.set(key, src);
@@ -468,9 +502,14 @@ export function ragDocumentDownloadUrl(documentId?: string): string | undefined 
 // gewone <a href> de Supabase Bearer-token niet meestuurt (de download-route
 // zou dan 401 geven). Bij signed-URL responses opent een nieuw tabblad de
 // getekende URL; bij binary (file_bytes) responses wordt een blob-URL geopend.
-export async function openRagDocument(documentId: string): Promise<void> {
+export async function openRagDocument(documentId: string, targetPage?: number): Promise<void> {
   if (!documentId) return;
   const url = `/api/rag/documents/${encodeURIComponent(documentId)}/download`;
+  // Browsers springen voor PDF's naar de juiste pagina via een #page=N-fragment.
+  const pageFragment =
+    Number.isFinite(targetPage) && (targetPage as number) >= 1
+      ? `#page=${Math.floor(targetPage as number)}`
+      : '';
   const { data: { session } } = await supabase.auth.getSession();
   const headers: Record<string, string> = {};
   if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`;
@@ -487,12 +526,12 @@ export async function openRagDocument(documentId: string): Promise<void> {
   if (contentType.includes('application/json')) {
     const j = await res.json() as { url?: string };
     if (!j.url) throw new Error('Geen downloadlink ontvangen.');
-    window.open(j.url, '_blank', 'noopener,noreferrer');
+    window.open(j.url + pageFragment, '_blank', 'noopener,noreferrer');
     return;
   }
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
-  const win = window.open(objectUrl, '_blank', 'noopener,noreferrer');
+  const win = window.open(objectUrl + pageFragment, '_blank', 'noopener,noreferrer');
   // Geef de browser even tijd om het tabblad te openen voor we de URL revoken.
   setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   if (!win) throw new Error('Pop-up geblokkeerd. Sta pop-ups toe om de bron te openen.');

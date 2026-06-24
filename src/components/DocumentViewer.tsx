@@ -33,6 +33,12 @@ interface DocumentViewerProps {
   lang: 'nl' | 'en';
   onClose: () => void;
   onContextChange?: (ctx: ViewerContext | null) => void;
+  // Pagina waarop de viewer moet openen (1-based; alleen zinvol voor PDF's).
+  // Wordt geklemd op het paginabereik zodra het document geladen is.
+  initialPage?: number;
+  // Verandert telkens als de gebruiker dezelfde bron opnieuw aanklikt; zo springt
+  // de viewer ook bij een herhaalde klik op hetzelfde document terug naar initialPage.
+  openSeq?: number;
 }
 
 type ViewResponse =
@@ -57,7 +63,7 @@ function segmentText(text: string, max = 5000): string[] {
   return segs.length ? segs : [clean];
 }
 
-export function DocumentViewer({ documentId, title, lang, onClose, onContextChange }: DocumentViewerProps) {
+export function DocumentViewer({ documentId, title, lang, onClose, onContextChange, initialPage, openSeq }: DocumentViewerProps) {
   const { t } = useLanguage();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -294,6 +300,19 @@ export function DocumentViewer({ documentId, title, lang, onClose, onContextChan
   useEffect(() => {
     if (!loading && pdfRef.current) renderPage(page);
   }, [page, loading, renderPage]);
+
+  // Spring naar de gevraagde startpagina zodra het document geladen is (of bij een
+  // herhaalde klik op dezelfde bron, gesignaleerd via openSeq). Wordt geklemd op het
+  // werkelijke paginabereik; tekstbestanden krijgen geen initialPage en blijven dus
+  // op pagina 1. Hangt bewust NIET af van `page`, zodat handmatig bladeren niet wordt
+  // teruggezet — alleen een nieuwe bron/klik of een gewijzigd paginabereik verspringt.
+  useEffect(() => {
+    if (loading || totalPages <= 0) return;
+    if (!initialPage || !Number.isFinite(initialPage)) return;
+    const target = Math.min(Math.max(1, Math.floor(initialPage)), totalPages);
+    setPage(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, totalPages, initialPage, openSeq]);
 
   useEffect(() => {
     if (!containerRef.current) return;

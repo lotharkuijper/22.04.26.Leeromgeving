@@ -10,6 +10,10 @@ export interface SourceItem {
   slideStart?: number;
   /** Laatste dia van de PowerPoint-chunk; gelijk aan slideStart bij één dia. */
   slideEnd?: number;
+  /** Eerste PDF-pagina van de chunk (1-based); afwezig wanneer onbekend (bv. los tekstbestand). */
+  pageStart?: number;
+  /** Laatste PDF-pagina van de chunk; gelijk aan pageStart bij één pagina. */
+  pageEnd?: number;
   /** True wanneer deze bron bij de begripsextractie als bewijs is vastgelegd (concept_evidence). */
   fromEvidence?: boolean;
   /** Het bij de extractie vastgelegde bronfragment (concept_evidence.snippet). */
@@ -21,6 +25,22 @@ export function slideLabel(item: Pick<SourceItem, 'slideStart' | 'slideEnd'>, wo
   if (item.slideStart == null) return '';
   const end = item.slideEnd ?? item.slideStart;
   return end !== item.slideStart ? `${word} ${item.slideStart}–${end}` : `${word} ${item.slideStart}`;
+}
+
+// "p. 12" of "p. 12–13" voor PDF-bronnen; lege string als geen pagina bekend is.
+export function pageLabel(item: Pick<SourceItem, 'pageStart' | 'pageEnd'>, word = 'p.'): string {
+  if (item.pageStart == null) return '';
+  const end = item.pageEnd ?? item.pageStart;
+  return end !== item.pageStart ? `${word} ${item.pageStart}–${end}` : `${word} ${item.pageStart}`;
+}
+
+// Eén vindplaats-label per bron: dia bij PowerPoint, anders pagina bij PDF.
+export function locationLabel(
+  item: Pick<SourceItem, 'slideStart' | 'slideEnd' | 'pageStart' | 'pageEnd'>,
+  slideWord = 'dia',
+  pageWord = 'p.'
+): string {
+  return slideLabel(item, slideWord) || pageLabel(item, pageWord);
 }
 
 interface SourceListProps {
@@ -43,6 +63,8 @@ interface SourceListProps {
   uniqueLabel?: string;
   /** Woord voor dia-aanduiding bij PowerPoint-bronnen, bv. "dia"/"slide". Default 'dia'. */
   slideWord?: string;
+  /** Woord/afkorting voor pagina-aanduiding bij PDF-bronnen, bv. "p.". Default 'p.'. */
+  pageWord?: string;
   /** Label op de badge voor bronnen die uit `concept_evidence` komen (fromEvidence). Leeg = geen badge. */
   evidenceLabel?: string;
   /** Tooltip (title-attribuut) voor de evidence-badge. */
@@ -54,10 +76,11 @@ interface SourceListProps {
 function dedupeByDocument(items: SourceItem[]): SourceItem[] {
   const best = new Map<string, SourceItem>();
   for (const s of items) {
-    // Dia-reeks meenemen in de sleutel zodat verschillende dia's uit dezelfde
-    // PowerPoint als aparte bronnen blijven staan.
+    // Dia-/pagina-reeks meenemen in de sleutel zodat verschillende vindplaatsen
+    // uit hetzelfde document als aparte bronnen blijven staan.
     const slidePart = s.slideStart != null ? `:s${s.slideStart}-${s.slideEnd ?? s.slideStart}` : '';
-    const key = (s.documentId ? `id:${s.documentId}` : `t:${s.title}`) + slidePart;
+    const pagePart = s.pageStart != null ? `:p${s.pageStart}-${s.pageEnd ?? s.pageStart}` : '';
+    const key = (s.documentId ? `id:${s.documentId}` : `t:${s.title}`) + slidePart + pagePart;
     const cur = best.get(key);
     if (!cur || s.similarity > cur.similarity) best.set(key, s);
   }
@@ -76,6 +99,7 @@ export function SourceList({
   onOpenSource,
   uniqueLabel = 'uniek',
   slideWord = 'dia',
+  pageWord = 'p.',
   evidenceLabel,
   evidenceTitle,
   snippetToggleLabel,
@@ -116,14 +140,14 @@ export function SourceList({
                 ({(source.similarity * 100).toFixed(0)}% relevant)
               </span>
             ) : null;
-            const slide = slideLabel(source, slideWord);
+            const location = locationLabel(source, slideWord, pageWord);
             const inner = (
               <>
                 <span className="font-medium text-blue-600 mr-1">[{num}]</span>
                 <span className="italic">{source.title}</span>
-                {slide && (
-                  <span className="text-gray-500 not-italic ml-1" data-testid={`text-slide-${num}`}>
-                    · {slide}
+                {location && (
+                  <span className="text-gray-500 not-italic ml-1" data-testid={`text-location-${num}`}>
+                    · {location}
                   </span>
                 )}
                 {source.href && <ExternalLink className="w-3 h-3 inline ml-1 text-gray-400" />}

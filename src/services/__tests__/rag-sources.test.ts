@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   slideRangeFromMetadata,
+  pageRangeFromMetadata,
   chunkToDisplaySource,
   dedupeSourcesByDocument,
 } from '../rag.service';
-import { slideLabel } from '../../components/SourceList';
+import { slideLabel, pageLabel, locationLabel } from '../../components/SourceList';
 
 describe('slideRangeFromMetadata', () => {
   it('geeft null voor niet-pptx of lege metadata', () => {
@@ -41,6 +42,22 @@ describe('slideRangeFromMetadata', () => {
   });
 });
 
+describe('pageRangeFromMetadata', () => {
+  it('geeft null voor pptx of lege/ongeldige metadata', () => {
+    expect(pageRangeFromMetadata(null)).toBeNull();
+    expect(pageRangeFromMetadata({})).toBeNull();
+    expect(pageRangeFromMetadata({ source: 'pptx', pageStart: 3 })).toBeNull();
+    expect(pageRangeFromMetadata({ pageStart: 'x' })).toBeNull();
+    expect(pageRangeFromMetadata({ pageStart: 0 })).toBeNull();
+  });
+
+  it('leest pagina-reeks uit pdf-metadata, met fallback naar één pagina', () => {
+    expect(pageRangeFromMetadata({ pageStart: 12, pageEnd: 13 })).toEqual({ start: 12, end: 13 });
+    expect(pageRangeFromMetadata({ pageStart: 5 })).toEqual({ start: 5, end: 5 });
+    expect(pageRangeFromMetadata({ source: 'pdf', pageStart: 7, pageEnd: 4 })).toEqual({ start: 7, end: 7 });
+  });
+});
+
 describe('chunkToDisplaySource', () => {
   it('neemt dia-reeks mee voor pptx-chunks', () => {
     const src = chunkToDisplaySource({
@@ -52,15 +69,26 @@ describe('chunkToDisplaySource', () => {
     expect(src).toMatchObject({ title: 'College 3.pptx', documentId: 'doc-1', slideStart: 4, slideEnd: 6 });
   });
 
-  it('laat dia-velden weg voor niet-pptx bronnen', () => {
+  it('neemt pagina-reeks mee voor pdf-chunks', () => {
     const src = chunkToDisplaySource({
-      documentTitle: 'reader.pdf',
+      documentTitle: 'Hoofdstuk 1.pdf',
       similarity: 0.7,
       documentId: 'doc-2',
-      metadata: { source: 'pdf' },
+      metadata: { source: 'pdf', pageStart: 12, pageEnd: 13 },
+    });
+    expect(src).toMatchObject({ title: 'Hoofdstuk 1.pdf', documentId: 'doc-2', pageStart: 12, pageEnd: 13 });
+    expect(src).not.toHaveProperty('slideStart');
+  });
+
+  it('laat vindplaats-velden weg voor bronnen zonder pagina/dia-info', () => {
+    const src = chunkToDisplaySource({
+      documentTitle: 'aantekeningen.txt',
+      similarity: 0.7,
+      documentId: 'doc-3',
+      metadata: { source: 'text' },
     });
     expect(src).not.toHaveProperty('slideStart');
-    expect(src).not.toHaveProperty('slideEnd');
+    expect(src).not.toHaveProperty('pageStart');
   });
 });
 
@@ -89,6 +117,19 @@ describe('dedupeSourcesByDocument met dia-reeksen', () => {
     expect(out).toHaveLength(1);
     expect(out[0].similarity).toBe(0.9);
   });
+
+  it('houdt verschillende paginabereiken uit hetzelfde PDF apart', () => {
+    const out = dedupeSourcesByDocument(
+      [
+        { title: 'reader.pdf', similarity: 0.9, documentId: 'd3', pageStart: 12, pageEnd: 13 },
+        { title: 'reader.pdf', similarity: 0.8, documentId: 'd3', pageStart: 40 },
+        { title: 'reader.pdf', similarity: 0.5, documentId: 'd3', pageStart: 12, pageEnd: 13 },
+      ],
+      5
+    );
+    expect(out).toHaveLength(2);
+    expect(out.map((s) => `${s.pageStart}-${s.pageEnd ?? s.pageStart}`).sort()).toEqual(['12-13', '40-40']);
+  });
 });
 
 describe('slideLabel', () => {
@@ -104,6 +145,36 @@ describe('slideLabel', () => {
 
   it('geeft lege string voor bronnen zonder dia-info', () => {
     expect(slideLabel({})).toBe('');
+  });
+});
+
+describe('pageLabel', () => {
+  it('formatteert een paginabereik en losse pagina', () => {
+    expect(pageLabel({ pageStart: 12, pageEnd: 13 })).toBe('p. 12–13');
+    expect(pageLabel({ pageStart: 12, pageEnd: 12 })).toBe('p. 12');
+    expect(pageLabel({ pageStart: 7 })).toBe('p. 7');
+  });
+
+  it('respecteert een ander woord', () => {
+    expect(pageLabel({ pageStart: 3 }, 'pagina')).toBe('pagina 3');
+  });
+
+  it('geeft lege string voor bronnen zonder pagina-info', () => {
+    expect(pageLabel({})).toBe('');
+  });
+});
+
+describe('locationLabel', () => {
+  it('geeft het dia-label voor PowerPoint-bronnen', () => {
+    expect(locationLabel({ slideStart: 4, slideEnd: 6 }, 'dia', 'p.')).toBe('dia 4–6');
+  });
+
+  it('geeft het paginalabel voor PDF-bronnen', () => {
+    expect(locationLabel({ pageStart: 12, pageEnd: 13 }, 'dia', 'p.')).toBe('p. 12–13');
+  });
+
+  it('geeft lege string zonder vindplaats', () => {
+    expect(locationLabel({}, 'dia', 'p.')).toBe('');
   });
 });
 
