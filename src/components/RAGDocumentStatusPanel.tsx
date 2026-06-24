@@ -16,9 +16,25 @@ interface DocumentWithChunkCount {
   folder_id: string | null;
   bucket: string;
   chunkCount: number;
+  hasPageData: boolean;
 }
 
 type FilterMode = 'all' | 'failed';
+
+function isPdf(filename: string): boolean {
+  return /\.pdf$/i.test(filename || '');
+}
+
+// Een voltooide PDF met chunks maar zónder paginanummers in de metadata: doelwit
+// voor de bulk-actie. Mislukte/lege PDF's vallen al onder docNeedsAttention.
+function docMissingPageData(d: DocumentWithChunkCount): boolean {
+  return (
+    d.processing_status === 'completed' &&
+    d.chunkCount > 0 &&
+    isPdf(d.filename) &&
+    !d.hasPageData
+  );
+}
 
 // Een document "vereist aandacht" als het niet bruikbaar is voor RAG: mislukt,
 // nog in verwerking, in de wachtrij (pending) of voltooid zonder chunks.
@@ -42,6 +58,11 @@ export function RAGDocumentStatusPanel() {
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [bulkPageProgress, setBulkPageProgress] = useState<{
+    current: number;
+    total: number;
+    title: string;
+  } | null>(null);
 
   useEffect(() => {
     if (activeCourseRagFolderIds.length > 0) {
@@ -79,6 +100,7 @@ export function RAGDocumentStatusPanel() {
         .map((d) => d.id);
 
       let chunkCountMap: Record<string, number> = {};
+      const docsWithPageData = new Set<string>();
 
       if (completedDocIds.length > 0) {
         const { data: chunks } = await supabase
@@ -88,6 +110,18 @@ export function RAGDocumentStatusPanel() {
 
         for (const chunk of chunks || []) {
           chunkCountMap[chunk.document_id] = (chunkCountMap[chunk.document_id] || 0) + 1;
+        }
+
+        // Welke voltooide docs hebben al paginanummers (metadata.pageStart)? Eén
+        // rij per chunk-met-paginanummer; we dedupen client-side naar een set.
+        const { data: pageChunks } = await supabase
+          .from('document_chunks')
+          .select('document_id')
+          .in('document_id', completedDocIds)
+          .not('metadata->>pageStart', 'is', null);
+
+        for (const chunk of pageChunks || []) {
+          docsWithPageData.add(chunk.document_id);
         }
       }
 
@@ -102,6 +136,7 @@ export function RAGDocumentStatusPanel() {
           folder_id: d.folder_id,
           bucket: d.bucket,
           chunkCount: chunkCountMap[d.id] || 0,
+          hasPageData: docsWithPageData.has(d.id),
         }))
       );
     } finally {
@@ -135,6 +170,37 @@ export function RAGDocumentStatusPanel() {
   const handleReprocessCompleted = async (doc: { id: string; title: string }) => {
     if (!confirm(t('rag.docStatus.reprocessCompletedConfirm', { title: doc.title }))) return;
     await handleRetry(doc.id);
+  };
+
+  // Bulk: alle voltooide PDF's zónder paginanummers opnieuw verwerken zodat hun
+  // chunks pageStart/pageEnd krijgen. Reuse retryFailedDocument (via handleRetry);
+  // throttle 2s tussen docs om embeddings-kosten te spreiden; sla docs over die al
+  // paginadata hebben (gefilterd op docMissingPageData).
+  const handleReprocessAllMissingPages = async () => {
+    const targets = documents.filter(docMissingPageData);
+    if (targets.length === 0) return;
+
+    if (
+      !confirm(
+        t('rag.docStatus.reprocessMissingPagesConfirm', { n: String(targets.length) })
+      )
+    ) {
+      return;
+    }
+
+    for (let i = 0; i < targets.length; i++) {
+      setBulkPageProgress({ current: i + 1, total: targets.length, title: targets[i].title });
+      try {
+        await handleRetry(targets[i].id);
+      } catch {
+        // Ga door met het volgende document
+      }
+      if (i < targets.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+
+    setBulkPageProgress(null);
   };
 
   const handleRetryAll = async () => {
@@ -188,6 +254,8 @@ export function RAGDocumentStatusPanel() {
     filterMode === 'failed' ? documents.filter(docNeedsAttention) : documents;
 
   const failedCount = documents.filter(docNeedsAttention).length;
+  const missingPagesCount = documents.filter(docMissingPageData).length;
+  const busy = retryingDocId !== null || bulkPageProgress !== null;
 
   if (!activeCourseId) {
     return (
@@ -268,6 +336,50 @@ export function RAGDocumentStatusPanel() {
           >
             {t('rag.docStatus.reprocess')}
           </button>
+        </div>
+      )}
+
+      {missingPagesCount > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 flex items-start gap-3">
+          <Info className="w-5 h-5 text-indigo-700 mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="font-medium text-gray-900 text-sm">
+              {t('rag.docStatus.missingPagesTitle', { n: String(missingPagesCount) })}
+            </p>
+            <p className="text-sm text-gray-700 mt-0.5">
+              {t('rag.docStatus.missingPagesDesc')}
+            </p>
+          </div>
+          <button
+            onClick={handleReprocessAllMissingPages}
+            disabled={busy}
+            className="flex-shrink-0 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+            data-testid="button-reprocess-missing-pages"
+          >
+            {t('rag.docStatus.reprocessMissingPages')}
+          </button>
+        </div>
+      )}
+
+      {bulkPageProgress && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4" data-testid="status-bulk-page-progress">
+          <div className="flex justify-between text-sm mb-2">
+            <span className="text-gray-700">
+              {t('rag.docStatus.reprocessMissingPagesProgress', {
+                current: String(bulkPageProgress.current),
+                total: String(bulkPageProgress.total),
+                title: bulkPageProgress.title,
+              })}
+            </span>
+          </div>
+          <div className="w-full bg-indigo-200 rounded-full h-2">
+            <div
+              className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
+              style={{
+                width: `${Math.round((bulkPageProgress.current / bulkPageProgress.total) * 100)}%`,
+              }}
+            />
+          </div>
         </div>
       )}
 
