@@ -1,8 +1,13 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import mammoth from 'mammoth';
 import { STORAGE_CONFIG } from '../config/storage.config';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// pdfjs-dist v5 levert de worker uitsluitend als ES-module (`pdf.worker.min.mjs`);
+// de oude cdnjs `pdf.worker.min.js`-URL bestaat niet meer voor v5, waardoor het
+// dynamisch importeren faalde ("Setting up fake worker failed"). We laden daarom de
+// gebundelde worker lokaal via Vite `?url`, identiek aan src/components/DocumentViewer.tsx.
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export interface DocumentChunk {
   text: string;
