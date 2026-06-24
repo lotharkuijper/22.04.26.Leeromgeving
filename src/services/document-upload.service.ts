@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase';
 import { processDocument } from './document-processor.service';
 import { generateEmbeddings } from './llm.service';
 import { STORAGE_CONFIG, getBucketForType, type BucketType } from '../config/storage.config';
+import { sanitizeText, sanitizeMetadata } from '../lib/sanitizeText';
 
 export interface UploadProgress {
   stage: 'uploading' | 'processing' | 'generating' | 'saving' | 'completed' | 'error';
@@ -38,6 +39,59 @@ async function processPptxOnServer(documentId: string): Promise<number> {
     throw new Error(data?.error || `PowerPoint-verwerking mislukt (${res.status})`);
   }
   return data.totalChunks ?? 0;
+}
+
+interface ChunkRecord {
+  document_id: string;
+  content: string;
+  embedding: number[];
+  chunk_index: number;
+  metadata: unknown;
+}
+
+// Postgres/PostgREST weigert tekst met onopslaanbare tekens (NUL, ongepaarde
+// surrogaten) met meldingen als "unsupported Unicode escape sequence". De content
+// wordt al bij het bouwen van de rijen gesaneerd (zie sanitizeText), maar als er
+// tóch nog zo'n fout optreedt vangen we hem hier op: we proberen de batch dan
+// fragment-voor-fragment en slaan een enkel onopslaanbaar fragment over in plaats
+// van het hele document te laten mislukken. Geeft het aantal opgeslagen +
+// overgeslagen fragmenten terug.
+const UNSTORABLE_TEXT_ERROR_RE = /unicode|escape|surrogate|\\u0000|invalid byte|untranslatable/i;
+
+async function insertChunkBatch(records: ChunkRecord[]): Promise<{ stored: number; skipped: number }> {
+  if (records.length === 0) return { stored: 0, skipped: 0 };
+
+  const { error } = await supabase.from('document_chunks').insert(records);
+  if (!error) return { stored: records.length, skipped: 0 };
+
+  // Niet-teken-gerelateerde fout (netwerk, RLS, ...): meteen doorgooien.
+  if (!UNSTORABLE_TEXT_ERROR_RE.test(error.message || '')) {
+    throw new Error(`Fragmenten opslaan mislukt: ${error.message}`);
+  }
+
+  // Een multi-row insert is atomisch: bij een fout is er niets opgeslagen, dus we
+  // kunnen veilig fragment-voor-fragment opnieuw proberen en alleen het rotte
+  // fragment overslaan.
+  let stored = 0;
+  let skipped = 0;
+  for (const rec of records) {
+    const { error: oneErr } = await supabase.from('document_chunks').insert(rec);
+    if (oneErr) {
+      // Alleen écht onopslaanbare-teken-fouten overslaan; andere fouten (netwerk,
+      // RLS, vector, ...) niet stilzwijgend negeren maar doorgooien, anders raken
+      // we ongemerkt fragmenten kwijt.
+      if (!UNSTORABLE_TEXT_ERROR_RE.test(oneErr.message || '')) {
+        throw new Error(`Fragmenten opslaan mislukt: ${oneErr.message}`);
+      }
+      skipped += 1;
+      console.warn(
+        `[document-upload] Fragment ${rec.chunk_index} overgeslagen (onopslaanbare tekens): ${oneErr.message}`,
+      );
+    } else {
+      stored += 1;
+    }
+  }
+  return { stored, skipped };
 }
 
 export async function uploadDocument(
@@ -157,28 +211,28 @@ export async function uploadDocument(
     const batchSize = 5;
     const chunks = processedDoc.chunks;
     let processedChunks = 0;
+    let storedChunks = 0;
+    let skippedChunks = 0;
 
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
-      const texts = batch.map(chunk => chunk.text);
+      // Saneer vóór embedding én opslag, zodat de embedding bij de opgeslagen
+      // tekst past en de insert nooit op onopslaanbare tekens stukloopt.
+      const texts = batch.map(chunk => sanitizeText(chunk.text));
 
       const embeddings = await generateEmbeddings(texts);
 
-      const chunkRecords = batch.map((chunk, idx) => ({
+      const chunkRecords: ChunkRecord[] = batch.map((chunk, idx) => ({
         document_id: docData.id,
-        content: chunk.text,
+        content: texts[idx],
         embedding: embeddings[idx],
         chunk_index: i + idx,
-        metadata: chunk.metadata,
+        metadata: sanitizeMetadata(chunk.metadata),
       }));
 
-      const { error: chunkError } = await supabase
-        .from('document_chunks')
-        .insert(chunkRecords);
-
-      if (chunkError) {
-        throw new Error(`Failed to save chunks: ${chunkError.message}`);
-      }
+      const { stored, skipped } = await insertChunkBatch(chunkRecords);
+      storedChunks += stored;
+      skippedChunks += skipped;
 
       processedChunks += batch.length;
       const progressPercent = 40 + Math.floor((processedChunks / chunks.length) * 50);
@@ -196,6 +250,16 @@ export async function uploadDocument(
       }
     }
 
+    if (chunks.length > 0 && storedChunks === 0) {
+      await supabase
+        .from('documents')
+        .update({ processing_status: 'failed' })
+        .eq('id', docData.id);
+      throw new Error(
+        'Geen enkel tekstfragment uit dit document kon worden opgeslagen. Het bestand bevat mogelijk ongeldige tekens of geen leesbare tekst.',
+      );
+    }
+
     onProgress?.({
       stage: 'saving',
       progress: 95,
@@ -206,7 +270,7 @@ export async function uploadDocument(
       .from('documents')
       .update({
         processing_status: 'completed',
-        total_chunks: chunks.length,
+        total_chunks: storedChunks,
       })
       .eq('id', docData.id);
 
@@ -217,7 +281,10 @@ export async function uploadDocument(
     onProgress?.({
       stage: 'completed',
       progress: 100,
-      message: 'Document succesvol verwerkt!',
+      message:
+        skippedChunks > 0
+          ? `Document verwerkt — ${skippedChunks} fragment(en) met ongeldige tekens overgeslagen.`
+          : 'Document succesvol verwerkt!',
     });
 
     return { documentId: docData.id };
@@ -320,24 +387,27 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
     const batchSize = 5;
     const chunks = processedDoc.chunks;
     let processedChunks = 0;
+    let storedChunks = 0;
+    let skippedChunks = 0;
 
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
-      const texts = batch.map(chunk => chunk.text);
+      // Saneer vóór embedding én opslag (zie uploadDocument).
+      const texts = batch.map(chunk => sanitizeText(chunk.text));
 
       const embeddings = await generateEmbeddings(texts);
 
-      const chunkRecords = batch.map((chunk, idx) => ({
+      const chunkRecords: ChunkRecord[] = batch.map((chunk, idx) => ({
         document_id: documentId,
-        content: chunk.text,
+        content: texts[idx],
         embedding: embeddings[idx],
         chunk_index: i + idx,
-        metadata: chunk.metadata,
+        metadata: sanitizeMetadata(chunk.metadata),
       }));
 
-      await supabase
-        .from('document_chunks')
-        .insert(chunkRecords);
+      const { stored, skipped } = await insertChunkBatch(chunkRecords);
+      storedChunks += stored;
+      skippedChunks += skipped;
 
       processedChunks += batch.length;
       const progressPercent = 30 + Math.floor((processedChunks / chunks.length) * 60);
@@ -355,18 +425,27 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
       }
     }
 
+    if (chunks.length > 0 && storedChunks === 0) {
+      throw new Error(
+        'Geen enkel tekstfragment uit dit document kon worden opgeslagen. Het bestand bevat mogelijk ongeldige tekens of geen leesbare tekst.',
+      );
+    }
+
     await supabase
       .from('documents')
       .update({
         processing_status: 'completed',
-        total_chunks: chunks.length,
+        total_chunks: storedChunks,
       })
       .eq('id', documentId);
 
     onProgress?.({
       stage: 'completed',
       progress: 100,
-      message: 'Document succesvol verwerkt!',
+      message:
+        skippedChunks > 0
+          ? `Document verwerkt — ${skippedChunks} fragment(en) met ongeldige tekens overgeslagen.`
+          : 'Document succesvol verwerkt!',
     });
   } catch (error) {
     await supabase

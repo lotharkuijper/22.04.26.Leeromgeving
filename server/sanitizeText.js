@@ -8,13 +8,20 @@
 // newline (\u000A) en carriage return (\u000D).
 const CONTROL_CHARS_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
-// Ongepaarde UTF-16-surrogaten: een high surrogate (D800–DBFF) zonder volgende
-// low surrogate, of een low surrogate (DC00–DFFF) zonder voorafgaande high.
-const LONE_SURROGATES_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+// Ongepaarde UTF-16-surrogaten verwijderen ZONDER lookbehind/lookahead, zodat de
+// regex overal parseert (spiegel van de client; oudere JS-runtimes/browsers
+// ondersteunen geen regex-lookbehind). We matchen eerst een geldig surrogaatpaar
+// (lengte 2 → behouden) en anders een losse surrogate (lengte 1 → verwijderen).
+const SURROGATE_PAIR_OR_LONE_RE = /[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g;
 
 export function sanitizeText(input) {
   if (typeof input !== 'string') return '';
-  return input.replace(LONE_SURROGATES_RE, '').replace(CONTROL_CHARS_RE, '');
+  const out = input
+    .replace(SURROGATE_PAIR_OR_LONE_RE, (m) => (m.length === 2 ? m : ''))
+    .replace(CONTROL_CHARS_RE, '');
+  // Slotgarantie: strip elke resterende NUL — het enige teken dat Postgres in een
+  // tekst-/jsonb-kolom hard weigert ("unsupported Unicode escape sequence").
+  return out.indexOf('\u0000') === -1 ? out : out.split('\u0000').join('');
 }
 
 // Saneert recursief alle string-waarden in een metadata-object (jsonb-kolom),
@@ -25,7 +32,9 @@ export function sanitizeMetadata(value) {
   if (value && typeof value === 'object') {
     const out = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = sanitizeMetadata(v);
+      // Saneer ook de sleutel: een jsonb-object-key met NUL/losse surrogaten laat
+      // de insert net zo goed klappen als een waarde.
+      out[sanitizeText(k)] = sanitizeMetadata(v);
     }
     return out;
   }

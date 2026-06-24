@@ -10,13 +10,25 @@ const CONTROL_CHARS_RE =
   // eslint-disable-next-line no-control-regex
   /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 
-// Ongepaarde UTF-16-surrogaten: een high surrogate (D800–DBFF) zonder volgende
-// low surrogate, of een low surrogate (DC00–DFFF) zonder voorafgaande high.
-const LONE_SURROGATES_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+// Ongepaarde UTF-16-surrogaten verwijderen ZONDER lookbehind/lookahead, zodat de
+// regex in élke browser parseert. Oudere Safari (< 16.4) ondersteunt geen
+// regex-lookbehind; een lookbehind-literal gooit dan al bij het laden van de
+// module een SyntaxError, waardoor de sanitatie nooit draait. We matchen eerst
+// een geldig surrogaatpaar (lengte 2 → behouden) en anders een losse surrogate
+// (lengte 1 → verwijderen). Dit dekt elke surrogate-codepunt: een high zonder
+// volgende low, een low zonder voorafgaande high, en reeksen daarvan.
+const SURROGATE_PAIR_OR_LONE_RE = /[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g;
 
 export function sanitizeText(input: unknown): string {
   if (typeof input !== 'string') return '';
-  return input.replace(LONE_SURROGATES_RE, '').replace(CONTROL_CHARS_RE, '');
+  const out = input
+    .replace(SURROGATE_PAIR_OR_LONE_RE, (m) => (m.length === 2 ? m : ''))
+    .replace(CONTROL_CHARS_RE, '');
+  // Slotgarantie, onafhankelijk van bovenstaande regexes: strip elke resterende
+  // NUL. NUL is de enige tekst-codepunt die Postgres in een tekst-/jsonb-kolom
+  // hard weigert ("unsupported Unicode escape sequence"), dus dit mag nooit
+  // doorglippen.
+  return out.indexOf('\u0000') === -1 ? out : out.split('\u0000').join('');
 }
 
 // Saneert recursief alle string-waarden in een metadata-object (jsonb-kolom),
@@ -27,7 +39,9 @@ export function sanitizeMetadata<T>(value: T): T {
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = sanitizeMetadata(v);
+      // Saneer ook de sleutel: een jsonb-object-key met NUL/losse surrogaten laat
+      // de insert net zo goed klappen als een waarde.
+      out[sanitizeText(k)] = sanitizeMetadata(v);
     }
     return out as unknown as T;
   }
