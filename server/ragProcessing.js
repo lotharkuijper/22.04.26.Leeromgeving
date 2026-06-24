@@ -1,3 +1,5 @@
+import { sanitizeText, sanitizeMetadata } from './sanitizeText.js';
+
 // RAG-documentverwerking (pptx + platte tekst), losgekoppeld van server/index.js
 // zodat de fail-safe (status → 'failed' bij een fout) zonder draaiende Express-
 // server getest kan worden. Alle externe afhankelijkheden komen via `deps` binnen
@@ -67,16 +69,16 @@ export async function processPptxCore(doc, openaiKey, lang = 'nl', deps = {}) {
 
     const rows = finalSections.map((s, i) => ({
       document_id: documentId,
-      content: s.content,
+      content: sanitizeText(s.content),
       embedding: embeddings[i],
       chunk_index: i,
-      metadata: {
+      metadata: sanitizeMetadata({
         slideStart: s.slideStart,
         slideEnd: s.slideEnd,
         sectionTitle: s.title || null,
         source: 'pptx',
         chunkingMode: mode,
-      },
+      }),
     }));
 
     const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
@@ -168,10 +170,10 @@ export async function processPlainRagDocument(doc, openaiKey, deps = {}) {
 
     const rows = chunks.map((content, i) => ({
       document_id: documentId,
-      content,
+      content: sanitizeText(content),
       embedding: embeddings[i],
       chunk_index: i,
-      metadata: { source: ext || 'text' },
+      metadata: sanitizeMetadata({ source: ext || 'text' }),
     }));
 
     const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);

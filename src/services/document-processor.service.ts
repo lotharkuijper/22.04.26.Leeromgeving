@@ -3,6 +3,7 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import mammoth from 'mammoth';
 import { STORAGE_CONFIG } from '../config/storage.config';
 import { assignPdfPages, normalizeForMatch, type DocumentChunk } from './pdf-pages';
+import { sanitizeText, sanitizeMetadata } from '../lib/sanitizeText';
 
 // Re-export zodat bestaande imports vanuit document-processor.service blijven werken.
 export { assignPdfPages, normalizeForMatch };
@@ -123,7 +124,13 @@ function chunkText(
     }
   }
 
-  return chunks;
+  // Saneer elke chunk vóór persistentie: verwijder NUL/ongepaarde surrogaten/
+  // control-chars die Postgres anders met "unsupported Unicode escape sequence"
+  // weigert (laat één chunk de hele insert klappen).
+  return chunks.map((chunk) => ({
+    text: sanitizeText(chunk.text),
+    metadata: sanitizeMetadata(chunk.metadata),
+  }));
 }
 
 export async function processPDF(file: File): Promise<ProcessedDocument> {
