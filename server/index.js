@@ -49,7 +49,10 @@ import {
 import {
   processPptxCore as processPptxCoreImpl,
   processPlainRagDocument as processPlainRagDocumentImpl,
+  processDocxCore as processDocxCoreImpl,
 } from './ragProcessing.js';
+import { assignPdfPages } from './pdfPages.js';
+import { extractPdfPageTexts } from './pdfPageText.js';
 import { embeddingsRequestWithRetry, EMBEDDINGS_RATE_LIMIT_MSG } from './embeddingsRetry.js';
 import { parseItembankCsv, csvRowToQuizQuestion } from './itembankCsv.js';
 import { normalizeMix } from './quizSourcesMix.js';
@@ -93,7 +96,7 @@ import {
   getEmailConfig,
   sendEmailViaResend,
 } from './notifications.js';
-import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT, renditionCachePath, renditionSourceType } from './documentRender.js';
+import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, DOCX_PAGED_EXT, NATIVE_PDF_EXT, TEXT_EXT, renditionCachePath, renditionSourceType } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
 import {
   scoreToLabel as relScoreToLabel,
@@ -2296,6 +2299,23 @@ function processPlainRagDocument(doc, openaiKey) {
   });
 }
 
+// Pagina-bewuste verwerking voor Word-bronnen (.docx/.doc/.odt): converteert via
+// LibreOffice naar PDF, extraheert per-pagina tekst en koppelt elke chunk aan
+// zijn paginanummer(s) zodat bronkaarten "p. 12" tonen en de viewer naar de
+// juiste pagina springt (Task #377). Thin wrapper rond de kern in ragProcessing.
+function processDocxCore(doc, openaiKey) {
+  return processDocxCoreImpl(doc, openaiKey, {
+    supabaseAdmin,
+    convertToPdf: (buf, ext) => queueConversion(() => convertOfficeToPdf(buf, ext)),
+    extractPdfPageTexts,
+    chunkPlainText,
+    assignPdfPages,
+    embedTextsServer,
+    parseOfficeAsync,
+    log: (...a) => console.log(...a),
+  });
+}
+
 // Dispatcher: verwerkt een RAG-document op basis van het bestandstype. Wordt
 // gebruikt door de admin-folder-upload-route zodat elk geüpload RAG-bestand
 // automatisch chunks + embeddings krijgt en niet op 'pending' blijft hangen.
@@ -2309,6 +2329,7 @@ async function processRagDocumentById(documentId, lang = 'nl') {
   if (!doc) throw new Error('Document niet gevonden');
   const ext = (doc.file_type || '').toLowerCase().replace(/^\./, '');
   if (ext === 'pptx') return processPptxCore(doc, null, lang);
+  if (DOCX_PAGED_EXT.has(ext)) return processDocxCore(doc, null);
   return processPlainRagDocument(doc, null);
 }
 
@@ -2362,6 +2383,60 @@ app.post('/api/admin/process-pptx', async (req, res) => {
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error('[process-pptx] Fout:', err);
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/process-docx — server-side Word-extractie met paginanummers
+// (Task #377): LibreOffice→PDF + per-pagina tekst + chunking → elke chunk krijgt
+// pageStart/pageEnd. Body: { documentId }. Toegang: admin/superuser of staff van
+// een cursus die aan de map van het document gekoppeld is (identiek aan -pptx).
+app.post('/api/admin/process-docx', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  if (!AZURE_EMBEDDINGS_READY) return res.status(503).json({ error: EMBEDDINGS_NOT_CONFIGURED_MSG });
+
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { user } = auth;
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+  const { documentId } = req.body || {};
+  if (!documentId) return res.status(400).json({ error: 'documentId vereist' });
+
+  try {
+    const { data: doc } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
+      .eq('id', documentId)
+      .maybeSingle();
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+
+    const ext = (doc.file_type || '').toLowerCase().replace(/^\./, '');
+    if (!DOCX_PAGED_EXT.has(ext)) {
+      return res.status(400).json({ error: 'Dit endpoint verwerkt alleen .docx/.doc/.odt-bestanden' });
+    }
+
+    // Autorisatie: admin/superuser of staff van een gekoppelde cursus.
+    const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+    if (!isAdmin) {
+      let allowed = false;
+      if (doc.folder_id) {
+        const { data: assignments } = await supabaseAdmin
+          .from('course_folder_assignments')
+          .select('course_id')
+          .eq('folder_id', doc.folder_id);
+        for (const a of assignments || []) {
+          if (await isCourseTeacher(user.id, a.course_id)) { allowed = true; break; }
+        }
+      }
+      if (!allowed) return res.status(403).json({ error: 'Geen rechten voor dit document' });
+    }
+
+    const result = await processDocxCore(doc, null);
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[process-docx] Fout:', err);
     return res.status(err.status || 500).json({ error: err.message });
   }
 });

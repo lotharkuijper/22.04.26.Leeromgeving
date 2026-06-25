@@ -18,6 +18,15 @@ function isPptx(fileName: string): boolean {
   return fileName.split('.').pop()?.toLowerCase() === 'pptx';
 }
 
+// Pagineerbare Word-bronnen worden server-side verwerkt (Task #377): LibreOffice
+// converteert .docx → PDF en per-pagina tekstextractie koppelt elke chunk aan
+// zijn paginanummer(s), net zoals bij PDF's.
+const DOCX_PAGED_EXT = new Set(['docx', 'doc', 'odt']);
+function isDocx(fileName: string): boolean {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  return DOCX_PAGED_EXT.has(ext);
+}
+
 // PowerPoint wordt server-side verwerkt: dia's + sprekersnotities worden
 // uitgelezen en semantisch gechunkt (LLM) op de server. De server haalt het
 // bestand zelf uit storage op basis van het document-id.
@@ -92,6 +101,28 @@ async function insertChunkBatch(records: ChunkRecord[]): Promise<{ stored: numbe
     }
   }
   return { stored, skipped };
+}
+
+// Word-document (.docx/.doc/.odt) server-side verwerken met paginanummers. De
+// server haalt het bestand zelf uit storage op basis van het document-id.
+async function processDocxOnServer(documentId: string): Promise<number> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error('Niet geauthenticeerd');
+
+  const res = await fetch('/api/admin/process-docx', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ documentId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.error || `Word-verwerking mislukt (${res.status})`);
+  }
+  return data.totalChunks ?? 0;
 }
 
 export async function uploadDocument(
@@ -186,6 +217,32 @@ export async function uploadDocument(
           stage: 'completed',
           progress: 100,
           message: 'PowerPoint succesvol verwerkt!',
+          totalChunks,
+        });
+        return { documentId: docData.id };
+      } catch (err) {
+        await supabase
+          .from('documents')
+          .update({ processing_status: 'failed' })
+          .eq('id', docData.id);
+        throw err;
+      }
+    }
+
+    // Word-bronnen server-side verwerken zodat chunks paginanummers krijgen
+    // (LibreOffice→PDF + per-pagina tekst). De server schrijft chunks + status.
+    if (isDocx(file.name)) {
+      onProgress?.({
+        stage: 'generating',
+        progress: 50,
+        message: 'Word-document verwerken op de server (paginanummers)...',
+      });
+      try {
+        const totalChunks = await processDocxOnServer(docData.id);
+        onProgress?.({
+          stage: 'completed',
+          progress: 100,
+          message: 'Word-document succesvol verwerkt!',
           totalChunks,
         });
         return { documentId: docData.id };
@@ -329,6 +386,41 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
           stage: 'completed',
           progress: 100,
           message: 'PowerPoint succesvol verwerkt!',
+          totalChunks,
+        });
+        return;
+      } catch (err) {
+        await supabase
+          .from('documents')
+          .update({ processing_status: 'failed' })
+          .eq('id', documentId);
+        onProgress?.({
+          stage: 'error',
+          progress: 0,
+          message: err instanceof Error ? err.message : 'Unknown error occurred',
+        });
+        throw err;
+      }
+    }
+
+    // Word server-side opnieuw verwerken (server ruimt oude chunks op, converteert
+    // naar PDF voor paginanummers en zet de status zelf).
+    if (DOCX_PAGED_EXT.has((doc.file_type || '').toLowerCase()) || isDocx(doc.file_path || '')) {
+      await supabase
+        .from('documents')
+        .update({ processing_status: 'processing' })
+        .eq('id', documentId);
+      onProgress?.({
+        stage: 'generating',
+        progress: 50,
+        message: 'Word-document verwerken op de server (paginanummers)...',
+      });
+      try {
+        const totalChunks = await processDocxOnServer(documentId);
+        onProgress?.({
+          stage: 'completed',
+          progress: 100,
+          message: 'Word-document succesvol verwerkt!',
           totalChunks,
         });
         return;

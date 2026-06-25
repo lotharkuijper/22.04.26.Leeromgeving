@@ -14,6 +14,10 @@ const CONVERSION_TIMEOUT_MS = 90_000;
 
 // Extensies die we via LibreOffice naar PDF converteren voor weergave.
 export const CONVERT_TO_PDF_EXT = new Set(['docx', 'doc', 'pptx', 'ppt', 'odt', 'odp']);
+// Pagineerbare Word-bronnen die tijdens RAG-ingestie via LibreOffice→PDF een
+// paginanummer per chunk krijgen (Task #377). PowerPoint (pptx/ppt/odp) gebruikt
+// dia-nummering en loopt via processPptxCore, niet hierlangs.
+export const DOCX_PAGED_EXT = new Set(['docx', 'doc', 'odt']);
 // Extensies die rechtstreeks (zonder conversie) als PDF te tonen zijn.
 export const NATIVE_PDF_EXT = new Set(['pdf']);
 // Platte-tekst extensies die als tekst in de viewer komen.
