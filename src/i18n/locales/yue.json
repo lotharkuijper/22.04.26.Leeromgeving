@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "而家處理緊：{url}",
   "admin.imports.web.noticeDone": "完成 — 已匯入 {imported} 個，略過 {skipped} 個，{errors} 個錯誤（{chunks} 個 chunks）。",
   "admin.imports.web.noticeImportFailed": "匯入失敗：{error}",
+  "admin.imports.web.noticeInterrupted": "連線喺 {total} 頁中處理咗 {processed} 頁之後中斷 — 已處理嘅頁面已儲存。請重新執行匯入以擷取其餘內容；未變更嘅頁面會被略過。",
+  "admin.imports.web.statusUnchanged": "未變更",
   "admin.imports.web.unknownError": "未知錯誤",
   "admin.noAccess.title": "冇存取權限",
   "admin.noAccess.desc": "你冇權限存取管理面板。請聯絡管理員。",

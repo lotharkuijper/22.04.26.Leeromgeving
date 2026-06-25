@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "現在処理中: {url}",
   "admin.imports.web.noticeDone": "完了 — {imported} 件をインポート、{skipped} 件をスキップ、{errors} 件のエラー（{chunks} チャンク）。",
   "admin.imports.web.noticeImportFailed": "インポートに失敗しました: {error}",
+  "admin.imports.web.noticeInterrupted": "{total}ページ中{processed}ページの処理後に接続が切断されました — 処理済みのページは保存されています。残りを取得するにはインポートをもう一度実行してください。変更のないページはスキップされます。",
+  "admin.imports.web.statusUnchanged": "変更なし",
   "admin.imports.web.unknownError": "不明なエラー",
   "admin.noAccess.title": "アクセス権がありません",
   "admin.noAccess.desc": "管理パネルにアクセスできません。管理者に連絡してください。",

@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Nu bezig: {url}",
   "admin.imports.web.noticeDone": "Klaar — {imported} geïmporteerd, {skipped} overgeslagen, {errors} fouten ({chunks} chunks).",
   "admin.imports.web.noticeImportFailed": "Importeren mislukt: {error}",
+  "admin.imports.web.noticeInterrupted": "Verbinding verbroken na {processed} van {total} pagina('s) — de verwerkte pagina's zijn opgeslagen. Voer de import opnieuw uit om de rest op te halen; ongewijzigde pagina's worden overgeslagen.",
+  "admin.imports.web.statusUnchanged": "Ongewijzigd",
   "admin.imports.web.unknownError": "Onbekende fout",
   "admin.noAccess.title": "Geen Toegang",
   "admin.noAccess.desc": "Je hebt geen toegang tot het beheerderspaneel. Neem contact op met de administrator.",

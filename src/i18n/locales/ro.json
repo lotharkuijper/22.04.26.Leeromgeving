@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Acum se procesează: {url}",
   "admin.imports.web.noticeDone": "Gata — {imported} importate, {skipped} omise, {errors} erori ({chunks} fragmente).",
   "admin.imports.web.noticeImportFailed": "Importul a eșuat: {error}",
+  "admin.imports.web.noticeInterrupted": "Conexiune întreruptă după {processed} din {total} pagină(i) — paginile procesate au fost salvate. Rulează din nou importul pentru a prelua restul; paginile nemodificate vor fi omise.",
+  "admin.imports.web.statusUnchanged": "Nemodificat",
   "admin.imports.web.unknownError": "Eroare necunoscută",
   "admin.noAccess.title": "Fără acces",
   "admin.noAccess.desc": "Nu ai acces la panoul de administrare. Contactează administratorul.",

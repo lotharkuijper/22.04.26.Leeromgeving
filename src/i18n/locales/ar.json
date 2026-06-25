@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "جارٍ الآن: {url}",
   "admin.imports.web.noticeDone": "تم — {imported} مستوردة، {skipped} متجاوزة، {errors} أخطاء ({chunks} مقاطع).",
   "admin.imports.web.noticeImportFailed": "فشل الاستيراد: {error}",
+  "admin.imports.web.noticeInterrupted": "انقطع الاتصال بعد معالجة {processed} من أصل {total} صفحة — تم حفظ الصفحات المعالجة. شغّل الاستيراد مرة أخرى لجلب الباقي؛ سيتم تخطي الصفحات غير المتغيرة.",
+  "admin.imports.web.statusUnchanged": "غير متغير",
   "admin.imports.web.unknownError": "خطأ غير معروف",
   "admin.noAccess.title": "لا يوجد وصول",
   "admin.noAccess.desc": "ليس لديك وصول إلى لوحة الإدارة. تواصل مع المدير.",

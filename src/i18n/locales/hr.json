@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Trenutno u tijeku: {url}",
   "admin.imports.web.noticeDone": "Gotovo — {imported} uvezeno, {skipped} preskočeno, {errors} pogrešaka ({chunks} dijelova).",
   "admin.imports.web.noticeImportFailed": "Uvoz nije uspio: {error}",
+  "admin.imports.web.noticeInterrupted": "Veza je prekinuta nakon {processed} od {total} stranica — obrađene stranice su spremljene. Ponovno pokreni uvoz kako bi dohvatio/la ostatak; nepromijenjene stranice bit će preskočene.",
+  "admin.imports.web.statusUnchanged": "Nepromijenjeno",
   "admin.imports.web.unknownError": "Nepoznata pogreška",
   "admin.noAccess.title": "Nema pristupa",
   "admin.noAccess.desc": "Nemaš pristup administratorskoj ploči. Obrati se administratoru.",

@@ -154,6 +154,7 @@ const ENV_KEYS = [
   'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT',
   'VITE_PUBLIC_SUPABASE_URL', 'VITE_PUBLIC_SUPABASE_ANON_KEY',
   'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_DB_URL',
+  'WEB_IMPORT_HEARTBEAT_MS', 'WEB_IMPORT_PAGE_PACING_MS',
 ];
 
 beforeAll(async () => {
@@ -168,8 +169,17 @@ beforeAll(async () => {
   process.env.VITE_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
   delete process.env.SUPABASE_DB_URL; // geen pg-pool nodig
+  // Task #391: heartbeat-interval = de (geklemde) minimum van 1000ms; pacing uit
+  // zodat de tests niet onnodig wachten tussen pagina's.
+  process.env.WEB_IMPORT_HEARTBEAT_MS = '1000';
+  process.env.WEB_IMPORT_PAGE_PACING_MS = '0';
 
-  ({ app } = await import('../index.js'));
+  const mod = await import('../index.js');
+  app = mod.app;
+  // De content_hash-startupdetectie draait niet onder NODE_ENV=test; zet de vlag
+  // hier expliciet aan zodat de top-up/skip-paden getest worden (de in-memory
+  // stub kent de kolom en geeft geen fout terug).
+  await mod.detectDocumentsContentHash();
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
 });
@@ -468,11 +478,109 @@ describe('POST /api/admin/import-web/import', () => {
 
     const second = await post('/api/admin/import-web/import', payload);
     expect(second.status).toBe(200);
-    expect(second.body.imported).toBe(1);
-    // Nog steeds één document; chunks vervangen, niet verdubbeld.
+    // Task #391: identieke content → ongewijzigd, dus overgeslagen i.p.v. opnieuw
+    // embedden (goedkope top-up). Geen nieuw document, chunks blijven intact.
+    expect(second.body.imported).toBe(0);
+    expect(second.body.skipped).toBe(1);
+    const sResult = second.body.results.find((x) => x.url === BASE + 'a.html');
+    expect(sResult.status).toBe('skipped');
+    expect(sResult.unchanged).toBe(true);
     expect(harness.state.db.tables.documents.length).toBe(1);
     expect(harness.state.db.tables.document_chunks.length).toBe(chunksAfterFirst);
   });
+
+  it('slaat een ongewijzigde pagina over zonder opnieuw te embedden (geen embeddings-call)', async () => {
+    seed({ user: ADMIN });
+    const fetchMock = mockFetch({ [BASE + 'a.html']: page('Hoofdstuk A') });
+    const payload = { courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }] };
+    const embedCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).includes('/embeddings')).length;
+
+    const first = await post('/api/admin/import-web/import', payload);
+    expect(first.body.imported).toBe(1);
+    const embedAfterFirst = embedCalls();
+    expect(embedAfterFirst).toBeGreaterThan(0);
+
+    const second = await post('/api/admin/import-web/import', payload);
+    expect(second.body.imported).toBe(0);
+    expect(second.body.skipped).toBe(1);
+    // De kern van Task #391: een ongewijzigde her-import raakt de (rate-limited)
+    // embeddingdienst niet meer aan.
+    expect(embedCalls()).toBe(embedAfterFirst);
+  });
+
+  it('top-up: her-import met één nieuwe pagina importeert alleen de nieuwe', async () => {
+    seed({ user: ADMIN });
+    mockFetch({ [BASE + 'a.html']: page('Hoofdstuk A'), [BASE + 'b.html']: page('Hoofdstuk B') });
+
+    const first = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }],
+    });
+    expect(first.body.imported).toBe(1);
+
+    const second = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE,
+      pages: [{ url: BASE + 'a.html' }, { url: BASE + 'b.html' }],
+    });
+    expect(second.body.imported).toBe(1); // alleen b
+    expect(second.body.skipped).toBe(1);  // a ongewijzigd
+    const aRes = second.body.results.find((x) => x.url === BASE + 'a.html');
+    const bRes = second.body.results.find((x) => x.url === BASE + 'b.html');
+    expect(aRes.status).toBe('skipped');
+    expect(aRes.unchanged).toBe(true);
+    expect(bRes.status).toBe('imported');
+    expect(harness.state.db.tables.documents.length).toBe(2);
+  });
+
+  it('gewijzigde paginacontent wordt opnieuw geëmbed (imported, niet overgeslagen)', async () => {
+    seed({ user: ADMIN });
+    // mockFetch leest pages[url] bij elke call, dus muteren we het object om de
+    // tweede ophaal andere content te geven → andere hash → opnieuw embedden.
+    const pages = { [BASE + 'a.html']: page('Hoofdstuk A') };
+    mockFetch(pages);
+    const payload = { courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }] };
+
+    const first = await post('/api/admin/import-web/import', payload);
+    expect(first.body.imported).toBe(1);
+
+    pages[BASE + 'a.html'] =
+      `<html><head><title>Hoofdstuk A</title></head><body><main><h1>Hoofdstuk A</h1>` +
+      `<p>${'Volledig herziene en veel langere inhoud over kansrekening en kansverdelingen. '.repeat(12)}</p></main></body></html>`;
+
+    const second = await post('/api/admin/import-web/import', payload);
+    expect(second.body.imported).toBe(1);
+    expect(second.body.skipped).toBe(0);
+    const sResult = second.body.results.find((x) => x.url === BASE + 'a.html');
+    expect(sResult.status).toBe('imported');
+    expect(sResult.unchanged).toBeUndefined();
+    // Eén document (geüpdatet), niet verdubbeld.
+    expect(harness.state.db.tables.documents.length).toBe(1);
+  });
+
+  it('stuurt een heartbeat-ping als de stream lang stil ligt (trage embeddings)', async () => {
+    seed({ user: ADMIN });
+    mockFetch(
+      { [BASE + 'a.html']: page('Hoofdstuk A') },
+      {
+        // Simuleer een trage embedding-call (zoals bij 429-backoff) zodat de
+        // stream langer stil ligt dan het heartbeat-interval (1000ms) en de
+        // server een 'ping' moet sturen om de verbinding open te houden.
+        embeddings: async (opts) => {
+          await new Promise((r) => setTimeout(r, 2500));
+          const inputs = JSON.parse(opts.body).input;
+          return { ok: true, status: 200, json: async () => ({ data: inputs.map(() => ({ embedding: [0.01, 0.02, 0.03] })) }) };
+        },
+      },
+    );
+    const res = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }],
+    });
+    expect(res.status).toBe(200);
+    // De response is NDJSON; het post()-helper verzamelt alle events onder `events`.
+    expect(Array.isArray(res.body.events)).toBe(true);
+    expect(res.body.events.some((e) => e && e.type === 'ping')).toBe(true);
+    // De import zelf slaagt alsnog ná de heartbeat.
+    expect(res.body.imported).toBe(1);
+  }, 15000);
 
   it('herbruikt de bestaande RAG-map bij een tweede import (geen dubbele map)', async () => {
     seed({ user: ADMIN });

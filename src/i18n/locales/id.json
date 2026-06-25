@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Sedang diproses: {url}",
   "admin.imports.web.noticeDone": "Selesai — {imported} diimpor, {skipped} dilewati, {errors} kesalahan ({chunks} chunk).",
   "admin.imports.web.noticeImportFailed": "Impor gagal: {error}",
+  "admin.imports.web.noticeInterrupted": "Koneksi terputus setelah {processed} dari {total} halaman — halaman yang telah diproses sudah disimpan. Jalankan impor lagi untuk mengambil sisanya; halaman yang tidak berubah akan dilewati.",
+  "admin.imports.web.statusUnchanged": "Tidak berubah",
   "admin.imports.web.unknownError": "Kesalahan tidak diketahui",
   "admin.noAccess.title": "Tidak Ada Akses",
   "admin.noAccess.desc": "Kamu tidak memiliki akses ke panel admin. Hubungi administrator.",

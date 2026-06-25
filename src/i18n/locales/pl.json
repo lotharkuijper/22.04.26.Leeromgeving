@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Teraz przetwarzane: {url}",
   "admin.imports.web.noticeDone": "Gotowe — zaimportowano {imported}, pominięto {skipped}, błędy: {errors} ({chunks} fragmentów).",
   "admin.imports.web.noticeImportFailed": "Importowanie nie powiodło się: {error}",
+  "admin.imports.web.noticeInterrupted": "Połączenie przerwane po przetworzeniu {processed} z {total} stron(y) — przetworzone strony zostały zapisane. Uruchom import ponownie, aby pobrać resztę; niezmienione strony zostaną pominięte.",
+  "admin.imports.web.statusUnchanged": "Bez zmian",
   "admin.imports.web.unknownError": "Nieznany błąd",
   "admin.noAccess.title": "Brak dostępu",
   "admin.noAccess.desc": "Nie masz dostępu do panelu administratora. Skontaktuj się z administratorem.",

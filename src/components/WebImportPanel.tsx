@@ -3,6 +3,7 @@ import { Globe, Loader2, CheckCircle, AlertTriangle, XCircle, Info, X, Search, D
 import {
   discoverWebPages,
   importWebPages,
+  WebImportInterruptedError,
   type DiscoveredPage,
   type WebImportResult,
   type WebImportProgress,
@@ -114,12 +115,25 @@ export function WebImportPanel() {
         }),
       });
     } catch (err) {
-      setNotice({
-        kind: 'error',
-        message: t('admin.imports.web.noticeImportFailed', {
-          error: err instanceof Error ? err.message : t('admin.imports.web.unknownError'),
-        }),
-      });
+      if (err instanceof WebImportInterruptedError) {
+        // De stream is afgekapt (proxy-timeout), maar de tot dan toe verwerkte
+        // pagina's zijn opgeslagen. Toon een waarschuwing i.p.v. een harde fout:
+        // opnieuw draaien is veilig (ongewijzigde pagina's worden overgeslagen).
+        setNotice({
+          kind: 'warning',
+          message: t('admin.imports.web.noticeInterrupted', {
+            processed: String(err.processed),
+            total: String(err.total),
+          }),
+        });
+      } else {
+        setNotice({
+          kind: 'error',
+          message: t('admin.imports.web.noticeImportFailed', {
+            error: err instanceof Error ? err.message : t('admin.imports.web.unknownError'),
+          }),
+        });
+      }
     }
     setImporting(false);
     setProgress(null);
@@ -311,13 +325,18 @@ export function WebImportPanel() {
 
           {result.results.some((r) => r.status !== 'imported') && (
             <div className="text-xs text-gray-600 bg-gray-50 rounded p-3 space-y-1" data-testid="text-web-import-details">
-              {result.results.filter((r) => r.status !== 'imported').map((r) => (
-                <div key={r.url} className="truncate">
-                  <span className={r.status === 'error' ? 'text-red-600' : 'text-yellow-700'}>
-                    {r.status === 'error' ? t('admin.imports.web.statusError') : t('admin.imports.web.statusSkipped')}
-                  </span>{' '}— {r.url}{r.message ? ` (${r.message})` : ''}
-                </div>
-              ))}
+              {result.results.filter((r) => r.status !== 'imported').map((r) => {
+                // Ongewijzigde pagina's krijgen een gelokaliseerd label i.p.v. het
+                // ruwe server-bericht ('Ongewijzigd'), zodat het in elke UI-taal klopt.
+                const detail = r.unchanged ? t('admin.imports.web.statusUnchanged') : r.message;
+                return (
+                  <div key={r.url} className="truncate">
+                    <span className={r.status === 'error' ? 'text-red-600' : 'text-yellow-700'}>
+                      {r.status === 'error' ? t('admin.imports.web.statusError') : t('admin.imports.web.statusSkipped')}
+                    </span>{' '}— {r.url}{detail ? ` (${detail})` : ''}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

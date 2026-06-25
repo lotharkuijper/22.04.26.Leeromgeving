@@ -67,6 +67,7 @@ import {
   WEB_IMPORT_LIMITS,
 } from './webImport.js';
 import { promises as dnsPromises } from 'node:dns';
+import { createHash } from 'node:crypto';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from './openaiSampling.js';
 import { computeChatConfig } from './chatConfig.js';
 import {
@@ -432,6 +433,23 @@ async function detectQuizAttemptsSchema() {
   } catch (e) {
     quizAttemptsHasNewSchema = false;
     console.warn('[API Server] quiz_attempts schema detectie mislukt:', e.message);
+  }
+}
+
+// Task #391: documents.content_hash maakt de website-import een goedkope top-up:
+// een ongewijzigde pagina wordt bij her-import overgeslagen i.p.v. opnieuw
+// geëmbed. Detecteer defensief of de migratie is toegepast; zonder de kolom valt
+// de import terug op het oude gedrag (altijd opnieuw embedden).
+let documentsHasContentHash = false;
+async function detectDocumentsContentHash() {
+  if (!supabaseAdmin) return;
+  try {
+    const { error } = await supabaseAdmin.from('documents').select('content_hash').limit(1);
+    documentsHasContentHash = !error || !/content_hash/.test(error.message || '');
+    console.log(`[API Server] documents.content_hash: ${documentsHasContentHash ? 'beschikbaar' : 'niet gemigreerd — web-import embedt altijd opnieuw'}`);
+  } catch (e) {
+    documentsHasContentHash = false;
+    console.warn('[API Server] documents.content_hash detectie mislukt:', e.message);
   }
 }
 
@@ -2107,6 +2125,18 @@ app.delete('/api/admin/documents/:documentId', async (req, res) => {
 const EMBEDDINGS_BATCH_PACING_MS = 250;
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Task #391: web-import-stabiliteit.
+// - HEARTBEAT_MS: tijdens het trage per-pagina-werk (ophalen + embeddings, incl.
+//   429-backoff van max ~5×60s) wordt er minutenlang niets naar de stream
+//   geschreven. Een tussenliggende proxy kan zo'n inactieve verbinding afkappen
+//   vóór het 'done'-event. We sturen daarom een 'ping' zodra de stream langer dan
+//   dit interval stil is.
+// - PAGE_PACING_MS: kleine pauze ná elke verwerkte pagina om de embedding-bursts
+//   over de tijd te spreiden en de Azure-snelheidslimiet minder snel te raken.
+// Beide zijn via env instelbaar (tests zetten ze laag/0).
+const WEB_IMPORT_HEARTBEAT_MS = Math.max(1000, Number(process.env.WEB_IMPORT_HEARTBEAT_MS) || 15000);
+const WEB_IMPORT_PAGE_PACING_MS = Math.max(0, Number(process.env.WEB_IMPORT_PAGE_PACING_MS ?? 500));
+
 // Één embeddings-batch via Azure met herhaalpoging + backoff bij 429
 // (snelheidslimiet). Injecteert de echte server-afhankelijkheden in de
 // testbare helper uit ./embeddingsRetry.js.
@@ -2702,6 +2732,12 @@ app.post('/api/admin/import-web/import', async (req, res) => {
 
   if (!AZURE_EMBEDDINGS_READY) return res.status(503).json({ error: EMBEDDINGS_NOT_CONFIGURED_MSG });
 
+  // Stream-stabiliteit (Task #391): in buiten-try-scope zodat de catch ze ook kan
+  // opruimen. clientGone wordt true zodra de client de verbinding verbreekt.
+  let heartbeat = null;
+  let clientGone = false;
+  let lastWrite = Date.now();
+
   try {
     const { data: course } = await supabaseAdmin
       .from('courses').select('id, name').eq('id', courseId).maybeSingle();
@@ -2749,117 +2785,205 @@ app.post('/api/admin/import-web/import', async (req, res) => {
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
     });
-    const emit = (event) => {
-      res.write(JSON.stringify(event) + '\n');
-      if (typeof res.flush === 'function') res.flush();
+
+    // Markeer een verbroken client zodat we de lus stoppen en geen 'done' meer
+    // proberen te schrijven (write-na-close gooit een EPIPE-achtige fout).
+    res.on('close', () => { clientGone = true; });
+
+    // safeEmit schrijft alleen als de client er nog is en verschuift lastWrite,
+    // wat de heartbeat gebruikt om te bepalen of de stream stil is.
+    const safeEmit = (event) => {
+      if (clientGone) return false;
+      try {
+        res.write(JSON.stringify(event) + '\n');
+        if (typeof res.flush === 'function') res.flush();
+        lastWrite = Date.now();
+        return true;
+      } catch {
+        clientGone = true;
+        return false;
+      }
     };
-    emit({ type: 'start', total: targets.length });
+
+    // Heartbeat (Task #391): per pagina kan het minutenlang stil zijn (ophalen +
+    // embeddings, incl. 429-backoff van max ~5×60s). Een tussenliggende proxy kapt
+    // zo'n inactieve verbinding af vóór het 'done'-event ("Onvolledig antwoord van
+    // de server"). We sturen daarom een 'ping' zodra de stream lang genoeg stil is;
+    // .unref() zorgt dat de timer het proces nooit openhoudt.
+    heartbeat = setInterval(() => {
+      if (clientGone) return;
+      if (Date.now() - lastWrite >= WEB_IMPORT_HEARTBEAT_MS) {
+        safeEmit({ type: 'ping', ts: Date.now() });
+      }
+    }, WEB_IMPORT_HEARTBEAT_MS);
+    if (typeof heartbeat.unref === 'function') heartbeat.unref();
+
+    safeEmit({ type: 'start', total: targets.length });
+
+    // Verwerk één doel-URL. Levert een resultaat-object + interne `counter` op
+    // (welke teller buiten opgehoogd moet worden), maar muteert zelf geen tellers.
+    // Belangrijk voor consistentie: embeddings (de trage, faalbare stap) draaien
+    // VÓÓR we de bestaande rij resetten, zodat een mislukte pagina de vorige
+    // 'completed'-staat met geldige chunks ongemoeid laat. De rij wordt pas op
+    // 'completed' + total_chunks + content_hash gezet NÁ een geslaagde chunk-insert,
+    // zodat geldt: completed + total_chunks>0 ⟺ er bestaan chunks.
+    const processPage = async (target) => {
+      const resp = await fetchWebPage(target.url, fetch, { scope, lookup: resolveHostAddresses });
+      if (!resp.ok) {
+        return { url: target.url, status: 'error', counter: 'errors', message: resp.error || `HTTP ${resp.status || 'netwerkfout'}` };
+      }
+      // Verdedigend: ook al checkt fetchWebPage redirects tegen de scope, valideer
+      // de uiteindelijke URL nog eens zodat content buiten de webomgeving nooit
+      // als RAG-bron belandt.
+      if (resp.finalUrl && (isBlockedWebHost(resp.finalUrl) || !sameWebEnv(scope, resp.finalUrl))) {
+        return { url: target.url, status: 'skipped', counter: 'outOfScope', message: 'Redirect buiten de website-scope' };
+      }
+      const text = webHtmlToText(resp.html);
+      if (text.length < WEB_IMPORT_LIMITS.MIN_TEXT_CHARS) {
+        return { url: target.url, status: 'skipped', counter: 'skipped', message: 'Te weinig leesbare tekst' };
+      }
+      const title = (target.title || webExtractTitle(resp.html) || target.url).slice(0, 280);
+      const chunks = chunkPlainText(text);
+      if (!chunks.length) {
+        return { url: target.url, status: 'skipped', counter: 'skipped', message: 'Geen chunks' };
+      }
+
+      // Idempotent: bestaande web-bron voor dezelfde URL in deze map opzoeken.
+      const selectCols = documentsHasContentHash
+        ? 'id, content_hash, processing_status, total_chunks'
+        : 'id';
+      const { data: existingDoc } = await supabaseAdmin
+        .from('documents')
+        .select(selectCols)
+        .eq('folder_id', folderId)
+        .eq('file_path', target.url)
+        .eq('file_type', 'web')
+        .maybeSingle();
+
+      // Goedkope top-up: een ongewijzigde, al volledig geëmbedde pagina overslaan
+      // zónder opnieuw te embedden. Zo overleeft een her-import na een afgekapte
+      // stream de Azure-snelheidslimiet en hoeft de docent enkel opnieuw te draaien.
+      const contentHash = documentsHasContentHash
+        ? createHash('sha256').update(text).digest('hex')
+        : null;
+      if (
+        documentsHasContentHash &&
+        existingDoc &&
+        existingDoc.content_hash &&
+        existingDoc.content_hash === contentHash &&
+        existingDoc.processing_status === 'completed' &&
+        Number(existingDoc.total_chunks) > 0
+      ) {
+        return { url: target.url, status: 'skipped', counter: 'skipped', message: 'Ongewijzigd', title, unchanged: true };
+      }
+
+      const embeddings = await embedTextsServer(chunks, null);
+
+      let docId;
+      if (existingDoc) {
+        docId = existingDoc.id;
+        // Eerst terug naar 'processing' + tel/hash wissen, dan pas de oude chunks
+        // verwijderen: zo blijft de rij nooit als 'completed' staan terwijl de
+        // chunks al weg zijn (consistente staat bij een afgekapte run).
+        const resetUpd = { processing_status: 'processing', total_chunks: 0 };
+        if (documentsHasContentHash) resetUpd.content_hash = null;
+        const { error: resetErr } = await supabaseAdmin.from('documents').update(resetUpd).eq('id', docId);
+        if (resetErr) throw new Error(`Kon document niet resetten: ${resetErr.message}`);
+        const { error: delErr } = await supabaseAdmin
+          .from('document_chunks').delete().eq('document_id', docId);
+        if (delErr) throw new Error(`Kon oude chunks niet verwijderen: ${delErr.message}`);
+      } else {
+        const insertRow = {
+          title,
+          filename: title,
+          file_path: target.url,
+          file_type: 'web',
+          bucket: 'rag_sources',
+          folder_id: folderId,
+          mime_type: 'text/html',
+          processing_status: 'processing',
+          total_chunks: 0,
+          uploaded_by: r.user.id,
+        };
+        const { data: newDoc, error: docErr } = await supabaseAdmin
+          .from('documents').insert(insertRow).select('id').single();
+        if (docErr || !newDoc) throw new Error(docErr?.message || 'Kon document niet aanmaken');
+        docId = newDoc.id;
+      }
+
+      const rows = chunks.map((content, idx) => ({
+        document_id: docId,
+        content,
+        embedding: embeddings[idx],
+        chunk_index: idx,
+        metadata: { source: 'web', sourceUrl: target.url },
+      }));
+      const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
+      if (insErr) throw new Error(insErr.message);
+
+      // Pas ná de geslaagde chunk-insert markeren we 'completed' met de juiste
+      // telling + hash (de hash maakt de volgende import idempotent/top-up).
+      const finalizeUpd = {
+        title,
+        filename: title,
+        mime_type: 'text/html',
+        processing_status: 'completed',
+        total_chunks: chunks.length,
+      };
+      if (documentsHasContentHash) finalizeUpd.content_hash = contentHash;
+      const { error: finErr } = await supabaseAdmin.from('documents').update(finalizeUpd).eq('id', docId);
+      if (finErr) throw new Error(`Kon document niet afronden: ${finErr.message}`);
+
+      return { url: target.url, status: 'imported', counter: 'imported', title, chunks: chunks.length };
+    };
 
     for (let i = 0; i < targets.length; i++) {
+      // Stop netjes als de client weg is: geen nieuwe (dure) pagina meer beginnen.
+      if (clientGone) break;
       const target = targets[i];
-      emit({ type: 'progress', index: i + 1, total: targets.length, url: target.url, title: target.title || '' });
+      safeEmit({ type: 'progress', index: i + 1, total: targets.length, url: target.url, title: target.title || '' });
+      let publicResult;
       try {
-        const resp = await fetchWebPage(target.url, fetch, { scope, lookup: resolveHostAddresses });
-        if (!resp.ok) {
-          errors++;
-          results.push({ url: target.url, status: 'error', message: resp.error || `HTTP ${resp.status || 'netwerkfout'}` });
-          continue;
-        }
-        // Verdedigend: ook al checkt fetchWebPage redirects tegen de scope, valideer
-        // de uiteindelijke URL nog eens zodat content buiten de webomgeving nooit
-        // als RAG-bron belandt.
-        if (resp.finalUrl && (isBlockedWebHost(resp.finalUrl) || !sameWebEnv(scope, resp.finalUrl))) {
-          outOfScope++;
-          results.push({ url: target.url, status: 'skipped', message: 'Redirect buiten de website-scope' });
-          continue;
-        }
-        const text = webHtmlToText(resp.html);
-        if (text.length < WEB_IMPORT_LIMITS.MIN_TEXT_CHARS) {
-          skipped++;
-          results.push({ url: target.url, status: 'skipped', message: 'Te weinig leesbare tekst' });
-          continue;
-        }
-        const title = (target.title || webExtractTitle(resp.html) || target.url).slice(0, 280);
-        const chunks = chunkPlainText(text);
-        if (!chunks.length) {
-          skipped++;
-          results.push({ url: target.url, status: 'skipped', message: 'Geen chunks' });
-          continue;
-        }
-        const embeddings = await embedTextsServer(chunks, null);
-
-        // Idempotent: bestaande web-bron voor dezelfde URL in deze map hergebruiken.
-        const { data: existingDoc } = await supabaseAdmin
-          .from('documents')
-          .select('id')
-          .eq('folder_id', folderId)
-          .eq('file_path', target.url)
-          .eq('file_type', 'web')
-          .maybeSingle();
-
-        let docId;
-        if (existingDoc) {
-          docId = existingDoc.id;
-          const { error: delErr } = await supabaseAdmin
-            .from('document_chunks').delete().eq('document_id', docId);
-          if (delErr) throw new Error(`Kon oude chunks niet verwijderen: ${delErr.message}`);
-          const { error: updErr } = await supabaseAdmin.from('documents').update({
-            title,
-            filename: title,
-            mime_type: 'text/html',
-            processing_status: 'completed',
-            total_chunks: chunks.length,
-          }).eq('id', docId);
-          if (updErr) throw new Error(`Kon document niet bijwerken: ${updErr.message}`);
-        } else {
-          const { data: newDoc, error: docErr } = await supabaseAdmin
-            .from('documents')
-            .insert({
-              title,
-              filename: title,
-              file_path: target.url,
-              file_type: 'web',
-              bucket: 'rag_sources',
-              folder_id: folderId,
-              mime_type: 'text/html',
-              processing_status: 'completed',
-              total_chunks: chunks.length,
-              uploaded_by: r.user.id,
-            })
-            .select('id')
-            .single();
-          if (docErr || !newDoc) throw new Error(docErr?.message || 'Kon document niet aanmaken');
-          docId = newDoc.id;
-        }
-
-        const rows = chunks.map((content, i) => ({
-          document_id: docId,
-          content,
-          embedding: embeddings[i],
-          chunk_index: i,
-          metadata: { source: 'web', sourceUrl: target.url },
-        }));
-        const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
-        if (insErr) throw new Error(insErr.message);
-
-        imported++;
-        totalChunks += chunks.length;
-        results.push({ url: target.url, status: 'imported', title, chunks: chunks.length });
+        const { counter, ...rest } = await processPage(target);
+        publicResult = rest;
+        if (counter === 'imported') { imported++; totalChunks += rest.chunks || 0; }
+        else if (counter === 'outOfScope') outOfScope++;
+        else if (counter === 'errors') errors++;
+        else skipped++;
       } catch (err) {
         errors++;
-        results.push({ url: target.url, status: 'error', message: err.message || 'Onbekende fout' });
+        publicResult = { url: target.url, status: 'error', message: err.message || 'Onbekende fout' };
         console.error(`[import-web/import] pagina mislukt (${target.url}):`, err.message);
+      }
+      results.push(publicResult);
+      // page_done geeft de client een betrouwbare per-pagina-telling: 'progress'
+      // vuurt VÓÓR het werk, dus alleen page_done bewijst dat pagina i klaar is.
+      safeEmit({ type: 'page_done', index: i + 1, total: targets.length, status: publicResult.status, url: publicResult.url, result: publicResult });
+
+      // Kleine pauze tussen pagina's om de embedding-bursts te spreiden en de
+      // Azure-snelheidslimiet minder snel te raken (overslaan bij de laatste of
+      // als de client al weg is).
+      if (!clientGone && WEB_IMPORT_PAGE_PACING_MS > 0 && i < targets.length - 1) {
+        await sleepMs(WEB_IMPORT_PAGE_PACING_MS);
       }
     }
 
-    emit({ type: 'done', imported, skipped, errors, outOfScope, totalChunks, folderId, courseName: course.name, results });
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    if (!clientGone) {
+      safeEmit({ type: 'done', imported, skipped, errors, outOfScope, totalChunks, folderId, courseName: course.name, results });
+    } else {
+      console.warn(`[import-web/import] client verbroken — ${imported} geïmporteerd, ${skipped} overgeslagen van ${targets.length} pagina's voor de verbinding sloot. Her-import slaat ongewijzigde pagina's over.`);
+    }
     return res.end();
   } catch (err) {
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
     console.error('[import-web/import] fout:', err);
     // Als het streamen al begonnen is kunnen we de status niet meer wijzigen;
     // meld de fout dan als event en sluit de stream netjes af.
     if (res.headersSent) {
-      try { res.write(JSON.stringify({ type: 'error', error: err.message || 'Web-import mislukt.' }) + '\n'); } catch {}
+      if (!clientGone) {
+        try { res.write(JSON.stringify({ type: 'error', error: err.message || 'Web-import mislukt.' }) + '\n'); } catch {}
+      }
       return res.end();
     }
     return res.status(500).json({ error: err.message || 'Web-import mislukt.' });
@@ -13700,6 +13824,7 @@ if (process.env.NODE_ENV !== 'test') {
     detectQuizAttemptsSchema();
     detectQuizSourcesSchema();
     detectConceptEvidenceSchema();
+    detectDocumentsContentHash();
     initChatbotPromptSection();
     // Wacht kort tot promptsHasSection geinitialiseerd is alvorens quiz-prompts
     // aan te maken (initChatbotPromptSection draait async).
@@ -13721,4 +13846,4 @@ if (process.env.NODE_ENV !== 'test') {
   });
 }
 
-export { app };
+export { app, detectDocumentsContentHash };

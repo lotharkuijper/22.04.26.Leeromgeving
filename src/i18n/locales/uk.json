@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Зараз обробляється: {url}",
   "admin.imports.web.noticeDone": "Готово — імпортовано: {imported}, пропущено: {skipped}, помилок: {errors} ({chunks} фрагментів).",
   "admin.imports.web.noticeImportFailed": "Не вдалося імпортувати: {error}",
+  "admin.imports.web.noticeInterrupted": "З’єднання розірвано після {processed} з {total} сторінок — оброблені сторінки збережено. Запусти імпорт ще раз, щоб отримати решту; незмінені сторінки буде пропущено.",
+  "admin.imports.web.statusUnchanged": "Без змін",
   "admin.imports.web.unknownError": "Невідома помилка",
   "admin.noAccess.title": "Немає доступу",
   "admin.noAccess.desc": "Ти не маєш доступу до панелі адміністратора. Звернися до адміністратора.",

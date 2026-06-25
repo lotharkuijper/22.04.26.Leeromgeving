@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "अभी चल रहा है: {url}",
   "admin.imports.web.noticeDone": "पूरा हुआ — {imported} आयात किए गए, {skipped} छोड़े गए, {errors} त्रुटियाँ ({chunks} chunks)।",
   "admin.imports.web.noticeImportFailed": "आयात विफल: {error}",
+  "admin.imports.web.noticeInterrupted": "{total} में से {processed} पेज के बाद कनेक्शन टूट गया — प्रोसेस किए गए पेज सेव कर दिए गए हैं। बाकी पाने के लिए इम्पोर्ट फिर से चलाओ; बिना बदलाव वाले पेज छोड़ दिए जाएँगे।",
+  "admin.imports.web.statusUnchanged": "बिना बदलाव",
   "admin.imports.web.unknownError": "अज्ञात त्रुटि",
   "admin.noAccess.title": "पहुँच नहीं है",
   "admin.noAccess.desc": "तुम्हारे पास व्यवस्थापक पैनल तक पहुँच नहीं है। कृपया एडमिनिस्ट्रेटर से संपर्क करो।",

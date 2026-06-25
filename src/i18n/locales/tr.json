@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Şu anda işleniyor: {url}",
   "admin.imports.web.noticeDone": "Hazır — {imported} içe aktarıldı, {skipped} atlandı, {errors} hata ({chunks} parça).",
   "admin.imports.web.noticeImportFailed": "İçe aktarma başarısız: {error}",
+  "admin.imports.web.noticeInterrupted": "{total} sayfadan {processed} sayfa sonra bağlantı kesildi — işlenen sayfalar kaydedildi. Kalanları almak için içe aktarmayı yeniden çalıştır; değişmemiş sayfalar atlanacak.",
+  "admin.imports.web.statusUnchanged": "Değişmedi",
   "admin.imports.web.unknownError": "Bilinmeyen hata",
   "admin.noAccess.title": "Erişim Yok",
   "admin.noAccess.desc": "Yönetici paneline erişimin yok. Lütfen yöneticiyle iletişime geç.",

@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "En cours : {url}",
   "admin.imports.web.noticeDone": "Terminé — {imported} importé(s), {skipped} ignoré(s), {errors} erreur(s) ({chunks} segments).",
   "admin.imports.web.noticeImportFailed": "Échec de l’importation : {error}",
+  "admin.imports.web.noticeInterrupted": "Connexion interrompue après {processed} sur {total} page(s) — les pages traitées ont été enregistrées. Relance l’importation pour récupérer le reste ; les pages inchangées seront ignorées.",
+  "admin.imports.web.statusUnchanged": "Inchangé",
   "admin.imports.web.unknownError": "Erreur inconnue",
   "admin.noAccess.title": "Accès refusé",
   "admin.noAccess.desc": "Tu n’as pas accès au panneau d’administration. Contacte l’administrateur.",

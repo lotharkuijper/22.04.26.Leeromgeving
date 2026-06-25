@@ -864,6 +864,8 @@
   "admin.imports.web.progressCurrent": "Processing now: {url}",
   "admin.imports.web.noticeDone": "Done — {imported} imported, {skipped} skipped, {errors} errors ({chunks} chunks).",
   "admin.imports.web.noticeImportFailed": "Import failed: {error}",
+  "admin.imports.web.noticeInterrupted": "Connection lost after {processed} of {total} page(s) — the processed pages were saved. Run the import again to fetch the rest; unchanged pages are skipped.",
+  "admin.imports.web.statusUnchanged": "Unchanged",
   "admin.imports.web.unknownError": "Unknown error",
   "admin.noAccess.title": "No Access",
   "admin.noAccess.desc": "You do not have access to the admin panel. Please contact the administrator.",

@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "Aktuell: {url}",
   "admin.imports.web.noticeDone": "Fertig — {imported} importiert, {skipped} übersprungen, {errors} Fehler ({chunks} Chunks).",
   "admin.imports.web.noticeImportFailed": "Import fehlgeschlagen: {error}",
+  "admin.imports.web.noticeInterrupted": "Verbindung nach {processed} von {total} Seite(n) unterbrochen — die verarbeiteten Seiten wurden gespeichert. Führe den Import erneut aus, um den Rest abzurufen; unveränderte Seiten werden übersprungen.",
+  "admin.imports.web.statusUnchanged": "Unverändert",
   "admin.imports.web.unknownError": "Unbekannter Fehler",
   "admin.noAccess.title": "Kein Zugriff",
   "admin.noAccess.desc": "Du hast keinen Zugriff auf das Admin-Panel. Wende dich an den Administrator.",

@@ -885,6 +885,8 @@
   "admin.imports.web.progressCurrent": "当前正在处理：{url}",
   "admin.imports.web.noticeDone": "完成——已导入 {imported} 个，已跳过 {skipped} 个，错误 {errors} 个（{chunks} 个分块）。",
   "admin.imports.web.noticeImportFailed": "导入失败：{error}",
+  "admin.imports.web.noticeInterrupted": "在处理 {total} 个页面中的 {processed} 个后连接中断 — 已处理的页面已保存。请重新运行导入以获取其余页面；未更改的页面将被跳过。",
+  "admin.imports.web.statusUnchanged": "未更改",
   "admin.imports.web.unknownError": "未知错误",
   "admin.noAccess.title": "无访问权限",
   "admin.noAccess.desc": "你无权访问管理面板。请联系管理员。",

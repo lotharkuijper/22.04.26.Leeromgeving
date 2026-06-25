@@ -21,6 +21,9 @@ export interface PageImportResult {
   title?: string;
   chunks?: number;
   message?: string;
+  // True wanneer de pagina ongewijzigd was sinds de vorige import (content-hash
+  // match) en daarom is overgeslagen zonder opnieuw te embedden.
+  unchanged?: boolean;
 }
 
 export interface WebImportResult {
@@ -72,6 +75,20 @@ export interface WebImportProgress {
   title: string;
 }
 
+// De stream is afgekapt (bijv. door een proxy-timeout bij een trage import)
+// zónder een 'done'- of 'error'-event. De import is dan deels gelukt; de docent
+// kan veilig opnieuw draaien (ongewijzigde pagina's worden overgeslagen).
+export class WebImportInterruptedError extends Error {
+  processed: number;
+  total: number;
+  constructor(processed: number, total: number) {
+    super('Web-import onderbroken: de verbinding werd verbroken voordat de import klaar was.');
+    this.name = 'WebImportInterruptedError';
+    this.processed = processed;
+    this.total = total;
+  }
+}
+
 // Importeer de geselecteerde pagina's als RAG-bronnen in de gekozen cursus.
 // De server streamt de voortgang als NDJSON; `onProgress` wordt per pagina
 // aangeroepen voordat die verwerkt wordt. Het eindresultaat wordt geretourneerd.
@@ -94,6 +111,10 @@ export async function importWebPages(
   let buffer = '';
   let done: WebImportResult | null = null;
   let streamError: string | null = null;
+  // Voor een nette melding bij een afgekapte stream: hoeveel pagina's er
+  // daadwerkelijk klaar waren ('page_done') van het totaal ('start'/'progress').
+  let total = pages.length;
+  let processed = 0;
 
   const handleLine = (line: string) => {
     const trimmed = line.trim();
@@ -104,30 +125,52 @@ export async function importWebPages(
     } catch {
       return;
     }
-    if (event.type === 'progress') {
+    if (event.type === 'start') {
+      if (typeof event.total === 'number') total = event.total;
+    } else if (event.type === 'progress') {
+      if (typeof event.total === 'number') total = event.total;
       onProgress?.({ current: event.index, total: event.total, url: event.url, title: event.title || '' });
+    } else if (event.type === 'page_done') {
+      // page_done vuurt NÁ het verwerken van een pagina; dit is de betrouwbare
+      // teller (progress vuurt juist vóór het werk).
+      processed += 1;
+      if (typeof event.total === 'number') total = event.total;
     } else if (event.type === 'done') {
       const { type, ...rest } = event;
       done = rest as WebImportResult;
     } else if (event.type === 'error') {
       streamError = event.error || 'Web-import mislukt.';
     }
+    // 'ping' is een heartbeat om de verbinding open te houden; bewust genegeerd.
   };
 
-  for (;;) {
-    const { value, done: streamDone } = await reader.read();
-    if (value) buffer += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buffer.indexOf('\n')) >= 0) {
-      handleLine(buffer.slice(0, idx));
-      buffer = buffer.slice(idx + 1);
+  try {
+    for (;;) {
+      const { value, done: streamDone } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        handleLine(buffer.slice(0, idx));
+        buffer = buffer.slice(idx + 1);
+      }
+      if (streamDone) break;
     }
-    if (streamDone) break;
+    buffer += decoder.decode();
+    if (buffer) handleLine(buffer);
+  } catch {
+    // De stream-read zelf faalde (abrupte TCP/proxy-reset ná de headers, bijv.
+    // bij een trage import onder rate-limiting). Als de server al een expliciete
+    // fout of eindresultaat had gestuurd, respecteren we die hieronder; anders
+    // is dit een afgekapte import → nette waarschuwing i.p.v. een harde fout.
+    if (!done && !streamError) {
+      throw new WebImportInterruptedError(processed, total);
+    }
   }
-  buffer += decoder.decode();
-  if (buffer) handleLine(buffer);
 
   if (streamError) throw new Error(streamError);
-  if (!done) throw new Error('Onvolledig antwoord van de server.');
+  // Geen 'done' ontvangen en geen expliciete fout ⇒ de stream is afgekapt
+  // (proxy-timeout bij een trage import). Meld dit apart zodat de UI een
+  // waarschuwing toont i.p.v. een harde fout — opnieuw draaien is veilig.
+  if (!done) throw new WebImportInterruptedError(processed, total);
   return done;
 }
