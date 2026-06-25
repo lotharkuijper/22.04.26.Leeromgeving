@@ -113,7 +113,6 @@ export function planConceptWrites(validConcepts, existingConcepts, { courseMarke
     } else {
       toInsert.push({
         name: String(c.name).trim(),
-        category: c.category,
         definition: String(c.definition || '').trim(),
         key_points: [courseMarker, ragMarker],
         examples: [],

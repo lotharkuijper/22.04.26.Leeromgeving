@@ -918,7 +918,6 @@ export function QuizSourcesAdminPanel() {
                 <div key={concept.id} className="border border-gray-200 rounded-lg p-3 max-w-xl" data-testid={`mapping-row-${concept.id}`}>
                   <div className="mb-2 min-w-0">
                     <span className="font-medium text-gray-900 break-words">{concept.name}</span>
-                    {concept.category && <span className="ml-2 text-xs text-gray-500">{concept.category}</span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mb-2">
                     <button

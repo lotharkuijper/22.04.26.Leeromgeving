@@ -29,7 +29,6 @@ async function callChatAPI(messages: { role: string; content: string }[], option
 
 export interface ExtractedConcept {
   name: string;
-  category: 'epidemiologie' | 'biostatistiek';
   definition: string;
   keyPoints: string[];
   examples: string[];
@@ -96,12 +95,11 @@ export async function extractConceptsFromDocument(
 
 Voor elk begrip, geef:
 1. name: De naam van het begrip
-2. category: "epidemiologie" of "biostatistiek"
-3. definition: Een heldere definitie (1-2 zinnen)
-4. keyPoints: Array van 2-4 kernpunten over dit begrip
-5. examples: Array van 1-2 voorbeelden (indien aanwezig in de tekst)
-6. chunkIndices: Array van chunk nummers waar dit begrip wordt besproken
-7. confidence: Score tussen 0.0 en 1.0 voor hoe zeker je bent dat dit een belangrijk begrip is
+2. definition: Een heldere definitie (1-2 zinnen)
+3. keyPoints: Array van 2-4 kernpunten over dit begrip
+4. examples: Array van 1-2 voorbeelden (indien aanwezig in de tekst)
+5. chunkIndices: Array van chunk nummers waar dit begrip wordt besproken
+6. confidence: Score tussen 0.0 en 1.0 voor hoe zeker je bent dat dit een belangrijk begrip is
 
 Zoek naar:
 - Termen die gedefinieerd worden
@@ -116,7 +114,6 @@ Voorbeeld output:
 [
   {
     "name": "Relative Risk",
-    "category": "epidemiologie",
     "definition": "De ratio van de incidentie in de exposed groep ten opzichte van de non-exposed groep.",
     "keyPoints": [
       "RR = 1 betekent geen associatie",
@@ -149,7 +146,6 @@ Voorbeeld output:
         .filter((c: any) => c.confidence >= 0.7)
         .map((c: any) => ({
           name: c.name,
-          category: c.category === 'biostatistiek' ? 'biostatistiek' : 'epidemiologie',
           definition: c.definition,
           keyPoints: Array.isArray(c.keyPoints) ? c.keyPoints : [],
           examples: Array.isArray(c.examples) ? c.examples : [],
@@ -187,7 +183,6 @@ Voorbeeld output:
         .from('concepts')
         .insert({
           name: concept.name,
-          category: concept.category,
           definition: concept.definition,
           key_points: concept.keyPoints,
           examples: concept.examples,

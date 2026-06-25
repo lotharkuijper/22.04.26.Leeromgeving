@@ -5,7 +5,7 @@ export interface Topic {
   name: string;
   slug: string;
   description?: string;
-  category: 'epidemiologie' | 'biostatistiek' | 'algemeen';
+  category?: string | null;
   parent_topic_id?: string;
   display_order: number;
   created_at: string;
@@ -27,7 +27,6 @@ export async function getAllTopics(): Promise<Topic[]> {
 
 export async function createTopic(
   name: string,
-  category: 'epidemiologie' | 'biostatistiek' | 'algemeen',
   description?: string,
   parentTopicId?: string
 ): Promise<Topic> {
@@ -42,7 +41,6 @@ export async function createTopic(
       name,
       slug,
       description,
-      category,
       parent_topic_id: parentTopicId,
     })
     .select()

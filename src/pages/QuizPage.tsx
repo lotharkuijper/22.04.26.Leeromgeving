@@ -321,8 +321,7 @@ export function QuizPage() {
   const filteredTopics = useMemo(() => {
     const q = topicSearch.trim().toLowerCase();
     if (!q) return availableTopics;
-    return availableTopics.filter(t => t.name.toLowerCase().includes(q)
-      || (t.category || '').toLowerCase().includes(q));
+    return availableTopics.filter(t => t.name.toLowerCase().includes(q));
   }, [availableTopics, topicSearch]);
 
   const selectedTopics = useMemo(
@@ -754,7 +753,6 @@ export function QuizPage() {
                           />
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-medium text-gray-900 truncate">{topic.name}</div>
-                            {topic.category && <div className="text-xs text-gray-500">{topic.category}</div>}
                           </div>
                         </label>
                       );

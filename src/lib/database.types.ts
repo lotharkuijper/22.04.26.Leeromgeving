@@ -182,7 +182,7 @@ export type Database = {
         Row: {
           id: string
           name: string
-          category: 'epidemiologie' | 'biostatistiek'
+          category: string | null
           definition: string | null
           key_points: string[]
           examples: string[]
@@ -193,7 +193,7 @@ export type Database = {
         Insert: {
           id?: string
           name: string
-          category: 'epidemiologie' | 'biostatistiek'
+          category?: string | null
           definition?: string | null
           key_points?: string[]
           examples?: string[]
@@ -204,7 +204,7 @@ export type Database = {
         Update: {
           id?: string
           name?: string
-          category?: 'epidemiologie' | 'biostatistiek'
+          category?: string | null
           definition?: string | null
           key_points?: string[]
           examples?: string[]

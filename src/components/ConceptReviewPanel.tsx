@@ -212,9 +212,6 @@ export function ConceptReviewPanel() {
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
                     <h4 className="font-semibold text-gray-900">{concept.name}</h4>
-                    <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700 font-semibold">
-                      {concept.category}
-                    </span>
                     {concept.source_document && (
                       <span className="text-xs px-2 py-1 rounded-full bg-green-100 text-green-700">
                         {concept.source_document.title}

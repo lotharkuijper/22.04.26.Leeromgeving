@@ -4790,9 +4790,7 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       .join('\n\n---\n\n')
       .slice(0, 14000);
 
-    // Taal-instructie voor naam + definitie. De categorie blijft altijd de
-    // Nederlandse enum-waarde ("epidemiologie"/"biostatistiek") omdat die
-    // server-side gevalideerd wordt.
+    // Taal-instructie voor naam + definitie.
     const languageDirective = {
       nl: '- name: de gangbare Nederlandse vakterm (internationale Engelse termen mogen als ze zo in het Nederlandse veld gebruikt worden, bv. "odds ratio")\n- definition: een heldere definitie van 1-2 zinnen in het NEDERLANDS',
       en: '- name: the common English term for the concept\n- definition: a clear 1-2 sentence definition in ENGLISH',
@@ -4811,11 +4809,10 @@ Geschikte begrippen omvatten (maar zijn niet beperkt tot):
 
 Geef elk gevonden begrip de volgende velden:
 ${languageDirective}
-- category: precies "epidemiologie" of "biostatistiek"
 
 Geef UITSLUITEND een JSON-array terug, zonder extra tekst of uitleg:
 [
-  {"name": "Begrip naam", "category": "epidemiologie", "definition": "Definitie hier."}
+  {"name": "Begrip naam", "definition": "Definitie hier."}
 ]
 
 CURSUSMATERIAAL:
@@ -4876,7 +4873,7 @@ ${combinedText}`;
         for (const m of objectMatches) {
           try {
             const obj = JSON.parse(m[0]);
-            if (obj.name && obj.category && obj.definition) extractedConcepts.push(obj);
+            if (obj.name && obj.definition) extractedConcepts.push(obj);
           } catch (_) { /* ongeldig object, skip */ }
         }
         if (extractedConcepts.length > 0) {
@@ -4896,9 +4893,8 @@ ${combinedText}`;
       return res.json({ concepts: [], message: 'Geen begrippen gevonden in LLM-respons' });
     }
 
-    const validCategories = ['epidemiologie', 'biostatistiek'];
     const rawValidConcepts = extractedConcepts.filter(
-      (c) => c.name && c.category && validCategories.includes(c.category) && c.definition
+      (c) => c.name && c.definition
     );
 
     // VERIFICATIE-STAP: vergelijk elk LLM-kandidaat-begrip met RAG-chunks
@@ -5011,7 +5007,6 @@ ${combinedText}`;
         seenInBatch.add(key);
         toInsert.push({
           name: c.name.trim(),
-          category: c.category,
           definition: c.definition.trim(),
           key_points: [ragMarker],
           examples: [],
@@ -7919,13 +7914,9 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
 
       // Begrip aanmaken als het nog niet bestaat.
       if (!concept) {
-        // De `concepts.category`-CHECK-constraint laat alleen
-        // 'epidemiologie' of 'biostatistiek' toe. ShareStats-items zijn
-        // statistische vragen → 'biostatistiek'.
         const insertRow = conceptsHasCourseId
           ? {
               name: dutchName,
-              category: 'biostatistiek',
               definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (topic "${job.topic}"). Vul de definitie aan via de begrippen-beheerpagina.`,
               key_points: ['[Geïmporteerd vanuit ShareStats]'],
               examples: [],
@@ -7933,7 +7924,6 @@ app.post('/api/admin/sharestats/auto-link-concepts', async (req, res) => {
             }
           : {
               name: dutchName,
-              category: 'biostatistiek',
               definition: `Begrip automatisch aangemaakt vanuit ShareStats-import (topic "${job.topic}"). Vul de definitie aan via de begrippen-beheerpagina.`,
               key_points: [`course_id:${courseId}`, '[Geïmporteerd vanuit ShareStats]'],
               examples: [],

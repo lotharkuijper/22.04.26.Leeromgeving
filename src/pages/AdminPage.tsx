@@ -86,7 +86,6 @@ interface RagDiagnosticChunk {
   contentPreview: string;
 }
 
-type ConceptCategory = 'epidemiologie' | 'biostatistiek';
 type UserRole = 'student' | 'docent' | 'admin';
 
 interface ConceptCardProps {
@@ -137,9 +136,6 @@ function ConceptCard({ concept, sourceLabel, sourceBg, deleteConfirmId, deleting
           <div className="flex items-start justify-between mb-2">
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-semibold text-gray-900">{concept.name}</h3>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">
-                {concept.category}
-              </span>
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceBg}`}>
                 {sourceLabel}
               </span>
@@ -252,7 +248,6 @@ export function AdminPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [addConceptForm, setAddConceptForm] = useState(false);
   const [addConceptName, setAddConceptName] = useState('');
-  const [addConceptCategory, setAddConceptCategory] = useState<ConceptCategory>('epidemiologie');
   const [addConceptDefinition, setAddConceptDefinition] = useState('');
   const [addConceptLoading, setAddConceptLoading] = useState(false);
   const [addConceptError, setAddConceptError] = useState<string | null>(null);
@@ -1098,7 +1093,6 @@ export function AdminPage() {
     type ConceptInsert = Database['public']['Tables']['concepts']['Insert'];
     const insertData: ConceptInsert = {
       name: addConceptName.trim(),
-      category: addConceptCategory,
       definition: addConceptDefinition.trim() || null,
       key_points: activeCourseId ? [`course_id:${activeCourseId}`] : [],
     };
@@ -1114,7 +1108,6 @@ export function AdminPage() {
       setAddConceptSuccess(true);
       setAddConceptName('');
       setAddConceptDefinition('');
-      setAddConceptCategory('epidemiologie');
       await loadConcepts();
       await loadConceptsMeta();
       setTimeout(() => setAddConceptSuccess(false), 3000);
@@ -1962,30 +1955,16 @@ const tabGroups = [
               {addConceptForm && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
                   <h3 className="font-semibold text-gray-900">{t('admin.concepts.addTitle')}</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.concepts.nameLabel')}</label>
-                      <input
-                        type="text"
-                        value={addConceptName}
-                        onChange={e => setAddConceptName(e.target.value)}
-                        placeholder={t('admin.concepts.namePlaceholder')}
-                        className="w-full px-3 py-2 chic-input text-sm"
-                        data-testid="input-concept-name"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.concepts.categoryLabel')}</label>
-                      <select
-                        value={addConceptCategory}
-                        onChange={e => setAddConceptCategory(e.target.value as 'epidemiologie' | 'biostatistiek')}
-                        className="w-full px-3 py-2 chic-input text-sm"
-                        data-testid="select-concept-category"
-                      >
-                        <option value="epidemiologie">{t('admin.concepts.catEpidemiologie')}</option>
-                        <option value="biostatistiek">{t('admin.concepts.catBiostatistiek')}</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.concepts.nameLabel')}</label>
+                    <input
+                      type="text"
+                      value={addConceptName}
+                      onChange={e => setAddConceptName(e.target.value)}
+                      placeholder={t('admin.concepts.namePlaceholder')}
+                      className="w-full px-3 py-2 chic-input text-sm"
+                      data-testid="input-concept-name"
+                    />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">{t('admin.concepts.definitionLabel')}</label>
