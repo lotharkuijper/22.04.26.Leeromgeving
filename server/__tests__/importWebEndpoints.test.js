@@ -582,6 +582,33 @@ describe('POST /api/admin/import-web/import', () => {
     expect(res.body.imported).toBe(1);
   }, 15000);
 
+  it('saneert onzichtbare Unicode-tekens (NUL/lone surrogate) uit de geïmporteerde chunks (Task #374)', async () => {
+    seed({ user: ADMIN });
+    // Pagina met genoeg leesbare tekst, maar doorspekt met een NUL en een
+    // ongepaarde high-surrogate die Postgres anders met "unsupported Unicode
+    // escape sequence" zou weigeren.
+    const dirty = `Statistische inferentie\u0000 met een verdwaald\uD800 teken. ${LONG_TEXT}`;
+    const html = `<html><head><title>Vuil</title></head><body><main><p>${dirty}</p></main></body></html>`;
+    mockFetch({ [BASE + 'a.html']: html });
+
+    const res = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(1);
+    expect(res.body.errors).toBe(0);
+    const pageResult = res.body.results.find((x) => x.url === BASE + 'a.html');
+    expect(pageResult.status).toBe('imported');
+
+    // Geen enkele opgeslagen chunk bevat nog een NUL of een ongepaarde surrogate.
+    const chunks = harness.state.db.tables.document_chunks;
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const c of chunks) {
+      expect(c.content.includes('\u0000')).toBe(false);
+      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(c.content)).toBe(false);
+    }
+  });
+
   it('herbruikt de bestaande RAG-map bij een tweede import (geen dubbele map)', async () => {
     seed({ user: ADMIN });
     mockFetch({ [BASE + 'a.html']: page('Hoofdstuk A'), [BASE + 'b.html']: page('Hoofdstuk B') });

@@ -67,6 +67,7 @@ import {
   isBlockedHost as isBlockedWebHost,
   WEB_IMPORT_LIMITS,
 } from './webImport.js';
+import { sanitizeText, sanitizeMetadata } from './sanitizeText.js';
 import { promises as dnsPromises } from 'node:dns';
 import { createHash } from 'node:crypto';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from './openaiSampling.js';
@@ -100,7 +101,6 @@ import {
 } from './notifications.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, DOCX_PAGED_EXT, NATIVE_PDF_EXT, TEXT_EXT, renditionCachePath, renditionSourceType } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
-import { sanitizeText } from './sanitizeText.js';
 import {
   scoreToLabel as relScoreToLabel,
   scoreToBucket as relScoreToBucket,
@@ -2910,10 +2910,10 @@ app.post('/api/admin/import-web/import', async (req, res) => {
 
       const rows = chunks.map((content, idx) => ({
         document_id: docId,
-        content,
+        content: sanitizeText(content),
         embedding: embeddings[idx],
         chunk_index: idx,
-        metadata: { source: 'web', sourceUrl: target.url },
+        metadata: sanitizeMetadata({ source: 'web', sourceUrl: target.url }),
       }));
       const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
       if (insErr) throw new Error(insErr.message);
