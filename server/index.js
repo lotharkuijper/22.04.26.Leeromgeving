@@ -100,6 +100,7 @@ import {
 } from './notifications.js';
 import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, DOCX_PAGED_EXT, NATIVE_PDF_EXT, TEXT_EXT, renditionCachePath, renditionSourceType } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
+import { sanitizeText } from './sanitizeText.js';
 import {
   scoreToLabel as relScoreToLabel,
   scoreToBucket as relScoreToBucket,
@@ -5302,7 +5303,7 @@ ${combinedText}`;
                 course_id: courseId,
                 document_id: m.document_id || null,
                 chunk_id: m.id || null,
-                snippet: typeof m.content === 'string' ? m.content.slice(0, 4000) : '',
+                snippet: typeof m.content === 'string' ? sanitizeText(m.content).slice(0, 4000) : '',
                 similarity: Number.isFinite(m.similarity) ? m.similarity : 0,
               });
             }
