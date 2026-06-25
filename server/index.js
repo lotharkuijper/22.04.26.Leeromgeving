@@ -37,6 +37,7 @@ import { pickReusableRagFolder } from './ragFolder.js';
 import { buildLanguageInstruction, localizePrompt, languageEnglishName, normalizeLang } from './languages.js';
 import { buildLevelInstructionBlock, LEVEL_LABELS, LEVEL_MIN, LEVEL_MAX, LEVEL_DEFAULT } from './learningLevel.js';
 import { computeTeacherFolderScope } from './documentScope.js';
+import { chunkPlainText, buildEmbedInput } from './chunking.js';
 import {
   extractEmails,
   dedupeEmails,
@@ -317,25 +318,35 @@ async function searchChunksServerSide(queryText, threshold, matchCount, allowedF
       return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
     }
 
-    const { data: allChunks, error } = await supabaseAdmin.rpc('match_document_chunks', {
-      query_embedding: embedding,
-      match_threshold: 0,
-      match_count: Math.max(matchCount * 3, 15),
-    });
-    if (error || !allChunks) {
-      if (error) console.error('[searchChunksServerSide] match_document_chunks RPC-fout:', error.message || JSON.stringify(error));
-      return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
-    }
-
-    let candidate = allChunks;
+    // Bepaal de toegestane documenten VÓÓR de zoekopdracht zodat de
+    // vector-zoekfunctie op documentniveau kan filteren (Task #394). Zo wordt de
+    // kandidatenpool uit de cursus zelf getrokken in plaats van uit een globale
+    // top-N waar een grote multi-cursus-corpus de eigen chunks wegcrowdt.
+    let filterDocumentIds = null;
     if (Array.isArray(allowedFolderIds) && allowedFolderIds.length > 0) {
-      const docIds = [...new Set(allChunks.map(c => c.document_id))];
       const { data: docs } = await supabaseAdmin
         .from('documents')
         .select('id, folder_id')
-        .in('id', docIds);
-      const allowedDocIds = new Set((docs || []).filter(d => allowedFolderIds.includes(d.folder_id)).map(d => d.id));
-      candidate = allChunks.filter(c => allowedDocIds.has(c.document_id));
+        .in('folder_id', allowedFolderIds);
+      filterDocumentIds = (docs || []).map(d => d.id);
+      // Geen documenten in de toegestane mappen → niets te vinden.
+      if (filterDocumentIds.length === 0) {
+        return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
+      }
+    }
+
+    // Ruime, cursus-gescopete kandidatenpool: omdat we op documentniveau filteren
+    // is een grote pool goedkoop en eerlijk, en blijft een zwak-scorende maar
+    // relevante chunk binnen bereik ook als de corpus groeit.
+    const { data: candidate, error } = await supabaseAdmin.rpc('match_document_chunks', {
+      query_embedding: embedding,
+      match_threshold: 0,
+      match_count: Math.max(matchCount * 5, 60),
+      filter_document_ids: filterDocumentIds,
+    });
+    if (error || !candidate) {
+      if (error) console.error('[searchChunksServerSide] match_document_chunks RPC-fout:', error.message || JSON.stringify(error));
+      return { matched: [], maxScore: 0, candidatesInAllowed: 0, embedQuery };
     }
 
     return {
@@ -2248,55 +2259,8 @@ async function semanticChunkDeck(slides, openaiKey, lang = 'nl') {
   return { sections: all, mode };
 }
 
-// Server-side tekstchunker voor pdf/docx/txt en andere platte-tekstbronnen.
-// Spiegelt de client-chunker (STORAGE_CONFIG.chunkConfig): paragraaf-gebaseerd
-// met overlap, en harde splitsing van te lange chunks.
-function estimatePlainTokens(text) {
-  return Math.ceil(String(text || '').split(/\s+/).filter(Boolean).length * 1.3);
-}
-
-function chunkPlainText(text, {
-  targetTokens = 1000,
-  maxTokens = 1200,
-  overlapTokens = 150,
-} = {}) {
-  const paragraphs = String(text || '')
-    .split(/\n\n+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  const chunks = [];
-  let current = '';
-  for (const para of paragraphs) {
-    const test = current ? `${current}\n\n${para}` : para;
-    if (estimatePlainTokens(test) > targetTokens && current) {
-      chunks.push(current.trim());
-      const words = current.split(/\s+/);
-      const overlapWords = Math.max(0, Math.floor(overlapTokens / 1.3));
-      const overlap = overlapWords > 0 ? words.slice(-overlapWords).join(' ') : '';
-      current = overlap ? `${overlap}\n\n${para}` : para;
-    } else {
-      current = test;
-    }
-  }
-  if (current.trim()) chunks.push(current.trim());
-
-  // Harde splitsing van chunks die alsnog te lang zijn.
-  const result = [];
-  const wordsPerChunk = Math.max(1, Math.floor(maxTokens / 1.3));
-  for (const c of chunks) {
-    if (estimatePlainTokens(c) <= maxTokens) {
-      result.push(c);
-      continue;
-    }
-    const words = c.split(/\s+/);
-    for (let i = 0; i < words.length; i += wordsPerChunk) {
-      const piece = words.slice(i, i + wordsPerChunk).join(' ').trim();
-      if (piece) result.push(piece);
-    }
-  }
-  return result.filter(Boolean);
-}
+// chunkPlainText/buildEmbedInput leven nu in ./chunking.js (één bron van waarheid,
+// gedeeld met onderhoudsscripts voor her-ingestie). Zie Task #394.
 
 // Kernverwerking voor .pptx: download, extractie van dia's + sprekersnotities,
 // semantische chunking (LLM met vangnet), embeddings en persistentie. Zet de

@@ -1,4 +1,5 @@
 import { sanitizeText, sanitizeMetadata } from './sanitizeText.js';
+import { buildEmbedInput } from './chunking.js';
 
 // RAG-documentverwerking (pptx + platte tekst), losgekoppeld van server/index.js
 // zodat de fail-safe (status → 'failed' bij een fout) zonder draaiende Express-
@@ -64,7 +65,7 @@ export async function processPptxCore(doc, openaiKey, lang = 'nl', deps = {}) {
       throw e;
     }
 
-    const embeddings = await embedTextsServer(finalSections.map((s) => s.content), openaiKey);
+    const embeddings = await embedTextsServer(finalSections.map((s) => buildEmbedInput(doc.title, s.content)), openaiKey);
     await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
 
     const rows = finalSections.map((s, i) => ({
@@ -194,7 +195,7 @@ export async function processDocxCore(doc, openaiKey, deps = {}) {
       }
     }
 
-    const embeddings = await embedTextsServer(chunkTexts, openaiKey);
+    const embeddings = await embedTextsServer(chunkTexts.map((t) => buildEmbedInput(doc.title, t)), openaiKey);
     await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
 
     let pagesAssigned = 0;
@@ -299,7 +300,7 @@ export async function processPlainRagDocument(doc, openaiKey, deps = {}) {
       throw e;
     }
 
-    const embeddings = await embedTextsServer(chunks, openaiKey);
+    const embeddings = await embedTextsServer(chunks.map((c) => buildEmbedInput(doc.title, c)), openaiKey);
     await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
 
     const rows = chunks.map((content, i) => ({

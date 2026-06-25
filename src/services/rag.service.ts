@@ -195,12 +195,33 @@ export async function searchRelevantChunksWithStats(
 
     console.log(`[RAG] Allowed folder IDs: ${allowedFolderIds.length}, primary folders: ${primaryFolderIds.length}`);
 
-    // Vraag de top kandidaten op zonder drempel zodat we altijd de hoogste
-    // beschikbare similarity-score kunnen rapporteren bij geen match.
+    // Scope de kandidaten op documentniveau VÓÓR de LIMIT (Task #394): zonder
+    // filter trekt match_document_chunks een globale top-N over de hele corpus,
+    // waardoor een grote multi-cursus-corpus de eigen chunks van een cursus
+    // wegcrowdt. We resolven de toegestane RAG-documenten en geven hun id's mee.
+    let filterDocumentIds: string[] | null = null;
+    if (allowedFolderIds.length > 0) {
+      const { data: scopedDocs } = await supabase
+        .from('documents')
+        .select('id')
+        .in('folder_id', allowedFolderIds)
+        .eq('bucket', STORAGE_CONFIG.buckets.RAG_SOURCES);
+      filterDocumentIds = (scopedDocs || []).map((d) => d.id);
+      if (filterDocumentIds.length === 0) {
+        console.log('[RAG] No RAG documents in allowed folders — skipping RAG');
+        return { ...baseStats, searchPerformed: true };
+      }
+    }
+
+    // Ruime, cursus-gescopete kandidatenpool: omdat we op documentniveau filteren
+    // is een grote pool goedkoop en eerlijk, en blijft een zwak-scorende maar
+    // relevante chunk binnen bereik ook als de corpus groeit. Drempel 0 zodat we
+    // altijd de hoogste beschikbare score kunnen rapporteren bij geen match.
     const { data: allChunks, error } = await supabase.rpc('match_document_chunks', {
       query_embedding: embedding,
       match_threshold: 0,
-      match_count: Math.max(matchCount * 3, 15),
+      match_count: Math.max(matchCount * 5, 60),
+      filter_document_ids: filterDocumentIds,
     });
 
     if (error) {
@@ -377,10 +398,14 @@ export async function checkRAGAvailability(): Promise<{
   }
 }
 
-// Veiligheidsgrenzen voor de prompt naar het taalmodel: boven deze waarden
-// loopt gpt-4o-mini (OpenAI) snel tegen context-limieten of TPM-quota
-// aan. De cap geldt naast de gebruiker-instelbare match_count.
-export const RAG_CONTEXT_MAX_CHUNKS = 10;
+// Veiligheidsgrenzen voor de prompt naar het taalmodel. De char-cap blijft de
+// echte rem tegen token-blow-up; het chunk-plafond stond op 10 vanwege het oude
+// gpt-4o-mini-venster, maar de chat draait nu op Azure gpt-5.5 (ruime context).
+// Een te laag chunk-plafond knipte een door de docent ingestelde, ruimere
+// match_count alsnog terug op 10 — waardoor een laag-rangschikkende maar
+// relevante chunk (bv. een figuuronderschrift) buiten beeld viel (Task #394).
+// De char-cap (18000) begrenst de werkelijke contextgrootte.
+export const RAG_CONTEXT_MAX_CHUNKS = 15;
 export const RAG_CONTEXT_MAX_CHARS = 18000;
 
 export interface FormattedContext {

@@ -779,6 +779,7 @@ export type Database = {
           query_embedding: number[]
           match_threshold?: number
           match_count?: number
+          filter_document_ids?: string[] | null
         }
         Returns: {
           id: string
