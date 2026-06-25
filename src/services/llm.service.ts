@@ -544,14 +544,14 @@ export async function generateQuiz(
 
   if (questionType === 'mcq') {
     promptCore = en
-      ? `Generate ${numQuestions} ${diff} multiple-choice questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
+      ? `Generate ${numQuestions} ${diff} multiple-choice questions about ${topicsLabel}.${contextSection}
 
 For each question:
 - Write a clear, specific question.
 - Provide exactly 4 answer options (A, B, C, D).
 - Indicate which answer is correct (0, 1, 2 or 3).
 - Provide a brief explanation of why this answer is correct. Write the explanation in second person ("you"/"your") addressing the student.`
-      : `Genereer ${numQuestions} ${diff} meerkeuzevragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
+      : `Genereer ${numQuestions} ${diff} meerkeuzevragen over ${topicsLabel}.${contextSection}
 
 Voor elke vraag:
 - Maak een duidelijke, specifieke vraag.
@@ -579,13 +579,13 @@ Voor elke vraag:
 ]`;
   } else if (questionType === 'open') {
     promptCore = en
-      ? `Generate ${numQuestions} ${diff} open questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
+      ? `Generate ${numQuestions} ${diff} open questions about ${topicsLabel}.${contextSection}
 
 For each question:
 - Ask an open question (not multiple choice) that the student can answer in 3–8 sentences.
 - Provide a "modelAnswer": an ideal answer of approximately 4–8 sentences containing the key points.
 - Provide a "rubric": brief assessment criteria (3–5 bullets, in one string with newlines) with which an evaluator can later score the student answer.`
-      : `Genereer ${numQuestions} ${diff} open vragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
+      : `Genereer ${numQuestions} ${diff} open vragen over ${topicsLabel}.${contextSection}
 
 Voor elke vraag:
 - Stel een open vraag (geen meerkeuze) waarop de student in 3–8 zinnen een inhoudelijk antwoord kan geven.
@@ -610,14 +610,14 @@ Voor elke vraag:
 ]`;
   } else {
     promptCore = en
-      ? `Generate ${numQuestions} ${diff} case study questions about ${topicsLabel} in the domain of epidemiology and biostatistics.${contextSection}
+      ? `Generate ${numQuestions} ${diff} case study questions about ${topicsLabel}.${contextSection}
 
 For each case:
 - Write a short, realistic problem sketch ("context") of 3–6 sentences describing a research or practical situation relevant to ${topicsLabel}.
 - Then ask one clear question ("question") that forces the student to approach the problem analytically.
 - Provide a "modelAnswer": an ideal answer of approximately 5–8 sentences.
 - Provide a "rubric": brief assessment criteria (3–5 bullets, in one string with newlines).`
-      : `Genereer ${numQuestions} ${diff} casusvragen over ${topicsLabel} in het domein van epidemiologie en biostatistiek.${contextSection}
+      : `Genereer ${numQuestions} ${diff} casusvragen over ${topicsLabel}.${contextSection}
 
 Voor elke casus:
 - Schrijf eerst een korte, realistische probleemschets ("context") van 3–6 zinnen waarin een onderzoeks- of praktijksituatie wordt geschetst die past bij ${topicsLabel}.
@@ -856,7 +856,7 @@ export async function evaluateOpenAnswer(
   }
 
   const evaluation = await evaluateFreeTextAnswer({
-    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt jouw antwoord op een open vraag.`,
+    systemPersona: `Je bent een ervaren docent aan de VU Amsterdam en beoordeelt jouw antwoord op een open vraag.`,
     questionBlock: `Open vraag:\n${question.question}`,
     modelAnswer: question.modelAnswer,
     rubric: question.rubric,
@@ -886,7 +886,7 @@ export async function evaluateCasusAnswer(
   systemPromptOverride?: string,
 ): Promise<AnswerEvaluation> {
   return evaluateFreeTextAnswer({
-    systemPersona: `Je bent een ervaren docent epidemiologie/biostatistiek aan de VU Amsterdam en beoordeelt jouw antwoord op een casusvraag. Houd zowel de inhoudelijke juistheid als het correct toepassen op de geschetste casus mee in je oordeel.`,
+    systemPersona: `Je bent een ervaren docent aan de VU Amsterdam en beoordeelt jouw antwoord op een casusvraag. Houd zowel de inhoudelijke juistheid als het correct toepassen op de geschetste casus mee in je oordeel.`,
     questionBlock: `Casusbeschrijving:\n${question.context}\n\nVraag bij de casus:\n${question.question}`,
     modelAnswer: question.modelAnswer,
     rubric: question.rubric,

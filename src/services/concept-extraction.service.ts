@@ -91,7 +91,7 @@ export async function extractConceptsFromDocument(
       message: 'Begrippen identificeren met AI...',
     });
 
-    const systemPrompt = `Je bent een expert in epidemiologie en biostatistiek. Analyseer de volgende Nederlandse tekst en extraheer alle belangrijke begrippen (concepten) die worden uitgelegd.
+    const systemPrompt = `Je bent een vakexpert die universitair cursusmateriaal analyseert. Analyseer de volgende Nederlandse tekst en extraheer alle belangrijke begrippen (concepten) die worden uitgelegd.
 
 Voor elk begrip, geef:
 1. name: De naam van het begrip
@@ -103,7 +103,7 @@ Voor elk begrip, geef:
 
 Zoek naar:
 - Termen die gedefinieerd worden
-- Statistische of epidemiologische concepten
+- Vakinhoudelijke concepten en methoden
 - Termen met vetgedrukte of gemarkeerde tekst
 - Onderwerpen met kopjes of secties
 - Belangrijke formules of methoden

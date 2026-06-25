@@ -258,7 +258,7 @@ function openaiChatCompletion(body) {
   return postChatCompletionWithRetry({ url: OPENAI_CHAT_URL, headers: chatAuthHeaders(), body });
 }
 
-const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
+const FALLBACK_SYSTEM_PROMPT = `Je bent een Socratische tutor aan de VU Amsterdam. Je begeleidt studenten door een balans van korte uitleg en uitdagende vragen.
 
 Regels:
 1. Geef ALTIJD eerst 2-3 zinnen heldere uitleg over het concept
@@ -828,7 +828,7 @@ app.post(['/api/chat/delete', '/api/chat/archive'], async (req, res) => {
           : '';
 
         const summaryPrompt = (lang !== 'nl'
-          ? `You are a "critical friend" for a student epidemiology/biostatistics at VU Amsterdam. Analyse the following study conversation and write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
+          ? `You are a "critical friend" for a student at VU Amsterdam. Analyse the following study conversation and write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
 
 Addressing rule (follow STRICTLY):
 - Address the student directly using "you" / "your".
@@ -845,7 +845,7 @@ Conversation (lines marked with "You:" are the student you are addressing):
 ${chatText}
 
 Write the report directly without salutation. Be concrete, honest and motivating.`
-          : `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Analyseer het volgende studiegesprek en schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
+          : `Je bent een "critical friend" voor een student aan de VU Amsterdam. Analyseer het volgende studiegesprek en schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -4968,15 +4968,17 @@ app.post('/api/admin/extract-concepts', async (req, res) => {
       auto: '- name: the concept term in the SAME language as the course material below\n- definition: a clear 1-2 sentence definition in the SAME language as the course material below',
     }[conceptLanguage];
 
-    const extractionPrompt = `Je bent een expert in epidemiologie en biostatistiek aan de VU Amsterdam.
+    const extractionPrompt = `Je bent een vakexpert die universitair cursusmateriaal aan de VU Amsterdam analyseert.
 
 Analyseer de onderstaande tekst uit universitair cursusmateriaal. Identificeer ALLE relevante vakbegrippen die studenten moeten kennen en kunnen uitleggen — ook als ze slechts terloops of impliciet in de tekst voorkomen. Wees volledig en breed: liever 30 begrippen dan 10.
 
 BELANGRIJK: kies de begripsnamen zó dat ze letterlijk of bijna-letterlijk in het onderstaande cursusmateriaal voorkomen, want de namen worden daarna automatisch tegen dat materiaal geverifieerd.
 
-Geschikte begrippen omvatten (maar zijn niet beperkt tot):
-- Epidemiologie: incidentie, prevalentie, relatief risico, odds ratio, attributief risico, confounding, effect modification, selectiebias, informatiebias, cohortonderzoek, patiënt-controleonderzoek, cross-sectioneel onderzoek, gerandomiseerd gecontroleerd onderzoek, ecologisch onderzoek, case report, surveillance, screening, sensitiviteit, specificiteit, positief voorspellende waarde, negatief voorspellende waarde, DAG (gerichte acyclische graaf), mediatie, effect modificatie, interactie
-- Biostatistiek: gemiddelde, mediaan, standaarddeviatie, variantie, normaalverdeling, binomiale verdeling, Poisson-verdeling, betrouwbaarheidsinterval, p-waarde, nulhypothese, statistische toets, t-toets, chi-kwadraattoets, regressieanalyse, logistische regressie, Kaplan-Meier, log-rank toets, hazard ratio, steekproefomvang, power, type I fout, type II fout, effectgrootte, multiple testing
+Geschikte begrippen zijn onder meer:
+- Termen die in de tekst gedefinieerd of toegelicht worden
+- Vakinhoudelijke concepten, methoden en technieken
+- Belangrijke formules, modellen of procedures
+- Termen die met kopjes, secties of gemarkeerde tekst worden benadrukt
 
 Geef elk gevonden begrip de volgende velden:
 ${languageDirective}
@@ -5950,7 +5952,7 @@ app.post(['/api/explain/delete', '/api/explain/archive'], async (req, res) => {
       const feedbackText = row.feedback?.content || (typeof row.feedback === 'string' ? row.feedback : '(geen feedback)');
 
       const summaryPrompt = (lang !== 'nl'
-        ? `You are a "critical friend" for a student epidemiology/biostatistics at VU Amsterdam. A student has explained the concept "${conceptName}" in their own words and received feedback from the learning assistant. Write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
+        ? `You are a "critical friend" for a student at VU Amsterdam. A student has explained the concept "${conceptName}" in their own words and received feedback from the learning assistant. Write a formative reflection report of 5 to 10 lines in English, addressed directly to the student.
 
 Addressing rule (follow STRICTLY):
 - Address the student directly using "you" / "your".
@@ -5971,7 +5973,7 @@ Feedback from the learning assistant:
 ${feedbackText}
 
 Write the report directly without salutation. Be concrete, honest and motivating.`
-        : `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft het begrip "${conceptName}" in eigen woorden uitgelegd en feedback ontvangen van de leerassistent. Schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
+        : `Je bent een "critical friend" voor een student aan de VU Amsterdam. Een student heeft het begrip "${conceptName}" in eigen woorden uitgelegd en feedback ontvangen van de leerassistent. Schrijf een formatief reflectieverslag van 5 tot 10 regels in het Nederlands, gericht aan de student zelf.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -6149,7 +6151,7 @@ function buildQuizSummaryParams({ topics, difficulty, questionType, questions, a
         ? 'Focus op de kwaliteit van je redenering: hoe expliciet maakte je je aannames, hoe nauwkeurig was je formulering, hoe goed onderbouw je conclusies? Wees concreet per vraag waar dat helpt.'
         : 'Focus op je klinisch-methodisch redeneren in de casus: hoe goed verbond je theorie met het scenario, welke methodische keuzes onderbouwde je, welke nuances liet je liggen? Wees concreet per casus waar dat helpt.');
 
-  const summaryPromptNL = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft zojuist een AI-gegenereerde quiz afgerond. Schrijf een formatief reflectieverslag van ${minLines} tot ${maxLines} regels in het Nederlands, gericht aan de student zelf.
+  const summaryPromptNL = `Je bent een "critical friend" voor een student aan de VU Amsterdam. Een student heeft zojuist een AI-gegenereerde quiz afgerond. Schrijf een formatief reflectieverslag van ${minLines} tot ${maxLines} regels in het Nederlands, gericht aan de student zelf.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -6179,7 +6181,7 @@ ${detailLines || '(geen details beschikbaar)'}
 
 Schrijf het verslag direct, zonder aanhef en zonder afsluitende groet. Wees concreet, eerlijk en motiverend; vermijd vaagheden en clichés.`;
 
-  const summaryPromptEN = `You are a "critical friend" for an epidemiology/biostatistics student at VU Amsterdam. The student has just completed an AI-generated quiz. Write a formative reflection report of ${minLines} to ${maxLines} lines in English, addressed directly to the student.
+  const summaryPromptEN = `You are a "critical friend" for a student at VU Amsterdam. The student has just completed an AI-generated quiz. Write a formative reflection report of ${minLines} to ${maxLines} lines in English, addressed directly to the student.
 
 Address the student directly using "you/your" throughout. NEVER refer to "the student" in the third person.
 
@@ -6523,7 +6525,7 @@ app.post('/api/projects/save-summary', async (req, res) => {
       }
     }
 
-    const summaryPrompt = `Je bent een "critical friend" voor een student epidemiologie/biostatistiek aan de VU Amsterdam. Een student heeft aan een data-analyseproject gewerkt en wil daar in het leerdagboek op reflecteren. Schrijf een formatief reflectieverslag van 8 tot 14 regels in het Nederlands, gericht aan de student zelf.
+    const summaryPrompt = `Je bent een "critical friend" voor een student aan de VU Amsterdam. Een student heeft aan een data-analyseproject gewerkt en wil daar in het leerdagboek op reflecteren. Schrijf een formatief reflectieverslag van 8 tot 14 regels in het Nederlands, gericht aan de student zelf.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -7211,7 +7213,10 @@ Geef je feedback in vier onderdelen:
 
 Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student in de gezondheidswetenschappen.`;
 
-const DEFAULT_EXPLAIN_PROMPT = `Je bent een kritische en constructieve tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je evalueert uitleg van studenten over begrippen en geeft gestructureerde, constructieve feedback rechtstreeks aan de student.
+// Oude (vakspecifieke) default — bewaard zodat records die LETTERLIJK gelijk
+// zijn aan deze tekst automatisch worden bijgewerkt naar de cursus-agnostische
+// DEFAULT_EXPLAIN_PROMPT in initChatbotPromptSection (zelfde mechanisme als V1).
+const OLD_DEFAULT_EXPLAIN_PROMPT_V2 = `Je bent een kritische en constructieve tutor voor epidemiologie en biostatistiek aan de VU Amsterdam. Je evalueert uitleg van studenten over begrippen en geeft gestructureerde, constructieve feedback rechtstreeks aan de student.
 
 Aanspraakvorm (volg STRIKT):
 - Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
@@ -7230,6 +7235,26 @@ Notatie van formules (volg STRIKT):
 - Gebruik LaTeX-commando's zoals \\cap, \\cdot, \\mid, \\Rightarrow, \\frac UITSLUITEND binnen $...$ of $$...$$, nooit in gewone tekst.
 
 Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student in de gezondheidswetenschappen.`;
+
+const DEFAULT_EXPLAIN_PROMPT = `Je bent een kritische en constructieve tutor aan de VU Amsterdam. Je evalueert uitleg van studenten over begrippen en geeft gestructureerde, constructieve feedback rechtstreeks aan de student.
+
+Aanspraakvorm (volg STRIKT):
+- Spreek de student direct aan met "je" / "jij" / "jouw" / "je hebt".
+- Gebruik NOOIT formuleringen als "de student", "deze student", "de student heeft" of andere derde-persoonsverwijzingen naar de student. Schrijf alsof je de feedback één-op-één tegen de student geeft.
+
+Geef je feedback in vier onderdelen:
+1. Wat je goed hebt gedaan (noem specifieke sterke punten in jouw uitleg)
+2. Wat ontbreekt of onduidelijk is in jouw uitleg (wees concreet)
+3. Eventuele misconcepties bij jou die gecorrigeerd moeten worden
+4. Concrete suggesties voor verbetering
+
+Notatie van formules (volg STRIKT):
+- Schrijf elke wiskundige formule of elk symbool in LaTeX: $...$ voor een formule midden in een zin, $$...$$ voor een formule op een eigen regel.
+- Plaats dollartekens ALTIJD in paren: voor elk openend $ of $$ exact één afsluitend $ of $$. Laat nooit een los dollarteken staan.
+- Meng inline en display niet binnen één formule: kies $...$ óf $$...$$, niet allebei voor dezelfde formule.
+- Gebruik LaTeX-commando's zoals \\cap, \\cdot, \\mid, \\Rightarrow, \\frac UITSLUITEND binnen $...$ of $$...$$, nooit in gewone tekst.
+
+Wees constructief en moedigend, maar ook specifiek en nuttig. Pas je toon aan op het niveau van een universitaire student.`;
 
 // Task #166: standaard prompt-template voor document-reviews. De docent kan
 // dit in de admin-UI overschrijven (Prompts → sectie 'project'). De template
@@ -7426,7 +7451,7 @@ async function initChatbotPromptSection() {
         console.warn('[init] Uitleg-prompt sync overgeslagen:', listErr.message);
       } else if (Array.isArray(explainRecords)) {
         for (const rec of explainRecords) {
-          if (rec.content === OLD_DEFAULT_EXPLAIN_PROMPT_V1) {
+          if (rec.content === OLD_DEFAULT_EXPLAIN_PROMPT_V1 || rec.content === OLD_DEFAULT_EXPLAIN_PROMPT_V2) {
             const { error: updErr } = await supabaseAdmin
               .from('chatbot_prompts')
               .update({ content: DEFAULT_EXPLAIN_PROMPT })
@@ -7780,10 +7805,10 @@ async function requireAdminOrDocent(req, res) {
 // Vier prompts die expliciet beheerd worden in chatbot_prompts onder section
 // 'quiz'. De keys (name) zijn stabiel; de inhoud kan vrij worden aangepast.
 const QUIZ_PROMPT_DEFAULTS = {
-  quiz_generate_strict: `Je bent een tentamenmaker voor epidemiologie en biostatistiek aan de VU Amsterdam. Je formuleert vragen UITSLUITEND op basis van het meegeleverde cursusmateriaal. Verzin geen feiten die niet in de context staan. Spreek de student aan met "je"/"jij"/"jouw".`,
-  quiz_generate_blended: `Je bent een tentamenmaker voor epidemiologie en biostatistiek aan de VU Amsterdam. Je gebruikt het meegeleverde cursusmateriaal als hoofdbron, maar mag dit aanvullen met algemeen geaccepteerde kennis uit het vakgebied. Maak helder onderscheid tussen wat in de context staat en wat algemene vakkennis is. Spreek de student aan met "je"/"jij"/"jouw".`,
-  quiz_generate_creative: `Je bent een creatieve tentamenmaker voor epidemiologie en biostatistiek aan de VU Amsterdam. Je formuleert toepassingsvragen, casusvragen en transferopdrachten die studenten uitdagen om de leerstof in nieuwe contexten toe te passen. Gebruik realistische scenario's uit gezondheidsonderzoek. Spreek de student aan met "je"/"jij"/"jouw".`,
-  quiz_evaluate_open: `Je bent een kritische maar constructieve beoordelaar van open antwoorden voor epidemiologie en biostatistiek. Je geeft feedback in vier punten: (1) wat goed is, (2) wat ontbreekt, (3) misconcepties, (4) concrete verbeterpunten. Spreek de student direct aan met "je"/"jij"/"jouw" — gebruik NOOIT "de student" of "deze student".`,
+  quiz_generate_strict: `Je bent een tentamenmaker aan de VU Amsterdam. Je formuleert vragen UITSLUITEND op basis van het meegeleverde cursusmateriaal. Verzin geen feiten die niet in de context staan. Spreek de student aan met "je"/"jij"/"jouw".`,
+  quiz_generate_blended: `Je bent een tentamenmaker aan de VU Amsterdam. Je gebruikt het meegeleverde cursusmateriaal als hoofdbron, maar mag dit aanvullen met algemeen geaccepteerde kennis uit het vakgebied. Maak helder onderscheid tussen wat in de context staat en wat algemene vakkennis is. Spreek de student aan met "je"/"jij"/"jouw".`,
+  quiz_generate_creative: `Je bent een creatieve tentamenmaker aan de VU Amsterdam. Je formuleert toepassingsvragen, casusvragen en transferopdrachten die studenten uitdagen om de leerstof in nieuwe contexten toe te passen. Gebruik realistische, relevante scenario's. Spreek de student aan met "je"/"jij"/"jouw".`,
+  quiz_evaluate_open: `Je bent een kritische maar constructieve beoordelaar van open antwoorden. Je geeft feedback in vier punten: (1) wat goed is, (2) wat ontbreekt, (3) misconcepties, (4) concrete verbeterpunten. Spreek de student direct aan met "je"/"jij"/"jouw" — gebruik NOOIT "de student" of "deze student".`,
 };
 
 async function initQuizPromptDefaults() {
