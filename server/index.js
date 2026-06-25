@@ -93,7 +93,7 @@ import {
   getEmailConfig,
   sendEmailViaResend,
 } from './notifications.js';
-import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT } from './documentRender.js';
+import { convertOfficeToPdf, queueConversion, normalizeExt, CONVERT_TO_PDF_EXT, NATIVE_PDF_EXT, TEXT_EXT, renditionCachePath, renditionSourceType } from './documentRender.js';
 import { planConceptReplace, planConceptWrites } from './conceptExtraction.js';
 import {
   scoreToLabel as relScoreToLabel,
@@ -1694,8 +1694,7 @@ app.get('/api/rag/documents/:documentId/view', async (req, res) => {
       const bucket = doc.bucket || 'rag_sources';
       // Cache-sleutel bevat updated_at zodat een vervangen bron een verse
       // rendition krijgt en niet de oude PDF blijft tonen.
-      const stamp = doc.updated_at ? String(Date.parse(doc.updated_at) || '') : '';
-      const renditionPath = `__renditions__/${documentId}${stamp ? `-${stamp}` : ''}.pdf`;
+      const renditionPath = renditionCachePath(documentId, doc.updated_at);
       let signed = (await supabaseAdmin.storage.from(bucket).createSignedUrl(renditionPath, 600)).data;
       if (!signed?.signedUrl) {
         // Nog geen rendition in cache — eenmalig converteren en opslaan.
@@ -1708,7 +1707,7 @@ app.get('/api/rag/documents/:documentId/view', async (req, res) => {
         signed = (await supabaseAdmin.storage.from(bucket).createSignedUrl(renditionPath, 600)).data;
         if (!signed?.signedUrl) return res.status(500).json({ error: 'Kon geen weergavelink aanmaken.' });
       }
-      const sourceType = (ext === 'pptx' || ext === 'ppt' || ext === 'odp') ? 'pptx' : 'docx';
+      const sourceType = renditionSourceType(ext);
       return res.json({ kind: 'pdf', title, sourceType, url: signed.signedUrl });
     }
 

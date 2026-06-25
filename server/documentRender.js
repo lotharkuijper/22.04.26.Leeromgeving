@@ -37,6 +37,53 @@ export function queueConversion(fn) {
   return run;
 }
 
+// Vaste basisnaam voor het tijdelijke invoerbestand; LibreOffice noemt de
+// uitvoer-PDF naar deze basisnaam (input.<ext> → input.pdf).
+export const SOFFICE_INPUT_BASENAME = 'input';
+
+// Naam van het tijdelijke invoerbestand voor een gegeven bronextensie.
+export function sofficeInputName(ext) {
+  return `${SOFFICE_INPUT_BASENAME}.${normalizeExt(ext)}`;
+}
+
+// Naam van de door LibreOffice geproduceerde PDF, afgeleid van de invoernaam
+// (basisnaam zonder extensie + .pdf). Zo blijft de uitvoerpad-verwachting in
+// sync met de invoernaam als die ooit verandert.
+export function sofficePdfOutputName(inputName) {
+  const base = path.basename(String(inputName || '')).replace(/\.[^.]+$/, '');
+  return `${base}.pdf`;
+}
+
+// Bouwt de argumentenlijst voor de headless LibreOffice-conversie naar PDF.
+// Apart en puur zodat een test de command-bedrading kan controleren zonder
+// een echte conversie te draaien.
+export function buildSofficeArgs({ profileDir, outDir, inputPath }) {
+  return [
+    '--headless',
+    '--norestore',
+    '--nolockcheck',
+    `-env:UserInstallation=file://${profileDir}`,
+    '--convert-to', 'pdf',
+    '--outdir', outDir,
+    inputPath,
+  ];
+}
+
+// Cache-sleutel (opslagpad) voor de PDF-rendition van een Office-bron.
+// updated_at zit in de sleutel zodat een vervangen bron een verse rendition
+// krijgt i.p.v. de oude PDF te blijven tonen.
+export function renditionCachePath(documentId, updatedAt) {
+  const stamp = updatedAt ? String(Date.parse(updatedAt) || '') : '';
+  return `__renditions__/${documentId}${stamp ? `-${stamp}` : ''}.pdf`;
+}
+
+// Bron-type-label voor de viewer: presentatie-formaten tonen als 'pptx',
+// de rest (tekstdocumenten) als 'docx'.
+export function renditionSourceType(ext) {
+  const e = normalizeExt(ext);
+  return (e === 'pptx' || e === 'ppt' || e === 'odp') ? 'pptx' : 'docx';
+}
+
 function runSoffice(args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(SOFFICE_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -67,19 +114,12 @@ export async function convertOfficeToPdf(inputBuffer, ext) {
   }
   const workDir = await mkdtemp(path.join(tmpdir(), 'leapvu-render-'));
   const profileDir = await mkdtemp(path.join(tmpdir(), 'leapvu-loprofile-'));
-  const inputPath = path.join(workDir, `input.${e}`);
+  const inputName = sofficeInputName(e);
+  const inputPath = path.join(workDir, inputName);
   try {
     await writeFile(inputPath, inputBuffer);
-    await runSoffice([
-      '--headless',
-      '--norestore',
-      '--nolockcheck',
-      `-env:UserInstallation=file://${profileDir}`,
-      '--convert-to', 'pdf',
-      '--outdir', workDir,
-      inputPath,
-    ]);
-    const outPath = path.join(workDir, 'input.pdf');
+    await runSoffice(buildSofficeArgs({ profileDir, outDir: workDir, inputPath }));
+    const outPath = path.join(workDir, sofficePdfOutputName(inputName));
     return await readFile(outPath);
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
