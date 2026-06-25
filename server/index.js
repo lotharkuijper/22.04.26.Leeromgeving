@@ -2816,13 +2816,21 @@ app.post('/api/admin/import-web/import', async (req, res) => {
       const selectCols = documentsHasContentHash
         ? 'id, content_hash, processing_status, total_chunks'
         : 'id';
-      const { data: existingDoc } = await supabaseAdmin
+      const { data: existingDoc, error: existingErr } = await supabaseAdmin
         .from('documents')
         .select(selectCols)
         .eq('folder_id', folderId)
         .eq('file_path', target.url)
         .eq('file_type', 'web')
         .maybeSingle();
+      // Een echte query-fout (transiënt PostgREST-probleem of verouderde
+      // schema-cache) NIET behandelen als "pagina bestaat nog niet": anders
+      // zouden we de pagina opnieuw embedden en een duplicaat aanmaken, juist
+      // tijdens de snelheidslimiet die deze top-up moet ontlopen. Surface als
+      // per-pagina-fout zodat de docent gewoon opnieuw kan draaien.
+      if (existingErr) {
+        throw new Error(`Kon bestaande pagina niet opzoeken: ${existingErr.message}`);
+      }
 
       // Goedkope top-up: een ongewijzigde, al volledig geëmbedde pagina overslaan
       // zónder opnieuw te embedden. Zo overleeft een her-import na een afgekapte
