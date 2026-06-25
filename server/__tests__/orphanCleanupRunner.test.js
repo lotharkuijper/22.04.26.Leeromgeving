@@ -11,12 +11,14 @@
 // dat de runner de ACTUELE waarde leest (zoals de module-state in index.js die
 // pas na startup-detectie wijzigt).
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   createOrphanCourseAccessCleanupRunner,
+  scheduleOrphanCourseAccessCleanup,
   cleanupOrphanCourseAccessTableOnce,
   buildOrphanCourseAccessCleanupSql,
   ORPHAN_CLEANUP_TABLE_LABELS,
+  ORPHAN_CLEANUP_STARTUP_DELAY_MS,
 } from '../studiecafe.js';
 
 const SUPERUSER = 'superuser@example.com';
@@ -300,5 +302,116 @@ describe('createOrphanCourseAccessCleanupRunner — gedrag van de runner', () =>
     expect(seenSql.every((sql) => !/student_visible/.test(sql))).toBe(true);
     // Eén query per tabel (geen 42703-fallback nodig).
     expect(pool.query).toHaveBeenCalledTimes(ORPHAN_CLEANUP_TABLE_LABELS.length);
+  });
+});
+
+// Task #339 — De periodieke wiring zelf (startvertraging + interval) uit
+// `scheduleOrphanCourseAccessCleanup`, end-to-end met de ECHTE runner (incl.
+// overlap-gate). We gebruiken nep-timers en een trage query (resolve via een
+// timer) zodat een run langer duurt dan één interval-tik; we asserten dat de
+// volgende tik dan GEEN tweede gelijktijdige run start.
+describe('scheduleOrphanCourseAccessCleanup — wiring onder echte timing', () => {
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  // Pool waarvan elke query pas na `queryDelayMs` (nep-tijd) resolved, en die de
+  // gelijktijdige in-flight queries bijhoudt zodat we overlap kunnen detecteren:
+  // de runner doet zijn queries sequentieel, dus binnen één run is er hooguit 1
+  // query tegelijk. Een tweede gelijktijdige run zou de in-flight teller op 2
+  // brengen.
+  function makeSlowPool(queryDelayMs) {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let total = 0;
+    const pool = {
+      get total() { return total; },
+      get maxInFlight() { return maxInFlight; },
+      query: vi.fn(() => {
+        total += 1;
+        inFlight += 1;
+        if (inFlight > maxInFlight) maxInFlight = inFlight;
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve({ rowCount: 0 });
+          }, queryDelayMs);
+        });
+      }),
+    };
+    return pool;
+  }
+
+  it('start na de startvertraging en daarna op interval', async () => {
+    vi.useFakeTimers();
+    const pool = makeSlowPool(5); // korte query, run klaar binnen één tik
+    const run = createOrphanCourseAccessCleanupRunner({
+      getPgPool: () => pool,
+      getHasStudentVisible: () => false,
+      getSuperuserEmail: () => SUPERUSER,
+      logger: makeLogger(),
+    });
+    const startupDelayMs = 100;
+    const intervalMs = 1000;
+    scheduleOrphanCourseAccessCleanup({ runOnce: run, startupDelayMs, intervalMs });
+
+    // Vóór de startvertraging: nog niets gedraaid.
+    await vi.advanceTimersByTimeAsync(startupDelayMs - 1);
+    expect(pool.query).not.toHaveBeenCalled();
+
+    // Na de startvertraging + genoeg tijd om alle (sequentiële) queries te laten
+    // aflopen: precies één run (alle tabellen één keer).
+    await vi.advanceTimersByTimeAsync(1 + 5 * ORPHAN_CLEANUP_TABLE_LABELS.length);
+    expect(pool.total).toBe(ORPHAN_CLEANUP_TABLE_LABELS.length);
+    expect(run.isRunning()).toBe(false);
+
+    // Na één interval-tik (+ drain-tijd): een tweede volledige run.
+    await vi.advanceTimersByTimeAsync(intervalMs + 5 * ORPHAN_CLEANUP_TABLE_LABELS.length);
+    expect(pool.total).toBe(ORPHAN_CLEANUP_TABLE_LABELS.length * 2);
+  });
+
+  it('slaat overlappende runs over: een trage run > interval start geen tweede run', async () => {
+    vi.useFakeTimers();
+    // Elke query duurt 10s nep-tijd; met >1 tabel duurt één run ruim langer dan
+    // het interval van 1s. Tijdens die ene run vallen dus meerdere interval-tikken.
+    const queryDelayMs = 10000;
+    const pool = makeSlowPool(queryDelayMs);
+    const run = createOrphanCourseAccessCleanupRunner({
+      getPgPool: () => pool,
+      getHasStudentVisible: () => false,
+      getSuperuserEmail: () => SUPERUSER,
+      logger: makeLogger(),
+    });
+    const startupDelayMs = 100;
+    const intervalMs = 1000;
+    const { intervalTimer } = scheduleOrphanCourseAccessCleanup({ runOnce: run, startupDelayMs, intervalMs });
+
+    // Trigger de startup-run.
+    await vi.advanceTimersByTimeAsync(startupDelayMs);
+    expect(run.isRunning()).toBe(true);
+    expect(pool.total).toBe(1); // alleen de eerste tabel-query is in-flight
+
+    // Laat meerdere interval-tikken vallen TERWIJL de eerste run nog hangt op
+    // zijn eerste query (resolved pas op 100+10000=10100). Tikken op
+    // 1100/2100/.../9100 = 9 tikken, allemaal no-ops door de overlap-gate.
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(run.isRunning()).toBe(true);
+    expect(pool.total).toBe(1); // GEEN extra query door de tussentijdse tikken
+    expect(pool.maxInFlight).toBe(1); // nooit twee runs tegelijk
+
+    // Stop verdere interval-tikken zodat we de eerste run geïsoleerd kunnen laten
+    // aflopen (anders start een tik direct na afronding meteen een verse run).
+    clearInterval(intervalTimer);
+
+    // Laat de volledige eerste run aflopen (3 tabellen × 10s + marge).
+    await vi.advanceTimersByTimeAsync(ORPHAN_CLEANUP_TABLE_LABELS.length * queryDelayMs);
+    expect(run.isRunning()).toBe(false);
+    expect(pool.total).toBe(ORPHAN_CLEANUP_TABLE_LABELS.length); // precies één run
+    expect(pool.maxInFlight).toBe(1); // door de hele cyclus nooit twee runs tegelijk
+  });
+
+  it('exporteert een redelijke standaard-startvertraging', () => {
+    expect(ORPHAN_CLEANUP_STARTUP_DELAY_MS).toBe(10000);
   });
 });

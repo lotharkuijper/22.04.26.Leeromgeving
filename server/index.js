@@ -84,7 +84,7 @@ import {
 import { registerCourseInfoRoutes } from './courseInfo.js';
 import { registerRelationshipAdjustRoute } from './relationshipAdjust.js';
 import { registerConceptEvidenceRoutes } from './conceptEvidence.js';
-import { registerStudiecafeRoutes, createOrphanCourseAccessCleanupRunner } from './studiecafe.js';
+import { registerStudiecafeRoutes, createOrphanCourseAccessCleanupRunner, scheduleOrphanCourseAccessCleanup } from './studiecafe.js';
 import {
   groupPendingByUser,
   partitionByPrefs,
@@ -13646,14 +13646,13 @@ if (process.env.NODE_ENV !== 'test') {
     if (typeof digestTimer.unref === 'function') digestTimer.unref();
     // Studiecafé wees-leesmarkering-opruimer (Task #323): periodiek read-rijen
     // verwijderen van studenten die geen toegang meer hebben tot de cursus.
-    // Eénmaal kort na startup en daarna op interval.
-    setTimeout(() => {
-      runOrphanThreadReadsCleanupOnce().catch((e) => console.warn('[studiecafe-reads-cleanup] cyclus mislukt:', e.message));
-    }, 10000).unref?.();
-    const readsCleanupTimer = setInterval(() => {
-      runOrphanThreadReadsCleanupOnce().catch((e) => console.warn('[studiecafe-reads-cleanup] cyclus mislukt:', e.message));
-    }, READS_CLEANUP_INTERVAL_MS);
-    if (typeof readsCleanupTimer.unref === 'function') readsCleanupTimer.unref();
+    // Eénmaal kort na startup en daarna op interval. De wiring (startvertraging +
+    // interval + overlap-gate) zit in `scheduleOrphanCourseAccessCleanup` zodat ze
+    // los van deze listen-callback met nep-timers getest kan worden (Task #339).
+    scheduleOrphanCourseAccessCleanup({
+      runOnce: runOrphanThreadReadsCleanupOnce,
+      intervalMs: READS_CLEANUP_INTERVAL_MS,
+    });
   });
 }
 

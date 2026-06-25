@@ -518,6 +518,40 @@ export function createOrphanCourseAccessCleanupRunner({
   return runOnce;
 }
 
+// Standaard-startvertraging: éénmaal kort na startup draaien (10s) en daarna op
+// interval. Apart benoemd zodat de wiring testbaar is met nep-timers.
+export const ORPHAN_CLEANUP_STARTUP_DELAY_MS = 10000;
+
+// Plant de periodieke opruim-cyclus: éénmaal na `startupDelayMs` en daarna elke
+// `intervalMs`. De overlap-gate van `runOnce` zorgt dat een nog-lopende run niet
+// opnieuw wordt gestart wanneer de volgende tik valt (langzame run > interval →
+// geen tweede gelijktijdige run). De timer-functies zijn injecteerbaar zodat
+// tests met nep-timers de wiring (startvertraging + interval) end-to-end kunnen
+// uitoefenen, niet alleen de kale `runOnce`-closure. Beide timers worden ge-unref't
+// zodat ze het proces niet levend houden. Retourneert de timers zodat de aanroeper
+// (of een test) ze kan opruimen.
+export function scheduleOrphanCourseAccessCleanup({
+  runOnce,
+  startupDelayMs = ORPHAN_CLEANUP_STARTUP_DELAY_MS,
+  intervalMs,
+  onError = (e) => console.warn('[studiecafe-reads-cleanup] cyclus mislukt:', e?.message ?? e),
+  setTimeoutFn = setTimeout,
+  setIntervalFn = setInterval,
+} = {}) {
+  const tick = () => {
+    try {
+      Promise.resolve(runOnce()).catch(onError);
+    } catch (e) {
+      onError(e);
+    }
+  };
+  const startupTimer = setTimeoutFn(tick, startupDelayMs);
+  startupTimer?.unref?.();
+  const intervalTimer = setIntervalFn(tick, intervalMs);
+  intervalTimer?.unref?.();
+  return { startupTimer, intervalTimer };
+}
+
 // ── Route-registratie ───────────────────────────────────────────────────────
 export function registerStudiecafeRoutes(app, deps) {
   const {
