@@ -2316,11 +2316,15 @@ function processDocxCore(doc, openaiKey) {
 // automatisch chunks + embeddings krijgt en niet op 'pending' blijft hangen.
 async function processRagDocumentById(documentId, lang = 'nl') {
   if (!AZURE_EMBEDDINGS_READY) throw new Error(EMBEDDINGS_NOT_CONFIGURED_MSG);
-  const { data: doc } = await supabaseAdmin
+  const { data: doc, error: docErr } = await supabaseAdmin
     .from('documents')
     .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
     .eq('id', documentId)
     .maybeSingle();
+  // Een echte query-fout (transiënt PostgREST-probleem of verouderde schema-cache)
+  // NIET als "document niet gevonden" behandelen: anders markeren we een bestaand
+  // document onterecht als 'failed' of embedden we onnodig opnieuw. Surface de fout.
+  if (docErr) throw new Error(`Kon document niet opzoeken: ${docErr.message}`);
   if (!doc) throw new Error('Document niet gevonden');
   const ext = (doc.file_type || '').toLowerCase().replace(/^\./, '');
   if (ext === 'pptx') return processPptxCore(doc, null, lang);
@@ -2345,11 +2349,14 @@ app.post('/api/admin/process-pptx', async (req, res) => {
   if (!documentId) return res.status(400).json({ error: 'documentId vereist' });
 
   try {
-    const { data: doc } = await supabaseAdmin
+    const { data: doc, error: docErr } = await supabaseAdmin
       .from('documents')
       .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
       .eq('id', documentId)
       .maybeSingle();
+    // Transiënte query-fout niet als 404 maskeren: anders denkt de docent dat het
+    // document weg is en herimporteert die het (duplicaat + onnodige embeddings).
+    if (docErr) return res.status(500).json({ error: `Kon document niet opzoeken: ${docErr.message}` });
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
 
     const ext = (doc.file_type || '').toLowerCase().replace(/^\./, '');
@@ -2400,11 +2407,14 @@ app.post('/api/admin/process-docx', async (req, res) => {
   if (!documentId) return res.status(400).json({ error: 'documentId vereist' });
 
   try {
-    const { data: doc } = await supabaseAdmin
+    const { data: doc, error: docErr } = await supabaseAdmin
       .from('documents')
       .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
       .eq('id', documentId)
       .maybeSingle();
+    // Transiënte query-fout niet als 404 maskeren: anders denkt de docent dat het
+    // document weg is en herimporteert die het (duplicaat + onnodige embeddings).
+    if (docErr) return res.status(500).json({ error: `Kon document niet opzoeken: ${docErr.message}` });
     if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
 
     const ext = (doc.file_type || '').toLowerCase().replace(/^\./, '');
@@ -2553,19 +2563,24 @@ app.post('/api/admin/create-rag-folder', async (req, res) => {
 async function ensureCourseRagFolder(courseId, courseName, userId) {
   // 1) Heeft de cursus al een gekoppelde RAG-map? Hergebruik die dan, ook als de
   //    cursusnaam intussen is gewijzigd. Dit voorkomt dubbele mappen.
-  const { data: assignments } = await supabaseAdmin
+  const { data: assignments, error: assignmentsErr } = await supabaseAdmin
     .from('course_folder_assignments')
     .select('folder_id')
     .eq('course_id', courseId);
+  // Een echte query-fout NIET als "geen koppeling" behandelen: anders zou een
+  // transiënte fout een tweede RAG-map laten aanmaken voor een cursus die er al
+  // één heeft (duplicaat). Surface de fout zodat de aanroep opnieuw kan draaien.
+  if (assignmentsErr) throw new Error(`Kon cursuskoppelingen niet opzoeken: ${assignmentsErr.message}`);
   const assignedIds = (assignments || []).map((a) => a.folder_id).filter(Boolean);
   if (assignedIds.length > 0) {
-    const { data: ragFolder } = await supabaseAdmin
+    const { data: ragFolder, error: ragFolderErr } = await supabaseAdmin
       .from('document_folders')
       .select('id')
       .in('id', assignedIds)
       .eq('folder_type', 'rag_sources')
       .limit(1)
       .maybeSingle();
+    if (ragFolderErr) throw new Error(`Kon gekoppelde RAG-map niet opzoeken: ${ragFolderErr.message}`);
     if (ragFolder) {
       return { folderId: ragFolder.id, created: false };
     }
@@ -2576,18 +2591,24 @@ async function ensureCourseRagFolder(courseId, courseName, userId) {
   //    cursus. Hangt een naam-match (ook) aan een ándere cursus, dan komt ze
   //    NOOIT in aanmerking (anders zou een naam-botsing tot cross-course
   //    koppeling leiden) → dan maken we een nieuwe map.
-  const { data: namedFolders } = await supabaseAdmin
+  const { data: namedFolders, error: namedFoldersErr } = await supabaseAdmin
     .from('document_folders')
     .select('id')
     .eq('name', `RAG - ${courseName}`)
     .eq('folder_type', 'rag_sources');
+  // Transiënte fout niet als "geen naam-match" behandelen → zou een herbruikbare
+  // map missen en een duplicaat aanmaken. Surface de fout.
+  if (namedFoldersErr) throw new Error(`Kon mappen op naam niet opzoeken: ${namedFoldersErr.message}`);
 
   const assignmentsByFolderId = {};
   for (const f of namedFolders || []) {
-    const { data: asg } = await supabaseAdmin
+    const { data: asg, error: asgErr } = await supabaseAdmin
       .from('course_folder_assignments')
       .select('course_id')
       .eq('folder_id', f.id);
+    // Fout niet negeren: een gemiste koppeling zou een map ten onrechte als
+    // herbruikbaar (of juist niet) kunnen markeren — surface in plaats van raden.
+    if (asgErr) throw new Error(`Kon mapkoppelingen niet opzoeken: ${asgErr.message}`);
     assignmentsByFolderId[f.id] = (asg || []).map((a) => a.course_id).filter(Boolean);
   }
   const reusableFolderId = pickReusableRagFolder({
@@ -2631,12 +2652,15 @@ async function ensureCourseRagFolder(courseId, courseName, userId) {
     }
   }
 
-  const { data: existingAssignment } = await supabaseAdmin
+  const { data: existingAssignment, error: existingAssignmentErr } = await supabaseAdmin
     .from('course_folder_assignments')
     .select('id')
     .eq('course_id', courseId)
     .eq('folder_id', folderId)
     .maybeSingle();
+  // Fout niet als "nog niet gekoppeld" behandelen → zou een dubbele koppeling-insert
+  // forceren. Surface de fout.
+  if (existingAssignmentErr) throw new Error(`Kon bestaande koppeling niet opzoeken: ${existingAssignmentErr.message}`);
   if (!existingAssignment) {
     const { error: assignError } = await supabaseAdmin
       .from('course_folder_assignments')
