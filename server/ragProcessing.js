@@ -7,11 +7,87 @@ import { buildEmbedInput } from './chunking.js';
 // (dependency injection): zo blijven de productie-aanroepen identiek terwijl tests
 // een falende embeddings-call kunnen simuleren.
 
+// Een handvol tekens uit een PDF van enkele MB's betekent vrijwel zeker een
+// mislukte extractie (corrupte/gescande PDF zonder OCR, parser-bug). pdf.js is de
+// primaire route; valt die terug op officeparser en levert óók die bijna niets
+// op, dan liever fail-closed dan de bestaande, goede chunks overschrijven met
+// ruis. Alleen voor PDF: andere formaten kunnen legitiem kort zijn.
+const MIN_PDF_TEXT_CHARS = 20;
+
+// Maximale rij-batch per INSERT in de atomic-transactie (houdt het aantal
+// query-parameters ruim onder de Postgres-limiet, ook bij grote documenten).
+const INSERT_BATCH = 100;
+
+// Schrijf de nieuwe chunks weg zónder ooit een document met nul chunks achter te
+// laten. Met een `pgPool` gebeurt delete-oud → insert-nieuw → status 'completed'
+// in ÉÉN transactie: faalt de insert halverwege, dan rolt ook de delete terug en
+// blijven de oude chunks staan (status wordt door de aanroeper op 'failed' gezet).
+// Zonder `pgPool` (testomgeving) valt de functie terug op het oude supabase-pad,
+// maar zet de status pas op 'completed' nádat de insert is geslaagd.
+async function persistChunksAtomic({ documentId, rows, deps }) {
+  const { supabaseAdmin, pgPool } = deps;
+
+  if (pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM document_chunks WHERE document_id = $1', [documentId]);
+      for (let start = 0; start < rows.length; start += INSERT_BATCH) {
+        const batch = rows.slice(start, start + INSERT_BATCH);
+        const valuesSql = [];
+        const params = [];
+        batch.forEach((r, i) => {
+          const b = i * 5;
+          valuesSql.push(`($${b + 1}, $${b + 2}, $${b + 3}::vector, $${b + 4}, $${b + 5}::jsonb)`);
+          params.push(
+            r.document_id,
+            r.content,
+            Array.isArray(r.embedding) ? `[${r.embedding.join(',')}]` : r.embedding,
+            r.chunk_index,
+            JSON.stringify(r.metadata ?? {}),
+          );
+        });
+        await client.query(
+          `INSERT INTO document_chunks (document_id, content, embedding, chunk_index, metadata) VALUES ${valuesSql.join(', ')}`,
+          params,
+        );
+      }
+      await client.query(
+        "UPDATE documents SET processing_status = 'completed', total_chunks = $2 WHERE id = $1",
+        [documentId, rows.length],
+      );
+      await client.query('COMMIT');
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* best effort */ }
+      const e = new Error(`Kon chunks niet atomisch opslaan: ${err.message}`);
+      e.status = 500;
+      throw e;
+    } finally {
+      client.release();
+    }
+    return rows.length;
+  }
+
+  // Terugvalpad zonder pgPool (bv. tests): oude volgorde, status pas na insert.
+  await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
+  const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
+  if (insErr) {
+    const e = new Error(`Kon chunks niet opslaan: ${insErr.message}`);
+    e.status = 500;
+    throw e;
+  }
+  await supabaseAdmin.from('documents')
+    .update({ processing_status: 'completed', total_chunks: rows.length })
+    .eq('id', documentId);
+  return rows.length;
+}
+
 // Kernverwerking voor PowerPoint: download, extractie, semantische chunking,
 // embeddings en persistentie. Zet bij elke fout de document-status op 'failed'.
 export async function processPptxCore(doc, openaiKey, lang = 'nl', deps = {}) {
   const {
     supabaseAdmin,
+    pgPool,
     extractPptxStructured,
     semanticChunkDeck,
     splitLongSections,
@@ -66,7 +142,6 @@ export async function processPptxCore(doc, openaiKey, lang = 'nl', deps = {}) {
     }
 
     const embeddings = await embedTextsServer(finalSections.map((s) => buildEmbedInput(doc.title, s.content)), openaiKey);
-    await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
 
     const rows = finalSections.map((s, i) => ({
       document_id: documentId,
@@ -82,16 +157,7 @@ export async function processPptxCore(doc, openaiKey, lang = 'nl', deps = {}) {
       }),
     }));
 
-    const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
-    if (insErr) {
-      const e = new Error(`Kon chunks niet opslaan: ${insErr.message}`);
-      e.status = 500;
-      throw e;
-    }
-
-    await supabaseAdmin.from('documents')
-      .update({ processing_status: 'completed', total_chunks: rows.length })
-      .eq('id', documentId);
+    await persistChunksAtomic({ documentId, rows, deps: { supabaseAdmin, pgPool } });
 
     log(`[process-pptx] doc=${documentId} dia's=${slides.length} chunks=${rows.length} mode=${mode}`);
     return { totalChunks: rows.length, slideCount: slides.length, mode };
@@ -110,6 +176,7 @@ export async function processPptxCore(doc, openaiKey, lang = 'nl', deps = {}) {
 export async function processDocxCore(doc, openaiKey, deps = {}) {
   const {
     supabaseAdmin,
+    pgPool,
     convertToPdf,
     extractPdfPageTexts,
     chunkPlainText,
@@ -196,7 +263,6 @@ export async function processDocxCore(doc, openaiKey, deps = {}) {
     }
 
     const embeddings = await embedTextsServer(chunkTexts.map((t) => buildEmbedInput(doc.title, t)), openaiKey);
-    await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
 
     let pagesAssigned = 0;
     const rows = chunkObjs.map((c, i) => {
@@ -216,16 +282,7 @@ export async function processDocxCore(doc, openaiKey, deps = {}) {
       };
     });
 
-    const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
-    if (insErr) {
-      const e = new Error(`Kon chunks niet opslaan: ${insErr.message}`);
-      e.status = 500;
-      throw e;
-    }
-
-    await supabaseAdmin.from('documents')
-      .update({ processing_status: 'completed', total_chunks: rows.length })
-      .eq('id', documentId);
+    await persistChunksAtomic({ documentId, rows, deps: { supabaseAdmin, pgPool } });
 
     log(`[process-docx] doc=${documentId} type=${ext} chunks=${rows.length} paged=${paged} pages=${pagesAssigned}`);
     return { totalChunks: rows.length, paged, pagesAssigned };
@@ -235,13 +292,17 @@ export async function processDocxCore(doc, openaiKey, deps = {}) {
   }
 }
 
-// Kernverwerking voor platte-tekstbronnen (.pdf/.docx/.txt/.xlsx/...): download,
-// tekstextractie (officeparser voor kantoorformaten, utf8 voor tekst), chunking,
-// embeddings en persistentie. Zet de document-status zelf.
+// Kernverwerking voor platte-tekstbronnen (.pdf/.txt/.xlsx/...): download,
+// tekstextractie (pdf.js voor PDF, officeparser voor overige kantoorformaten,
+// utf8 voor tekst), chunking, embeddings en atomic-persistentie. Zet de
+// document-status zelf en laat bij een fout het document op 'failed'.
 export async function processPlainRagDocument(doc, openaiKey, deps = {}) {
   const {
     supabaseAdmin,
+    pgPool,
     parseOfficeAsync,
+    extractPdfPageTexts,
+    assignPdfPages,
     chunkPlainText,
     embedTextsServer,
     log = () => {},
@@ -271,11 +332,34 @@ export async function processPlainRagDocument(doc, openaiKey, deps = {}) {
 
     const ext = (doc.file_type || (doc.filename || '').split('.').pop() || '')
       .toLowerCase().replace(/^\./, '');
+
     let text = '';
+    let pageTexts = null;
+    let paged = false;
     try {
       if (ext === 'txt' || ext === 'md' || ext === 'csv' || ext === 'tsv' || ext === 'json') {
         text = buffer.toString('utf8');
-      } else if (['pdf', 'docx', 'xlsx', 'odt', 'ods', 'odp'].includes(ext)) {
+      } else if (ext === 'pdf') {
+        // PDF betrouwbaar via pdf.js (per pagina). officeparser leverde op
+        // sommige PDF's stil bijna niets op; pdf.js geeft echte tekst én laat
+        // ons paginanummers koppelen. Bij een leeg/mislukt pdf.js-resultaat
+        // vallen we terug op officeparser zodat oudere paden blijven werken.
+        if (typeof extractPdfPageTexts === 'function') {
+          try {
+            const pages = await extractPdfPageTexts(buffer);
+            if (Array.isArray(pages) && pages.join('').trim().length > 0) {
+              pageTexts = pages;
+              text = pages.join('\n\n');
+              paged = true;
+            }
+          } catch (err) {
+            log(`[process-rag] doc=${documentId} pdf.js-extractie mislukt, terugval op officeparser: ${err.message}`);
+          }
+        }
+        if (!paged) {
+          text = String(await parseOfficeAsync(buffer) || '').trim();
+        }
+      } else if (['docx', 'xlsx', 'odt', 'ods', 'odp'].includes(ext)) {
         text = String(await parseOfficeAsync(buffer) || '').trim();
       } else {
         // Onbekend type: probeer als platte tekst te lezen.
@@ -292,38 +376,53 @@ export async function processPlainRagDocument(doc, openaiKey, deps = {}) {
       e.status = 422;
       throw e;
     }
+    if (ext === 'pdf' && text.trim().length < MIN_PDF_TEXT_CHARS) {
+      const e = new Error('Geen leesbare tekst gevonden in dit bestand (extractie leverde vrijwel niets op)');
+      e.status = 422;
+      throw e;
+    }
 
-    const chunks = chunkPlainText(text);
-    if (!chunks.length) {
+    const chunkTexts = chunkPlainText(text);
+    if (!chunkTexts.length) {
       const e = new Error('Geen chunks geproduceerd');
       e.status = 422;
       throw e;
     }
 
-    const embeddings = await embedTextsServer(chunks.map((c) => buildEmbedInput(doc.title, c)), openaiKey);
-    await supabaseAdmin.from('document_chunks').delete().eq('document_id', documentId);
-
-    const rows = chunks.map((content, i) => ({
-      document_id: documentId,
-      content: sanitizeText(content),
-      embedding: embeddings[i],
-      chunk_index: i,
-      metadata: sanitizeMetadata({ source: ext || 'text' }),
-    }));
-
-    const { error: insErr } = await supabaseAdmin.from('document_chunks').insert(rows);
-    if (insErr) {
-      const e = new Error(`Kon chunks niet opslaan: ${insErr.message}`);
-      e.status = 500;
-      throw e;
+    // Koppel chunks aan paginanummer(s) als we per-pagina PDF-tekst hebben.
+    const chunkObjs = chunkTexts.map((t) => ({ text: t, metadata: {} }));
+    if (paged && typeof assignPdfPages === 'function') {
+      try {
+        assignPdfPages(pageTexts, chunkObjs);
+      } catch (err) {
+        log(`[process-rag] doc=${documentId} pagina-toewijzing mislukt: ${err.message}`);
+      }
     }
 
-    await supabaseAdmin.from('documents')
-      .update({ processing_status: 'completed', total_chunks: rows.length })
-      .eq('id', documentId);
+    const embeddings = await embedTextsServer(chunkTexts.map((t) => buildEmbedInput(doc.title, t)), openaiKey);
 
-    log(`[process-rag] doc=${documentId} type=${ext} chunks=${rows.length}`);
-    return { totalChunks: rows.length };
+    let pagesAssigned = 0;
+    const rows = chunkObjs.map((c, i) => {
+      const metadata = { source: ext || 'text' };
+      if (c.metadata.pageStart != null) {
+        metadata.pageStart = c.metadata.pageStart;
+        metadata.pageEnd = c.metadata.pageEnd ?? c.metadata.pageStart;
+        metadata.pageNumber = c.metadata.pageStart;
+        pagesAssigned += 1;
+      }
+      return {
+        document_id: documentId,
+        content: sanitizeText(c.text),
+        embedding: embeddings[i],
+        chunk_index: i,
+        metadata: sanitizeMetadata(metadata),
+      };
+    });
+
+    await persistChunksAtomic({ documentId, rows, deps: { supabaseAdmin, pgPool } });
+
+    log(`[process-rag] doc=${documentId} type=${ext} chunks=${rows.length} paged=${paged} pages=${pagesAssigned}`);
+    return { totalChunks: rows.length, paged, pagesAssigned };
   } catch (err) {
     await markFailed();
     throw err;

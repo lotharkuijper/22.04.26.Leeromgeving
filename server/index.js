@@ -2272,6 +2272,7 @@ async function semanticChunkDeck(slides, openaiKey, lang = 'nl') {
 function processPptxCore(doc, openaiKey, lang = 'nl') {
   return processPptxCoreImpl(doc, openaiKey, lang, {
     supabaseAdmin,
+    pgPool,
     extractPptxStructured,
     semanticChunkDeck,
     splitLongSections,
@@ -2287,7 +2288,10 @@ function processPptxCore(doc, openaiKey, lang = 'nl') {
 function processPlainRagDocument(doc, openaiKey) {
   return processPlainRagDocumentImpl(doc, openaiKey, {
     supabaseAdmin,
+    pgPool,
     parseOfficeAsync,
+    extractPdfPageTexts,
+    assignPdfPages,
     chunkPlainText,
     embedTextsServer,
     log: (...a) => console.log(...a),
@@ -2301,6 +2305,7 @@ function processPlainRagDocument(doc, openaiKey) {
 function processDocxCore(doc, openaiKey) {
   return processDocxCoreImpl(doc, openaiKey, {
     supabaseAdmin,
+    pgPool,
     convertToPdf: (buf, ext) => queueConversion(() => convertOfficeToPdf(buf, ext)),
     extractPdfPageTexts,
     chunkPlainText,
