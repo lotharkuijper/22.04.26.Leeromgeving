@@ -9,11 +9,15 @@ import {
   FileText,
   ChevronUp,
   ChevronDown,
+  Image as ImageIcon,
+  BookText,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../i18n';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { RichTextEditor } from './RichTextEditor';
+import { MarkdownMessage } from './MarkdownMessage';
+import { CourseBannerFrame, type CourseBanner } from './CourseBannerFrame';
 import { formatFileSize } from '../config/storage.config';
 
 interface InfoDoc {
@@ -86,6 +90,11 @@ export default function CursusInfoTab() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [banner, setBanner] = useState<CourseBanner | null>(null);
+  const [bannerUploading, setBannerUploading] = useState(false);
+  const [bannerSaving, setBannerSaving] = useState(false);
+  const bannerInputRef = useRef<HTMLInputElement | null>(null);
+
   const loadInfo = useCallback(async () => {
     if (!activeCourseId) return;
     setLoading(true);
@@ -100,6 +109,7 @@ export default function CursusInfoTab() {
       }
       setBody(json.body || '');
       setDocs(json.documents || []);
+      setBanner(json.banner || null);
     } catch (err) {
       setError(t('courseInfo.loadError', { message: err instanceof Error ? err.message : String(err) }));
     } finally {
@@ -133,6 +143,90 @@ export default function CursusInfoTab() {
       setError(t('courseInfo.saveError', { message: err instanceof Error ? err.message : String(err) }));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleBannerUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !activeCourseId) return;
+    setBannerUploading(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const headers = await authHeaders();
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/courses/${activeCourseId}/info/banner`, {
+        method: 'POST',
+        headers,
+        body: form,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(t('courseInfo.banner.uploadError', { message: json.error || res.status }));
+        return;
+      }
+      setBanner(json.banner || null);
+      setMessage(t('courseInfo.banner.saved'));
+    } catch (err) {
+      setError(t('courseInfo.banner.uploadError', { message: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setBannerUploading(false);
+      if (bannerInputRef.current) bannerInputRef.current.value = '';
+    }
+  }
+
+  function updateBannerField<K extends keyof CourseBanner>(field: K, value: CourseBanner[K]) {
+    setBanner((prev) => (prev ? { ...prev, [field]: value } : prev));
+  }
+
+  async function saveBannerSettings() {
+    if (!activeCourseId || !banner) return;
+    setBannerSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const headers = { ...(await authHeaders()), 'Content-Type': 'application/json' };
+      const res = await fetch(`/api/courses/${activeCourseId}/info/banner`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          position: banner.position,
+          height: banner.height,
+          opacity: banner.opacity,
+          focal: banner.focal,
+          alt: banner.alt,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(t('courseInfo.banner.saveError', { message: json.error || res.status }));
+        return;
+      }
+      if (json.banner) setBanner(json.banner);
+      setMessage(t('courseInfo.banner.saved'));
+    } catch (err) {
+      setError(t('courseInfo.banner.saveError', { message: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setBannerSaving(false);
+    }
+  }
+
+  async function removeBanner() {
+    if (!activeCourseId) return;
+    setMessage(null);
+    setError(null);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch(`/api/courses/${activeCourseId}/info/banner`, { method: 'DELETE', headers });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(t('courseInfo.banner.removeError', { message: json.error || res.status }));
+        return;
+      }
+      setBanner(null);
+    } catch (err) {
+      setError(t('courseInfo.banner.removeError', { message: err instanceof Error ? err.message : String(err) }));
     }
   }
 
@@ -323,6 +417,174 @@ export default function CursusInfoTab() {
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           {saving ? t('courseInfo.saving') : t('courseInfo.save')}
         </button>
+      </div>
+
+      {/* Banner */}
+      <div data-testid="section-banner-admin">
+        <h3 className="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
+          <ImageIcon className="h-4 w-4 text-slate-500" /> {t('courseInfo.banner.title')}
+        </h3>
+        <p className="text-sm text-slate-600 mb-3">{t('courseInfo.banner.intro')}</p>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => bannerInputRef.current?.click()}
+            disabled={bannerUploading}
+            className="inline-flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            data-testid="button-upload-banner"
+          >
+            {bannerUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            {bannerUploading
+              ? t('courseInfo.banner.uploading')
+              : banner
+                ? t('courseInfo.banner.replace')
+                : t('courseInfo.banner.upload')}
+          </button>
+          {banner && (
+            <button
+              type="button"
+              onClick={removeBanner}
+              className="inline-flex items-center gap-2 rounded border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+              data-testid="button-remove-banner"
+            >
+              <Trash2 className="h-4 w-4" /> {t('courseInfo.banner.remove')}
+            </button>
+          )}
+          <input
+            ref={bannerInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+            className="hidden"
+            onChange={handleBannerUpload}
+            data-testid="input-banner-file"
+          />
+        </div>
+        <p className="mt-1 text-xs text-slate-400">{t('courseInfo.banner.formatHint')}</p>
+
+        {!banner ? (
+          <p className="mt-3 text-sm text-slate-500" data-testid="text-no-banner">
+            {t('courseInfo.banner.none')}
+          </p>
+        ) : (
+          <div className="mt-4 grid gap-6 lg:grid-cols-2">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  {t('courseInfo.banner.position')}
+                </label>
+                <select
+                  value={banner.position}
+                  onChange={(e) => updateBannerField('position', e.target.value as CourseBanner['position'])}
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+                  data-testid="select-banner-position"
+                >
+                  <option value="top">{t('courseInfo.banner.position.top')}</option>
+                  <option value="bottom">{t('courseInfo.banner.position.bottom')}</option>
+                  <option value="left">{t('courseInfo.banner.position.left')}</option>
+                  <option value="right">{t('courseInfo.banner.position.right')}</option>
+                  <option value="background">{t('courseInfo.banner.position.background')}</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  {t('courseInfo.banner.focal')}
+                </label>
+                <select
+                  value={banner.focal}
+                  onChange={(e) => updateBannerField('focal', e.target.value as CourseBanner['focal'])}
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+                  data-testid="select-banner-focal"
+                >
+                  <option value="top">{t('courseInfo.banner.focal.top')}</option>
+                  <option value="center">{t('courseInfo.banner.focal.center')}</option>
+                  <option value="bottom">{t('courseInfo.banner.focal.bottom')}</option>
+                </select>
+              </div>
+
+              {banner.position !== 'background' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    {t('courseInfo.banner.height')}: {banner.height}px
+                  </label>
+                  <input
+                    type="range"
+                    min={80}
+                    max={600}
+                    step={10}
+                    value={banner.height}
+                    onChange={(e) => updateBannerField('height', Number(e.target.value))}
+                    className="w-full"
+                    data-testid="range-banner-height"
+                  />
+                </div>
+              )}
+
+              {banner.position === 'background' && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    {t('courseInfo.banner.opacity')}: {banner.opacity}%
+                  </label>
+                  <input
+                    type="range"
+                    min={10}
+                    max={100}
+                    step={5}
+                    value={banner.opacity}
+                    onChange={(e) => updateBannerField('opacity', Number(e.target.value))}
+                    className="w-full"
+                    data-testid="range-banner-opacity"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">{t('courseInfo.banner.opacityHint')}</p>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  {t('courseInfo.banner.alt')}
+                </label>
+                <input
+                  type="text"
+                  value={banner.alt}
+                  maxLength={300}
+                  onChange={(e) => updateBannerField('alt', e.target.value)}
+                  placeholder={t('courseInfo.banner.altPlaceholder')}
+                  className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm"
+                  data-testid="input-banner-alt"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={saveBannerSettings}
+                disabled={bannerSaving}
+                className="inline-flex items-center gap-2 rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-60"
+                data-testid="button-save-banner"
+              >
+                {bannerSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                {bannerSaving ? t('courseInfo.banner.saving') : t('courseInfo.banner.save')}
+              </button>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-2">
+                {t('courseInfo.banner.preview')}
+              </p>
+              <CourseBannerFrame banner={banner} testId="banner-preview">
+                <div className="flex items-center gap-2 mb-3">
+                  <BookText className="h-5 w-5 text-sky-700" />
+                  <h4 className="text-lg font-semibold text-slate-900">{t('dashboard.courseInfo.title')}</h4>
+                </div>
+                {body.trim() ? (
+                  <MarkdownMessage content={body} />
+                ) : (
+                  <p className="text-sm text-slate-600">{t('courseInfo.banner.previewBody')}</p>
+                )}
+              </CourseBannerFrame>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Gekoppelde bestanden */}

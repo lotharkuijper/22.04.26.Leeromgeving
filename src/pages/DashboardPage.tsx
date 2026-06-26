@@ -17,6 +17,7 @@ import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { supabase } from '../lib/supabase';
 import { useLanguage } from '../i18n';
 import { MarkdownMessage } from '../components/MarkdownMessage';
+import { CourseBannerFrame, type CourseBanner } from '../components/CourseBannerFrame';
 import { AutoTranslatedNotice } from '../components/AutoTranslatedNotice';
 import { useContentTranslation } from '../hooks/useContentTranslation';
 
@@ -41,6 +42,7 @@ interface CourseInfoDoc {
 interface CourseInfo {
   body: string;
   documents: CourseInfoDoc[];
+  banner: CourseBanner | null;
 }
 
 interface TileSpec {
@@ -158,7 +160,7 @@ export function DashboardPage() {
         if (!res.ok) return;
         const json = await res.json();
         if (!cancelled) {
-          setCourseInfo({ body: json.body || '', documents: json.documents || [] });
+          setCourseInfo({ body: json.body || '', documents: json.documents || [], banner: json.banner || null });
         }
       } catch {
         /* stil falen — header is optioneel */
@@ -417,11 +419,8 @@ export function DashboardPage() {
       </section>
 
       {/* Cursus-info header (Task #202) — alleen tonen als er inhoud is */}
-      {courseInfo && (courseInfo.body.trim() || courseInfo.documents.length > 0) && (
-        <section
-          className="rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-md p-6 md:p-8 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-16px_rgba(15,23,42,0.15)]"
-          data-testid="section-course-info"
-        >
+      {courseInfo && (courseInfo.body.trim() || courseInfo.documents.length > 0 || courseInfo.banner) && (
+        <CourseBannerFrame banner={courseInfo.banner} testId="section-course-info">
           <div className="flex items-center gap-2 mb-3">
             <BookText className="h-5 w-5 text-sky-700" />
             <h2 className="text-lg font-semibold text-slate-900">{t('dashboard.courseInfo.title')}</h2>
@@ -461,7 +460,7 @@ export function DashboardPage() {
               </ul>
             </div>
           )}
-        </section>
+        </CourseBannerFrame>
       )}
 
       {/* Action tiles */}

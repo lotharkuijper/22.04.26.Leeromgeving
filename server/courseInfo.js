@@ -11,6 +11,18 @@
 // auth-helpers, multer-middleware) komen via `deps` binnen.
 // ───────────────────────────────────────────────────────────────────────────
 
+import { randomUUID } from 'node:crypto';
+import {
+  normalizeBannerSettings,
+  isAllowedBannerImage,
+  isAllowedBannerBuffer,
+  bannerExtFromName,
+} from './courseBanner.js';
+
+const BANNER_BUCKET = 'docs_general';
+const BANNER_SIGNED_URL_TTL = 60 * 60 * 4; // 4 uur
+const BANNER_MAX_BYTES = 8 * 1024 * 1024; // 8 MB
+
 export function registerCourseInfoRoutes(app, deps) {
   const {
     supabaseAdmin,
@@ -39,6 +51,35 @@ export function registerCourseInfoRoutes(app, deps) {
         file_type: l.documents.file_type,
         file_size: l.documents.file_size,
       }));
+  }
+
+  // Bouw het banner-object voor de client: een kortlopende signed URL (de bucket
+  // is privé) plus de weergave-instellingen. Defensief: als de banner-kolommen
+  // nog niet bestaan (oude DB) of er geen banner is, levert dit `null` op zonder
+  // de GET /info te laten falen.
+  async function loadCourseInfoBanner(courseId) {
+    try {
+      const { data: info, error } = await supabaseAdmin
+        .from('course_info')
+        .select('banner_path, banner_position, banner_height, banner_opacity, banner_focal, banner_alt')
+        .eq('course_id', courseId)
+        .maybeSingle();
+      if (error || !info?.banner_path) return null;
+      const { data: signed } = await supabaseAdmin.storage
+        .from(BANNER_BUCKET)
+        .createSignedUrl(info.banner_path, BANNER_SIGNED_URL_TTL);
+      if (!signed?.signedUrl) return null;
+      return {
+        url: signed.signedUrl,
+        position: info.banner_position || 'top',
+        height: info.banner_height ?? 220,
+        opacity: info.banner_opacity ?? 100,
+        focal: info.banner_focal || 'center',
+        alt: info.banner_alt || '',
+      };
+    } catch {
+      return null;
+    }
   }
 
   // Verzamel alle folder-id's die bij een cursus horen: de via
@@ -136,11 +177,13 @@ export function registerCourseInfoRoutes(app, deps) {
         .maybeSingle();
       const documents = await loadCourseInfoDocuments(courseId);
       const canEdit = await isStaffForCourse(auth.user, auth.profile, courseId);
+      const banner = await loadCourseInfoBanner(courseId);
       return res.json({
         body: info?.body || '',
         updatedAt: info?.updated_at || null,
         documents,
         canEdit,
+        banner,
       });
     } catch (err) {
       return res.status(500).json({ error: err.message });
@@ -439,6 +482,136 @@ export function registerCourseInfoRoutes(app, deps) {
         return res.json({ url: signed.signedUrl, filename });
       }
       return res.status(404).json({ error: 'Dit document heeft geen downloadbaar bestand.' });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/courses/:courseId/info/banner — upload/vervang de banner-afbeelding
+  // (alleen staff). De afbeelding gaat naar de private bucket onder een UUID-pad;
+  // de oude afbeelding wordt na een geslaagde DB-update best-effort opgeruimd.
+  app.post('/api/courses/:courseId/info/banner', docUpload.single('file'), async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId } = req.params;
+    if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Alleen docenten van deze cursus.' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'Geen bestand ontvangen.' });
+    const ext = bannerExtFromName(req.file.originalname);
+    const mime = req.file.mimetype || getFileMimeType(ext);
+    if (!isAllowedBannerImage(mime, ext)) {
+      return res.status(400).json({ error: 'Alleen afbeeldingen (PNG, JPG, WEBP, GIF of AVIF) zijn toegestaan. SVG wordt niet ondersteund.' });
+    }
+    // Verdediging-in-de-diepte: client-MIME/extensie zijn vervalsbaar, dus
+    // bevestig via de eerste bytes dat het écht een rasterbeeld is.
+    if (!isAllowedBannerBuffer(req.file.buffer)) {
+      return res.status(400).json({ error: 'Het bestand is geen geldige afbeelding (PNG, JPG, WEBP, GIF of AVIF).' });
+    }
+    if (req.file.size > BANNER_MAX_BYTES) {
+      return res.status(400).json({ error: 'Afbeelding is te groot (max. 8 MB).' });
+    }
+    try {
+      const { data: existing } = await supabaseAdmin
+        .from('course_info')
+        .select('banner_path')
+        .eq('course_id', courseId)
+        .maybeSingle();
+      const oldPath = existing?.banner_path || null;
+      // UUID-pad: nooit de door de gebruiker aangeleverde bestandsnaam gebruiken.
+      const filePath = `banners/${courseId}/${randomUUID()}.${ext}`;
+      const { error: upErr } = await supabaseAdmin.storage
+        .from(BANNER_BUCKET)
+        .upload(filePath, req.file.buffer, { contentType: mime, upsert: false });
+      if (upErr) return res.status(500).json({ error: 'Upload mislukt: ' + upErr.message });
+      const { error: dbErr } = await supabaseAdmin
+        .from('course_info')
+        .upsert(
+          { course_id: courseId, banner_path: filePath, updated_by: auth.user.id, updated_at: new Date().toISOString() },
+          { onConflict: 'course_id' }
+        );
+      if (dbErr) {
+        await supabaseAdmin.storage.from(BANNER_BUCKET).remove([filePath]).catch(() => {});
+        return res.status(500).json({ error: 'Opslaan mislukt: ' + dbErr.message });
+      }
+      if (oldPath && oldPath !== filePath) {
+        await supabaseAdmin.storage.from(BANNER_BUCKET).remove([oldPath]).catch(() => {});
+      }
+      const banner = await loadCourseInfoBanner(courseId);
+      return res.json({ ok: true, banner });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // PATCH /api/courses/:courseId/info/banner — werk de weergave-instellingen bij
+  // (positie/hoogte/doorzichtigheid/uitsnede/alt). Alleen staff. Waarden worden
+  // server-side genormaliseerd (clamp + enum) op basis van de huidige waarden.
+  app.patch('/api/courses/:courseId/info/banner', async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId } = req.params;
+    if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Alleen docenten van deze cursus.' });
+    }
+    try {
+      const { data: current } = await supabaseAdmin
+        .from('course_info')
+        .select('banner_position, banner_height, banner_opacity, banner_focal, banner_alt')
+        .eq('course_id', courseId)
+        .maybeSingle();
+      const s = normalizeBannerSettings(req.body || {}, current || {});
+      const { error } = await supabaseAdmin
+        .from('course_info')
+        .upsert(
+          {
+            course_id: courseId,
+            banner_position: s.position,
+            banner_height: s.height,
+            banner_opacity: s.opacity,
+            banner_focal: s.focal,
+            banner_alt: s.alt,
+            updated_by: auth.user.id,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'course_id' }
+        );
+      if (error) return res.status(500).json({ error: 'Instellingen opslaan mislukt: ' + error.message });
+      const banner = await loadCourseInfoBanner(courseId);
+      return res.json({ ok: true, banner });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DELETE /api/courses/:courseId/info/banner — verwijder de banner-afbeelding
+  // (alleen staff). De weergave-instellingen blijven staan voor een volgende keer.
+  app.delete('/api/courses/:courseId/info/banner', async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+    const auth = await requireAuthUser(req, res);
+    if (!auth) return;
+    const { courseId } = req.params;
+    if (!(await isStaffForCourse(auth.user, auth.profile, courseId))) {
+      return res.status(403).json({ error: 'Alleen docenten van deze cursus.' });
+    }
+    try {
+      const { data: existing } = await supabaseAdmin
+        .from('course_info')
+        .select('banner_path')
+        .eq('course_id', courseId)
+        .maybeSingle();
+      const oldPath = existing?.banner_path || null;
+      const { error } = await supabaseAdmin
+        .from('course_info')
+        .update({ banner_path: null, updated_by: auth.user.id, updated_at: new Date().toISOString() })
+        .eq('course_id', courseId);
+      if (error) return res.status(500).json({ error: error.message });
+      if (oldPath) {
+        await supabaseAdmin.storage.from(BANNER_BUCKET).remove([oldPath]).catch(() => {});
+      }
+      return res.json({ ok: true, banner: null });
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
