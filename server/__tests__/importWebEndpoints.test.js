@@ -675,6 +675,37 @@ describe('POST /api/admin/import-web/import', () => {
     expect(harness.state.db.tables.documents.length).toBe(0);
   });
 
+  it('volgt een redirect naar een query-variant van dezelfde pagina en importeert (Task #406)', async () => {
+    seed({ user: ADMIN });
+    // view?id=1 redirect naar view?id=2 — zelfde pad, alleen een andere query.
+    // Dat blijft binnen de scope (zelfde pagina-identiteit) en moet importeren.
+    mockFetch({
+      'https://example.com/view?id=1': { redirect: 'https://example.com/view?id=2' },
+      'https://example.com/view?id=2': page('Onderwerp Twee'),
+    });
+    const res = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: 'https://example.com/view', pages: [{ url: 'https://example.com/view?id=1' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(1);
+    expect(res.body.errors).toBe(0);
+    expect(harness.state.db.tables.documents.length).toBe(1);
+  });
+
+  it('weigert een redirect naar een andere host (off-site, telt als error, importeert niet) (Task #406)', async () => {
+    seed({ user: ADMIN });
+    mockFetch({
+      [BASE + 'a.html']: { redirect: 'https://kwaadaardig.example.org/a.html' },
+    });
+    const res = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'a.html' }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toBe(0);
+    expect(res.body.errors).toBe(1);
+    expect(harness.state.db.tables.documents.length).toBe(0);
+  });
+
   it('telt de pagina als error wanneer de AI-embeddingdienst een non-200 geeft', async () => {
     seed({ user: ADMIN });
     // Webpagina laadt prima, maar de embeddings-call faalt (HTTP 500).

@@ -418,7 +418,11 @@ export async function discoverPages(baseUrl, fetchImpl, opts = {}) {
   for (const sm of sitemapCandidates) {
     if (seenSitemap.has(sm)) continue;
     seenSitemap.add(sm);
-    const res = await fetchPage(sm, fetchImpl, { lookup });
+    // Ook de sitemap-fetch krijgt de scope mee: een sitemap die buiten de
+    // webomgeving redirect wordt niet gevolgd. De host-root-kandidaat wordt
+    // direct (zonder redirect) opgehaald en bij twijfel valt discovery terug op
+    // de BFS-crawl, dus dit blokkeert geen legitieme sitemap-detectie (Task #405).
+    const res = await fetchPage(sm, fetchImpl, { scope: start, lookup });
     if (!res.ok || !/<urlset|<sitemapindex|<loc>/i.test(res.html)) continue;
     const locs = parseSitemap(res.html)
       .map((u) => normalizeUrl(u))
@@ -446,7 +450,10 @@ export async function discoverPages(baseUrl, fetchImpl, opts = {}) {
     if (visited.has(url)) continue;
     visited.add(url);
 
-    const res = await fetchPage(url, fetchImpl, { lookup });
+    // Scope meegeven zodat een in-scope pagina die tijdens de discovery naar
+    // buiten de webomgeving (andere origin of buiten het dir-prefix) redirect
+    // wordt geweigerd in plaats van gevolgd — net als bij de import (Task #405).
+    const res = await fetchPage(url, fetchImpl, { scope: start, lookup });
     if (!res.ok) {
       warnings.push(`Kon pagina niet ophalen (${res.status || 'netwerkfout'}): ${url}`);
       continue;

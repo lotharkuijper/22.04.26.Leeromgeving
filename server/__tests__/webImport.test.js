@@ -320,6 +320,18 @@ describe('fetchPage scope-aware redirects', () => {
     expect(res.ok).toBe(true);
     expect(res.finalUrl).toBe('https://example.com/book/p2');
   });
+  it('volgt een redirect naar een query-variant van hetzelfde pad (zelfde scope, Task #406)', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/view?id=1': 'https://example.com/view?id=2' });
+    const res = await fetchPage('https://example.com/view?id=1', f, { scope: 'https://example.com/view' });
+    expect(res.ok).toBe(true);
+    expect(res.finalUrl).toBe('https://example.com/view?id=2');
+  });
+  it('weigert een redirect naar een andere host (off-site, Task #406)', async () => {
+    const f = makeRedirectFetch({ 'https://example.com/book/p1': 'https://elders.example.com/book/p1' });
+    const res = await fetchPage('https://example.com/book/p1', f, { scope: 'https://example.com/book/' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/scope/i);
+  });
 });
 
 describe('isBlockedIp / hostResolvesToBlocked', () => {
@@ -409,5 +421,36 @@ describe('discoverPages', () => {
     const { pages, warnings } = await discoverPages(base, fetchImpl, { maxPages: 2 });
     expect(pages.length).toBe(2);
     expect(warnings.some((w) => w.includes('Maximaal'))).toBe(true);
+  });
+
+  it('volgt geen off-scope redirect tijdens de crawl (Task #405)', async () => {
+    const base = 'https://example.com/book/';
+    // Geen sitemap → BFS-crawl. De startpagina linkt naar een in-scope pagina die
+    // vervolgens naar een andere origin redirect: die mag NIET gevolgd of
+    // toegevoegd worden, en moet als waarschuwing terugkomen.
+    const fetchImpl = async (url) => {
+      if (url.endsWith('sitemap.xml')) {
+        return { ok: false, status: 404, headers: { get: () => null }, text: async () => '' };
+      }
+      if (url === 'https://example.com/book/extern.html') {
+        return {
+          ok: false,
+          status: 302,
+          headers: { get: (k) => (k.toLowerCase() === 'location' ? 'https://kwaad.example.org/x.html' : null) },
+          text: async () => '',
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'text/html' : null) },
+        text: async () => '<html><head><title>Index</title></head><body><a href="extern.html">extern</a></body></html>',
+      };
+    };
+    const { pages, warnings } = await discoverPages(base, fetchImpl);
+    const urls = pages.map((p) => p.url);
+    expect(urls).toContain('https://example.com/book/');
+    expect(urls).not.toContain('https://example.com/book/extern.html');
+    expect(warnings.some((w) => w.includes('extern.html'))).toBe(true);
   });
 });
