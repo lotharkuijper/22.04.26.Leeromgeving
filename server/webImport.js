@@ -52,10 +52,27 @@ export function decodeHtmlEntities(input) {
   });
 }
 
-// Normaliseert een URL naar een vergelijkbare, canonieke vorm. Verwijdert de
-// fragment (#...) en query (?...), maakt host lowercase en strip een afsluitende
-// slash (behalve op de root). Geeft `null` terug bij een ongeldige of
-// niet-http(s) URL. `base` laat relatieve hrefs resolven.
+// Tracking-/campagne-/click-id query-parameters die nooit de pagina-IDENTITEIT
+// bepalen: ze verwijzen naar dezelfde inhoud. We strippen ze uit de query zodat
+// dezelfde pagina met verschillende campagne-tags niet als losse documenten
+// wordt geïmporteerd (en elkaars chunks zou overschrijven).
+const TRACKING_PARAM_RE = /^(utm_[a-z0-9_]+|fbclid|gclid|gbraid|wbraid|msclkid|yclid|dclid|mc_cid|mc_eid|igshid|_ga|_gl|ref|ref_src|ref_url)$/i;
+
+// Een fragment dat een client-side route aanduidt (hash-routering), bv.
+// `#/hoofdstuk` of `#!/pagina`. Zulke fragmenten onderscheiden aparte pagina's
+// in een SPA. Een gewoon anker (`#sectie`) verwijst daarentegen naar dezelfde
+// pagina en telt niet als eigen identiteit.
+function isRouteFragment(hash) {
+  return /^#(!|\/)/.test(hash);
+}
+
+// Normaliseert een URL naar een vergelijkbare, canonieke vorm voor zowel de
+// crawl/scope als de opslag-identiteit (`file_path`). Behoudt BEWUST een
+// betekenisvolle query en een route-achtig fragment zodat pagina's die alléén
+// daarin verschillen (bv. `?id=2`, of `#/h2`) een eigen identiteit houden en
+// elkaar niet overschrijven. Verwijdert wél tracking-parameters en gewone
+// ankers, maakt host lowercase en sorteert de query stabiel. Geeft `null` terug
+// bij een ongeldige of niet-http(s) URL. `base` laat relatieve hrefs resolven.
 export function normalizeUrl(raw, base) {
   if (!raw) return null;
   let u;
@@ -65,9 +82,30 @@ export function normalizeUrl(raw, base) {
     return null;
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  u.hash = '';
-  u.search = '';
   u.hostname = u.hostname.toLowerCase();
+
+  // Query: tracking-parameters strippen en de rest stabiel op sleutel sorteren,
+  // zodat herschikte of getagde parameters dezelfde identiteit krijgen, maar
+  // betekenisvolle parameters (bv. `?id=2`) een aparte pagina blijven. Herhaalde
+  // sleutels behouden hun onderlinge volgorde (stabiele sort). Lege query → het
+  // vraagteken helemaal weglaten.
+  if (u.search) {
+    const params = [...u.searchParams.entries()].filter(([k]) => !TRACKING_PARAM_RE.test(k));
+    params.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const sp = new URLSearchParams();
+    for (const [k, v] of params) sp.append(k, v);
+    const qs = sp.toString();
+    u.search = qs ? `?${qs}` : '';
+  }
+
+  // Fragment: alleen een route-achtig fragment (hash-routering) bepaalt een
+  // aparte pagina; een gewoon anker (`#sectie`) wordt gestript zodat de crawl
+  // niet elke anker-link als losse "pagina" met identieke inhoud ziet. NB: een
+  // fragment wordt nooit naar de server gestuurd, dus twee URL's die enkel in
+  // hun fragment verschillen halen identieke HTML op — dit voorkomt overschrijven,
+  // het levert geen nieuwe inhoud op.
+  if (u.hash && !isRouteFragment(u.hash)) u.hash = '';
+
   // Trailing slashes blijven bewust behouden: ze onderscheiden een directory
   // (`/boek/`) van een bestand (`/boek`) en zijn nodig om relatieve links
   // correct te resolven tijdens de crawl.
@@ -179,7 +217,13 @@ export function sameWebEnvironment(baseUrl, candidateUrl) {
   }
   if (base.origin !== cand.origin) return false;
   if (NON_PAGE_EXT_RE.test(cand.pathname)) return false;
-  return cand.pathname.toLowerCase().startsWith(dirPrefix(base.pathname));
+  const candPath = cand.pathname.toLowerCase();
+  // Dezelfde pagina (alleen een andere ?query of route-fragment) hoort per
+  // definitie bij dezelfde omgeving — ook als het pad extensieloos is en
+  // dirPrefix er anders een sub-directory van zou maken (`/view` → `/view/`,
+  // waardoor `/view` zichzelf niet als prefix zou herkennen).
+  if (candPath === base.pathname.toLowerCase()) return true;
+  return candPath.startsWith(dirPrefix(base.pathname));
 }
 
 // Haalt de <title> uit een HTML-document. Valt terug op de eerste <h1>.
@@ -353,11 +397,21 @@ export async function discoverPages(baseUrl, fetchImpl, opts = {}) {
     return { pages: [], method: 'none', warnings: ['Ongeldige URL'] };
   }
 
-  // 1) Sitemap-pad: probeer de sitemap binnen de omgeving en op host-root.
+  // 1) Sitemap-pad: probeer de sitemap binnen de omgeving en op host-root. De
+  // sitemap hoort bij de site-structuur, niet bij een specifieke query/route-
+  // variant; resolve de kandidaten daarom t.o.v. het pad ZONDER query/fragment
+  // (anders zou `start + '/'` een URL als `/view?id=2/` opleveren).
+  let scopeBaseStr = start;
+  try {
+    const sb = new URL(start);
+    sb.search = '';
+    sb.hash = '';
+    scopeBaseStr = sb.toString();
+  } catch { /* ignore */ }
   const sitemapCandidates = [];
   try {
-    sitemapCandidates.push(new URL('sitemap.xml', start.endsWith('/') ? start : start + '/').toString());
-    sitemapCandidates.push(new URL('/sitemap.xml', start).toString());
+    sitemapCandidates.push(new URL('sitemap.xml', scopeBaseStr.endsWith('/') ? scopeBaseStr : scopeBaseStr + '/').toString());
+    sitemapCandidates.push(new URL('/sitemap.xml', scopeBaseStr).toString());
   } catch { /* ignore */ }
 
   const seenSitemap = new Set();

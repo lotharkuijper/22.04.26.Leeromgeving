@@ -531,6 +531,46 @@ describe('POST /api/admin/import-web/import', () => {
     expect(harness.state.db.tables.documents.length).toBe(2);
   });
 
+  it('houdt pagina\'s die alleen in query verschillen gescheiden — geen overschrijving (Task #404)', async () => {
+    seed({ user: ADMIN });
+    // Twee genuinely-verschillende pagina's op hetzelfde pad, alléén verschillend
+    // in de query. Vroeger collapseerden ze op één file_path (query werd gestript),
+    // zodat de tweede import de chunks van de eerste leegde.
+    mockFetch({
+      [BASE + 'view?id=1']: page('Onderwerp Een'),
+      [BASE + 'view?id=2']: page('Onderwerp Twee'),
+    });
+
+    const first = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'view?id=1' }],
+    });
+    expect(first.body.imported).toBe(1);
+    expect(harness.state.db.tables.documents.length).toBe(1);
+    const firstDocId = harness.state.db.tables.documents[0].id;
+    const chunksFor = (docId) =>
+      harness.state.db.tables.document_chunks.filter((c) => c.document_id === docId).length;
+    const chunksAfterFirst = chunksFor(firstDocId);
+    expect(chunksAfterFirst).toBeGreaterThan(0);
+
+    const second = await post('/api/admin/import-web/import', {
+      courseId: COURSE_ID, baseUrl: BASE, pages: [{ url: BASE + 'view?id=2' }],
+    });
+    expect(second.body.imported).toBe(1);
+
+    // Kern van de fix: twee aparte documenten met een eigen file_path...
+    const docs = harness.state.db.tables.documents;
+    expect(docs.length).toBe(2);
+    expect(docs.map((d) => d.file_path).sort()).toEqual([
+      BASE + 'view?id=1',
+      BASE + 'view?id=2',
+    ]);
+    // ...en de chunks van de eerste pagina zijn NIET leeggemaakt door de tweede.
+    const doc1 = docs.find((d) => d.file_path === BASE + 'view?id=1');
+    const doc2 = docs.find((d) => d.file_path === BASE + 'view?id=2');
+    expect(chunksFor(doc1.id)).toBe(chunksAfterFirst);
+    expect(chunksFor(doc2.id)).toBeGreaterThan(0);
+  });
+
   it('gewijzigde paginacontent wordt opnieuw geëmbed (imported, niet overgeslagen)', async () => {
     seed({ user: ADMIN });
     // mockFetch leest pages[url] bij elke call, dus muteren we het object om de

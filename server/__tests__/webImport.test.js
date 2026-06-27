@@ -28,8 +28,9 @@ describe('decodeHtmlEntities', () => {
 });
 
 describe('normalizeUrl', () => {
-  it('strip fragment en query, lowercased host, behoudt trailing slash', () => {
-    expect(normalizeUrl('https://Example.com/Foo/?x=1#frag')).toBe('https://example.com/Foo/');
+  it('behoudt betekenisvolle query, strip gewoon anker, lowercased host + trailing slash', () => {
+    // Query blijft (onderscheidt pagina's), het gewone anker `#frag` verdwijnt.
+    expect(normalizeUrl('https://Example.com/Foo/?x=1#frag')).toBe('https://example.com/Foo/?x=1');
   });
   it('behoudt root-slash', () => {
     expect(normalizeUrl('https://example.com/')).toBe('https://example.com/');
@@ -45,6 +46,33 @@ describe('normalizeUrl', () => {
     expect(normalizeUrl('javascript:void(0)')).toBeNull();
     expect(normalizeUrl('not a url')).toBeNull();
     expect(normalizeUrl('')).toBeNull();
+  });
+  it('houdt pagina\'s die alleen in query verschillen uit elkaar (Task #404)', () => {
+    expect(normalizeUrl('https://example.com/view?id=1')).toBe('https://example.com/view?id=1');
+    expect(normalizeUrl('https://example.com/view?id=2')).toBe('https://example.com/view?id=2');
+    expect(normalizeUrl('https://example.com/view?id=1'))
+      .not.toBe(normalizeUrl('https://example.com/view?id=2'));
+  });
+  it('strip tracking-parameters maar behoudt de echte query', () => {
+    expect(normalizeUrl('https://example.com/p?utm_source=nieuwsbrief&utm_medium=email'))
+      .toBe('https://example.com/p');
+    expect(normalizeUrl('https://example.com/p?fbclid=abc&id=7&gclid=xyz'))
+      .toBe('https://example.com/p?id=7');
+  });
+  it('sorteert query-parameters stabiel zodat herschikte URLs samenvallen', () => {
+    expect(normalizeUrl('https://example.com/p?b=2&a=1'))
+      .toBe(normalizeUrl('https://example.com/p?a=1&b=2'));
+    expect(normalizeUrl('https://example.com/p?b=2&a=1')).toBe('https://example.com/p?a=1&b=2');
+  });
+  it('laat een query met enkel tracking-parameters helemaal weg', () => {
+    expect(normalizeUrl('https://example.com/p?utm_source=x')).toBe('https://example.com/p');
+  });
+  it('behoudt een route-achtig fragment (hash-routering) maar strip gewone ankers', () => {
+    expect(normalizeUrl('https://example.com/app#/hoofdstuk/1')).toBe('https://example.com/app#/hoofdstuk/1');
+    expect(normalizeUrl('https://example.com/app#!/pagina')).toBe('https://example.com/app#!/pagina');
+    expect(normalizeUrl('https://example.com/app#/h1'))
+      .not.toBe(normalizeUrl('https://example.com/app#/h2'));
+    expect(normalizeUrl('https://example.com/page.html#sectie-2')).toBe('https://example.com/page.html');
   });
 });
 
@@ -63,6 +91,12 @@ describe('sameWebEnvironment', () => {
     expect(sameWebEnvironment(base, 'https://elders.example.com/Statistical-Inference/intro.html')).toBe(false);
     expect(sameWebEnvironment(base, 'https://shklinkenberg.github.io/Statistical-Inference/img/plot.png')).toBe(false);
     expect(sameWebEnvironment(base, 'https://shklinkenberg.github.io/Statistical-Inference/data.csv')).toBe(false);
+  });
+  it('accepteert dezelfde extensieloze pagina met een andere query (Task #404)', () => {
+    // base `/view` zou via dirPrefix `/view/` worden; zonder de gelijk-pad-uitzondering
+    // zou een query-variant van diezelfde pagina ten onrechte buiten scope vallen.
+    expect(sameWebEnvironment('https://site.com/view?id=1', 'https://site.com/view?id=2')).toBe(true);
+    expect(sameWebEnvironment('https://site.com/view', 'https://site.com/view?id=2')).toBe(true);
   });
 });
 
