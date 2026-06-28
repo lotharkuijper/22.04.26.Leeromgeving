@@ -103,6 +103,37 @@ async function insertChunkBatch(records: ChunkRecord[]): Promise<{ stored: numbe
   return { stored, skipped };
 }
 
+// Eén embed-batch ophalen met begrensde terugval bij de Azure-snelheidslimiet (429).
+// De server probeert al meerdere keren; raakt hij tóch uitgeput, dan wacht de client
+// nog kort en probeert opnieuw, zodat een TIJDELIJKE limiet de verwerking niet meteen
+// afbreekt. Andere fouten (netwerk, RLS, onopslaanbare tekens) gaan meteen door.
+const EMBED_RATE_LIMIT_WAIT_MS = 30000;
+const EMBED_RATE_LIMIT_RETRIES = 2;
+
+async function embedBatchWithClientRetry(
+  texts: string[],
+  onRateLimitWait?: (attempt: number, waitMs: number) => void,
+): Promise<number[][]> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await generateEmbeddings(texts);
+    } catch (err) {
+      const isRateLimit =
+        (err as { isRateLimit?: boolean })?.isRateLimit === true ||
+        /snelheidslimiet|rate.?limit|\b429\b/i.test(
+          err instanceof Error ? err.message : String(err),
+        );
+      if (!isRateLimit || attempt >= EMBED_RATE_LIMIT_RETRIES) {
+        throw err;
+      }
+      attempt += 1;
+      onRateLimitWait?.(attempt, EMBED_RATE_LIMIT_WAIT_MS);
+      await new Promise((resolve) => setTimeout(resolve, EMBED_RATE_LIMIT_WAIT_MS));
+    }
+  }
+}
+
 // Word-document (.docx/.doc/.odt) server-side verwerken met paginanummers. De
 // server haalt het bestand zelf uit storage op basis van het document-id.
 async function processDocxOnServer(documentId: string): Promise<number> {
@@ -135,6 +166,10 @@ export async function uploadDocument(
   skipEmbeddings: boolean = false,
   onProgress?: ProgressCallback
 ): Promise<{ documentId: string }> {
+  // Onthoud het aangemaakte document-id op functie-niveau zodat de buitenste catch een
+  // halverwege gestrand document (bijv. embeddings die op de snelheidslimiet stuklopen)
+  // niet eindeloos op 'processing' laat staan, maar netjes als 'failed' markeert.
+  let createdDocId: string | null = null;
   try {
     const bucket = getBucketForType(bucketType);
     const shouldGenerateEmbeddings = !skipEmbeddings && STORAGE_CONFIG.ragEnabled[bucketType];
@@ -186,6 +221,8 @@ export async function uploadDocument(
       await supabase.storage.from(bucket).remove([filePath]);
       throw new Error(`Failed to create document record: ${docError?.message}`);
     }
+
+    createdDocId = docData.id;
 
     if (!shouldGenerateEmbeddings) {
       onProgress?.({
@@ -277,7 +314,15 @@ export async function uploadDocument(
       // tekst past en de insert nooit op onopslaanbare tekens stukloopt.
       const texts = batch.map(chunk => sanitizeText(chunk.text));
 
-      const embeddings = await generateEmbeddings(texts);
+      const embeddings = await embedBatchWithClientRetry(texts, (attempt, waitMs) => {
+        onProgress?.({
+          stage: 'generating',
+          progress: 40 + Math.floor((processedChunks / chunks.length) * 50),
+          message: `Snelheidslimiet bereikt — even wachten (${Math.round(waitMs / 1000)}s, poging ${attempt}/${EMBED_RATE_LIMIT_RETRIES})...`,
+          currentChunk: processedChunks,
+          totalChunks: chunks.length,
+        });
+      });
 
       const chunkRecords: ChunkRecord[] = batch.map((chunk, idx) => ({
         document_id: docData.id,
@@ -346,6 +391,17 @@ export async function uploadDocument(
 
     return { documentId: docData.id };
   } catch (error) {
+    // Markeer een halverwege gestrand nieuw document als 'failed' (bijv. embeddings die
+    // op de snelheidslimiet stuklopen of een mislukte insert), zodat het niet eindeloos
+    // op 'processing' blijft hangen. Dit is veilig: het document is zojuist aangemaakt en
+    // had nog geen bruikbare set fragmenten.
+    if (createdDocId) {
+      await supabase
+        .from('documents')
+        .update({ processing_status: 'failed' })
+        .eq('id', createdDocId);
+    }
+
     onProgress?.({
       stage: 'error',
       progress: 0,
@@ -357,6 +413,11 @@ export async function uploadDocument(
 }
 
 export async function retryFailedDocument(documentId: string, onProgress?: ProgressCallback): Promise<void> {
+  // Bijhouden of we al iets onomkeerbaars (chunks verwijderen) hebben gedaan, plus de
+  // status van vóór deze poging, zodat we bij een vroege fout de oude staat herstellen
+  // i.p.v. een nog-intact document onterecht op 'failed' te zetten.
+  let destructiveStarted = false;
+  let originalStatusForRestore: string | null = null;
   try {
     const { data: doc, error: docError } = await supabase
       .from('documents')
@@ -367,6 +428,8 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
     if (docError || !doc) {
       throw new Error('Document not found');
     }
+
+    originalStatusForRestore = doc.processing_status || 'completed';
 
     // PowerPoint server-side opnieuw verwerken (server ruimt oude chunks op,
     // leest dia's + notities en zet de status zelf).
@@ -455,11 +518,6 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
       .update({ processing_status: 'processing' })
       .eq('id', documentId);
 
-    await supabase
-      .from('document_chunks')
-      .delete()
-      .eq('document_id', documentId);
-
     onProgress?.({
       stage: 'processing',
       progress: 20,
@@ -476,30 +534,40 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
       totalChunks: processedDoc.chunks.length,
     });
 
+    // CRASHBESTENDIG: genereer eerst ALLE embeddings (de faalgevoelige stap die op de
+    // Azure-snelheidslimiet kan stuklopen) en verwijder nog NIETS. Pas als alle
+    // embeddings binnen zijn, wisselen we oude→nieuwe chunks om. Faalt het embedden,
+    // dan blijven de bestaande chunks intact en herstellen we de oude status — zo
+    // raakt een document nooit zijn fragmenten kwijt door een tijdelijke limiet.
     const batchSize = 5;
     const chunks = processedDoc.chunks;
+    const pendingRecords: ChunkRecord[] = [];
     let processedChunks = 0;
-    let storedChunks = 0;
-    let skippedChunks = 0;
 
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
       // Saneer vóór embedding én opslag (zie uploadDocument).
       const texts = batch.map(chunk => sanitizeText(chunk.text));
 
-      const embeddings = await generateEmbeddings(texts);
+      const embeddings = await embedBatchWithClientRetry(texts, (attempt, waitMs) => {
+        onProgress?.({
+          stage: 'generating',
+          progress: 30 + Math.floor((processedChunks / chunks.length) * 60),
+          message: `Snelheidslimiet bereikt — even wachten (${Math.round(waitMs / 1000)}s, poging ${attempt}/${EMBED_RATE_LIMIT_RETRIES})...`,
+          currentChunk: processedChunks,
+          totalChunks: chunks.length,
+        });
+      });
 
-      const chunkRecords: ChunkRecord[] = batch.map((chunk, idx) => ({
-        document_id: documentId,
-        content: texts[idx],
-        embedding: embeddings[idx],
-        chunk_index: i + idx,
-        metadata: sanitizeMetadata(chunk.metadata),
-      }));
-
-      const { stored, skipped } = await insertChunkBatch(chunkRecords);
-      storedChunks += stored;
-      skippedChunks += skipped;
+      batch.forEach((chunk, idx) => {
+        pendingRecords.push({
+          document_id: documentId,
+          content: texts[idx],
+          embedding: embeddings[idx],
+          chunk_index: i + idx,
+          metadata: sanitizeMetadata(chunk.metadata),
+        });
+      });
 
       processedChunks += batch.length;
       const progressPercent = 30 + Math.floor((processedChunks / chunks.length) * 60);
@@ -515,6 +583,39 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
       if (i + batchSize < chunks.length) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
+    }
+
+    // Alle embeddings staan klaar → nu pas de oude fragmenten vervangen. Dit venster
+    // bevat geen embedding-calls meer, dus de snelheidslimiet raakt ons hier niet.
+    onProgress?.({
+      stage: 'saving',
+      progress: 92,
+      message: 'Fragmenten vervangen...',
+    });
+
+    // Pas NA een geslaagde delete de vlag zetten: mislukt de delete zelf (de oude
+    // fragmenten staan er dan nog), dan willen we de oorspronkelijke status herstellen
+    // i.p.v. het document onterecht als 'failed' te markeren.
+    const { error: deleteError } = await supabase
+      .from('document_chunks')
+      .delete()
+      .eq('document_id', documentId);
+    if (deleteError) {
+      throw new Error(
+        `Oude fragmenten konden niet worden verwijderd: ${deleteError.message}`,
+      );
+    }
+    destructiveStarted = true;
+
+    let storedChunks = 0;
+    let skippedChunks = 0;
+    const insertBatchSize = 50;
+    for (let i = 0; i < pendingRecords.length; i += insertBatchSize) {
+      const { stored, skipped } = await insertChunkBatch(
+        pendingRecords.slice(i, i + insertBatchSize),
+      );
+      storedChunks += stored;
+      skippedChunks += skipped;
     }
 
     if (chunks.length > 0 && storedChunks === 0) {
@@ -540,10 +641,18 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
           : 'Document succesvol verwerkt!',
     });
   } catch (error) {
+    // Hadden we nog niets verwijderd (de oude chunks staan er nog)? Herstel dan de
+    // oorspronkelijke status, zodat een eerder voltooid document niet onterecht als
+    // 'failed' wordt gemarkeerd terwijl het zijn fragmenten gewoon behoudt. Alleen
+    // wanneer de vervang-stap al begonnen was, is 'failed' terecht.
+    const restoreStatus =
+      !destructiveStarted && originalStatusForRestore
+        ? originalStatusForRestore
+        : 'failed';
     await supabase
       .from('documents')
       .update({
-        processing_status: 'failed',
+        processing_status: restoreStatus,
       })
       .eq('id', documentId);
 

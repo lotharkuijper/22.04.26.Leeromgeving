@@ -896,23 +896,35 @@ export async function evaluateCasusAnswer(
 }
 
 export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
+  let response: Response;
   try {
-    const response = await fetch('/api/embeddings', {
+    response = await fetch('/api/embeddings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ texts }),
     });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `Embeddings API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.embeddings;
   } catch (error: any) {
+    // Echte netwerkfout: er is geen HTTP-status om op te beslissen.
     const msg = error instanceof Error ? error.message : String(error);
     console.error('Error generating embeddings:', msg);
     throw new Error(msg);
   }
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    const err = new Error(
+      errData.error || `Embeddings API error: ${response.status}`,
+    ) as Error & { status?: number; isRateLimit?: boolean };
+    err.status = response.status;
+    // 429 = Azure-snelheidslimiet (de server heeft zijn eigen retries al uitgeput).
+    // Markeer dit expliciet zodat de aanroeper er gecontroleerd op kan wachten en
+    // opnieuw proberen, zonder andere fouten (RLS, netwerk, ...) per ongeluk als
+    // snelheidslimiet te behandelen.
+    err.isRateLimit = response.status === 429;
+    console.error('Error generating embeddings:', err.message);
+    throw err;
+  }
+
+  const data = await response.json();
+  return data.embeddings;
 }
