@@ -1,8 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { processDocument } from './document-processor.service';
-import { generateEmbeddings } from './llm.service';
 import { STORAGE_CONFIG, getBucketForType, type BucketType } from '../config/storage.config';
-import { sanitizeText, sanitizeMetadata } from '../lib/sanitizeText';
 
 export interface UploadProgress {
   stage: 'uploading' | 'processing' | 'generating' | 'saving' | 'completed' | 'error';
@@ -50,88 +47,29 @@ async function processPptxOnServer(documentId: string): Promise<number> {
   return data.totalChunks ?? 0;
 }
 
-interface ChunkRecord {
-  document_id: string;
-  content: string;
-  embedding: number[];
-  chunk_index: number;
-  metadata: unknown;
-}
+// Algemene RAG-bron (pdf/txt e.d.) server-side verwerken op document-id. De server
+// haalt het bestand zelf uit storage, extraheert tekst (PDF per pagina via pdf.js →
+// paginanummers), chunkt, embeddt en vervangt de fragmenten ATOMISCH (delete+insert+
+// status in één transactie). Zo raakt een document nooit zijn fragmenten kwijt door
+// een crash of snelheidslimiet halverwege — identiek aan het Word/PowerPoint-pad.
+async function processRagDocOnServer(documentId: string): Promise<number> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error('Niet geauthenticeerd');
 
-// Postgres/PostgREST weigert tekst met onopslaanbare tekens (NUL, ongepaarde
-// surrogaten) met meldingen als "unsupported Unicode escape sequence". De content
-// wordt al bij het bouwen van de rijen gesaneerd (zie sanitizeText), maar als er
-// tóch nog zo'n fout optreedt vangen we hem hier op: we proberen de batch dan
-// fragment-voor-fragment en slaan een enkel onopslaanbaar fragment over in plaats
-// van het hele document te laten mislukken. Geeft het aantal opgeslagen +
-// overgeslagen fragmenten terug.
-const UNSTORABLE_TEXT_ERROR_RE = /unicode|escape|surrogate|\\u0000|invalid byte|untranslatable/i;
-
-async function insertChunkBatch(records: ChunkRecord[]): Promise<{ stored: number; skipped: number }> {
-  if (records.length === 0) return { stored: 0, skipped: 0 };
-
-  const { error } = await supabase.from('document_chunks').insert(records);
-  if (!error) return { stored: records.length, skipped: 0 };
-
-  // Niet-teken-gerelateerde fout (netwerk, RLS, ...): meteen doorgooien.
-  if (!UNSTORABLE_TEXT_ERROR_RE.test(error.message || '')) {
-    throw new Error(`Fragmenten opslaan mislukt: ${error.message}`);
+  const res = await fetch('/api/admin/process-rag-document', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ documentId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.error || `Documentverwerking mislukt (${res.status})`);
   }
-
-  // Een multi-row insert is atomisch: bij een fout is er niets opgeslagen, dus we
-  // kunnen veilig fragment-voor-fragment opnieuw proberen en alleen het rotte
-  // fragment overslaan.
-  let stored = 0;
-  let skipped = 0;
-  for (const rec of records) {
-    const { error: oneErr } = await supabase.from('document_chunks').insert(rec);
-    if (oneErr) {
-      // Alleen écht onopslaanbare-teken-fouten overslaan; andere fouten (netwerk,
-      // RLS, vector, ...) niet stilzwijgend negeren maar doorgooien, anders raken
-      // we ongemerkt fragmenten kwijt.
-      if (!UNSTORABLE_TEXT_ERROR_RE.test(oneErr.message || '')) {
-        throw new Error(`Fragmenten opslaan mislukt: ${oneErr.message}`);
-      }
-      skipped += 1;
-      console.warn(
-        `[document-upload] Fragment ${rec.chunk_index} overgeslagen (onopslaanbare tekens): ${oneErr.message}`,
-      );
-    } else {
-      stored += 1;
-    }
-  }
-  return { stored, skipped };
-}
-
-// Eén embed-batch ophalen met begrensde terugval bij de Azure-snelheidslimiet (429).
-// De server probeert al meerdere keren; raakt hij tóch uitgeput, dan wacht de client
-// nog kort en probeert opnieuw, zodat een TIJDELIJKE limiet de verwerking niet meteen
-// afbreekt. Andere fouten (netwerk, RLS, onopslaanbare tekens) gaan meteen door.
-const EMBED_RATE_LIMIT_WAIT_MS = 30000;
-const EMBED_RATE_LIMIT_RETRIES = 2;
-
-async function embedBatchWithClientRetry(
-  texts: string[],
-  onRateLimitWait?: (attempt: number, waitMs: number) => void,
-): Promise<number[][]> {
-  let attempt = 0;
-  for (;;) {
-    try {
-      return await generateEmbeddings(texts);
-    } catch (err) {
-      const isRateLimit =
-        (err as { isRateLimit?: boolean })?.isRateLimit === true ||
-        /snelheidslimiet|rate.?limit|\b429\b/i.test(
-          err instanceof Error ? err.message : String(err),
-        );
-      if (!isRateLimit || attempt >= EMBED_RATE_LIMIT_RETRIES) {
-        throw err;
-      }
-      attempt += 1;
-      onRateLimitWait?.(attempt, EMBED_RATE_LIMIT_WAIT_MS);
-      await new Promise((resolve) => setTimeout(resolve, EMBED_RATE_LIMIT_WAIT_MS));
-    }
-  }
+  return data.totalChunks ?? 0;
 }
 
 // Word-document (.docx/.doc/.odt) server-side verwerken met paginanummers. De
@@ -292,104 +230,31 @@ export async function uploadDocument(
       }
     }
 
-    const processedDoc = await processDocument(file);
-
+    // PDF/txt en overige RAG-bronnen server-side verwerken: de server extraheert
+    // tekst (PDF per pagina → paginanummers), chunkt, embeddt en persisteert de
+    // fragmenten ATOMISCH. Zo is er geen niet-atomisch client-side venster meer en
+    // gedraagt een PDF zich net als Word/PowerPoint.
     onProgress?.({
       stage: 'generating',
-      progress: 40,
-      message: 'Embeddings genereren...',
-      currentChunk: 0,
-      totalChunks: processedDoc.chunks.length,
+      progress: 50,
+      message: 'Document verwerken op de server...',
     });
-
-    const batchSize = 5;
-    const chunks = processedDoc.chunks;
-    let processedChunks = 0;
-    let storedChunks = 0;
-    let skippedChunks = 0;
-
-    for (let i = 0; i < chunks.length; i += batchSize) {
-      const batch = chunks.slice(i, i + batchSize);
-      // Saneer vóór embedding én opslag, zodat de embedding bij de opgeslagen
-      // tekst past en de insert nooit op onopslaanbare tekens stukloopt.
-      const texts = batch.map(chunk => sanitizeText(chunk.text));
-
-      const embeddings = await embedBatchWithClientRetry(texts, (attempt, waitMs) => {
-        onProgress?.({
-          stage: 'generating',
-          progress: 40 + Math.floor((processedChunks / chunks.length) * 50),
-          message: `Snelheidslimiet bereikt — even wachten (${Math.round(waitMs / 1000)}s, poging ${attempt}/${EMBED_RATE_LIMIT_RETRIES})...`,
-          currentChunk: processedChunks,
-          totalChunks: chunks.length,
-        });
-      });
-
-      const chunkRecords: ChunkRecord[] = batch.map((chunk, idx) => ({
-        document_id: docData.id,
-        content: texts[idx],
-        embedding: embeddings[idx],
-        chunk_index: i + idx,
-        metadata: sanitizeMetadata(chunk.metadata),
-      }));
-
-      const { stored, skipped } = await insertChunkBatch(chunkRecords);
-      storedChunks += stored;
-      skippedChunks += skipped;
-
-      processedChunks += batch.length;
-      const progressPercent = 40 + Math.floor((processedChunks / chunks.length) * 50);
-
+    try {
+      const totalChunks = await processRagDocOnServer(docData.id);
       onProgress?.({
-        stage: 'generating',
-        progress: progressPercent,
-        message: 'Embeddings genereren...',
-        currentChunk: processedChunks,
-        totalChunks: chunks.length,
+        stage: 'completed',
+        progress: 100,
+        message: 'Document succesvol verwerkt!',
+        totalChunks,
       });
-
-      if (i + batchSize < chunks.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-
-    if (chunks.length > 0 && storedChunks === 0) {
+      return { documentId: docData.id };
+    } catch (err) {
       await supabase
         .from('documents')
         .update({ processing_status: 'failed' })
         .eq('id', docData.id);
-      throw new Error(
-        'Geen enkel tekstfragment uit dit document kon worden opgeslagen. Het bestand bevat mogelijk ongeldige tekens of geen leesbare tekst.',
-      );
+      throw err;
     }
-
-    onProgress?.({
-      stage: 'saving',
-      progress: 95,
-      message: 'Document voltooien...',
-    });
-
-    const { error: updateError } = await supabase
-      .from('documents')
-      .update({
-        processing_status: 'completed',
-        total_chunks: storedChunks,
-      })
-      .eq('id', docData.id);
-
-    if (updateError) {
-      console.error('Failed to update document status:', updateError);
-    }
-
-    onProgress?.({
-      stage: 'completed',
-      progress: 100,
-      message:
-        skippedChunks > 0
-          ? `Document verwerkt — ${skippedChunks} fragment(en) met ongeldige tekens overgeslagen.`
-          : 'Document succesvol verwerkt!',
-    });
-
-    return { documentId: docData.id };
   } catch (error) {
     // Markeer een halverwege gestrand nieuw document als 'failed' (bijv. embeddings die
     // op de snelheidslimiet stuklopen of een mislukte insert), zodat het niet eindeloos
@@ -413,10 +278,10 @@ export async function uploadDocument(
 }
 
 export async function retryFailedDocument(documentId: string, onProgress?: ProgressCallback): Promise<void> {
-  // Bijhouden of we al iets onomkeerbaars (chunks verwijderen) hebben gedaan, plus de
-  // status van vóór deze poging, zodat we bij een vroege fout de oude staat herstellen
-  // i.p.v. een nog-intact document onterecht op 'failed' te zetten.
-  let destructiveStarted = false;
+  // De status van vóór deze poging onthouden zodat we bij een fout de oude staat
+  // herstellen i.p.v. een nog-intact document onterecht op 'failed' te zetten. Alle
+  // verwerking loopt nu server-side en ATOMISCH (de bestaande fragmenten blijven
+  // staan als het faalt), dus een mislukte herverwerking is nooit destructief.
   let originalStatusForRestore: string | null = null;
   try {
     const { data: doc, error: docError } = await supabase
@@ -501,154 +366,49 @@ export async function retryFailedDocument(documentId: string, onProgress?: Progr
       }
     }
 
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from(doc.bucket || 'rag_sources')
-      .download(doc.file_path);
-
-    if (downloadError || !fileData) {
-      throw new Error('Failed to download document');
-    }
-
-    const file = new File([fileData], doc.file_path.split('/').pop() || 'document', {
-      type: doc.file_type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-
+    // PDF/txt en overige RAG-bronnen server-side opnieuw verwerken. De server
+    // extraheert tekst (PDF per pagina → paginanummers), chunkt, embeddt en vervangt
+    // de fragmenten ATOMISCH (delete+insert+status in één transactie). Faalt het
+    // embedden of de snelheidslimiet, dan blijven de bestaande fragmenten staan —
+    // er is geen niet-atomisch venster meer waarin het document leeg kan raken.
     await supabase
       .from('documents')
       .update({ processing_status: 'processing' })
       .eq('id', documentId);
 
     onProgress?.({
-      stage: 'processing',
-      progress: 20,
-      message: 'Tekst extracten uit document...',
-    });
-
-    const processedDoc = await processDocument(file);
-
-    onProgress?.({
       stage: 'generating',
-      progress: 30,
-      message: 'Embeddings genereren...',
-      currentChunk: 0,
-      totalChunks: processedDoc.chunks.length,
+      progress: 50,
+      message: 'Document verwerken op de server...',
     });
 
-    // CRASHBESTENDIG: genereer eerst ALLE embeddings (de faalgevoelige stap die op de
-    // Azure-snelheidslimiet kan stuklopen) en verwijder nog NIETS. Pas als alle
-    // embeddings binnen zijn, wisselen we oude→nieuwe chunks om. Faalt het embedden,
-    // dan blijven de bestaande chunks intact en herstellen we de oude status — zo
-    // raakt een document nooit zijn fragmenten kwijt door een tijdelijke limiet.
-    const batchSize = 5;
-    const chunks = processedDoc.chunks;
-    const pendingRecords: ChunkRecord[] = [];
-    let processedChunks = 0;
-
-    for (let i = 0; i < chunks.length; i += batchSize) {
-      const batch = chunks.slice(i, i + batchSize);
-      // Saneer vóór embedding én opslag (zie uploadDocument).
-      const texts = batch.map(chunk => sanitizeText(chunk.text));
-
-      const embeddings = await embedBatchWithClientRetry(texts, (attempt, waitMs) => {
-        onProgress?.({
-          stage: 'generating',
-          progress: 30 + Math.floor((processedChunks / chunks.length) * 60),
-          message: `Snelheidslimiet bereikt — even wachten (${Math.round(waitMs / 1000)}s, poging ${attempt}/${EMBED_RATE_LIMIT_RETRIES})...`,
-          currentChunk: processedChunks,
-          totalChunks: chunks.length,
-        });
-      });
-
-      batch.forEach((chunk, idx) => {
-        pendingRecords.push({
-          document_id: documentId,
-          content: texts[idx],
-          embedding: embeddings[idx],
-          chunk_index: i + idx,
-          metadata: sanitizeMetadata(chunk.metadata),
-        });
-      });
-
-      processedChunks += batch.length;
-      const progressPercent = 30 + Math.floor((processedChunks / chunks.length) * 60);
-
+    try {
+      const totalChunks = await processRagDocOnServer(documentId);
       onProgress?.({
-        stage: 'generating',
-        progress: progressPercent,
-        message: 'Embeddings genereren...',
-        currentChunk: processedChunks,
-        totalChunks: chunks.length,
+        stage: 'completed',
+        progress: 100,
+        message: 'Document succesvol verwerkt!',
+        totalChunks,
       });
-
-      if (i + batchSize < chunks.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      return;
+    } catch (err) {
+      await supabase
+        .from('documents')
+        .update({ processing_status: 'failed' })
+        .eq('id', documentId);
+      onProgress?.({
+        stage: 'error',
+        progress: 0,
+        message: err instanceof Error ? err.message : 'Unknown error occurred',
+      });
+      throw err;
     }
-
-    // Alle embeddings staan klaar → nu pas de oude fragmenten vervangen. Dit venster
-    // bevat geen embedding-calls meer, dus de snelheidslimiet raakt ons hier niet.
-    onProgress?.({
-      stage: 'saving',
-      progress: 92,
-      message: 'Fragmenten vervangen...',
-    });
-
-    // Pas NA een geslaagde delete de vlag zetten: mislukt de delete zelf (de oude
-    // fragmenten staan er dan nog), dan willen we de oorspronkelijke status herstellen
-    // i.p.v. het document onterecht als 'failed' te markeren.
-    const { error: deleteError } = await supabase
-      .from('document_chunks')
-      .delete()
-      .eq('document_id', documentId);
-    if (deleteError) {
-      throw new Error(
-        `Oude fragmenten konden niet worden verwijderd: ${deleteError.message}`,
-      );
-    }
-    destructiveStarted = true;
-
-    let storedChunks = 0;
-    let skippedChunks = 0;
-    const insertBatchSize = 50;
-    for (let i = 0; i < pendingRecords.length; i += insertBatchSize) {
-      const { stored, skipped } = await insertChunkBatch(
-        pendingRecords.slice(i, i + insertBatchSize),
-      );
-      storedChunks += stored;
-      skippedChunks += skipped;
-    }
-
-    if (chunks.length > 0 && storedChunks === 0) {
-      throw new Error(
-        'Geen enkel tekstfragment uit dit document kon worden opgeslagen. Het bestand bevat mogelijk ongeldige tekens of geen leesbare tekst.',
-      );
-    }
-
-    await supabase
-      .from('documents')
-      .update({
-        processing_status: 'completed',
-        total_chunks: storedChunks,
-      })
-      .eq('id', documentId);
-
-    onProgress?.({
-      stage: 'completed',
-      progress: 100,
-      message:
-        skippedChunks > 0
-          ? `Document verwerkt — ${skippedChunks} fragment(en) met ongeldige tekens overgeslagen.`
-          : 'Document succesvol verwerkt!',
-    });
   } catch (error) {
-    // Hadden we nog niets verwijderd (de oude chunks staan er nog)? Herstel dan de
-    // oorspronkelijke status, zodat een eerder voltooid document niet onterecht als
-    // 'failed' wordt gemarkeerd terwijl het zijn fragmenten gewoon behoudt. Alleen
-    // wanneer de vervang-stap al begonnen was, is 'failed' terecht.
-    const restoreStatus =
-      !destructiveStarted && originalStatusForRestore
-        ? originalStatusForRestore
-        : 'failed';
+    // Alle verwerking loopt nu server-side en ATOMISCH: bij een fout blijven de
+    // bestaande fragmenten staan. Herstel daarom de oorspronkelijke status, zodat een
+    // eerder voltooid document niet onterecht als 'failed' blijft staan terwijl het
+    // zijn fragmenten gewoon behoudt. Was er geen oude status, dan is 'failed' terecht.
+    const restoreStatus = originalStatusForRestore || 'failed';
     await supabase
       .from('documents')
       .update({

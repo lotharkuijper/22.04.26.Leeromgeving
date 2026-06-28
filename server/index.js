@@ -2451,6 +2451,64 @@ app.post('/api/admin/process-docx', async (req, res) => {
   }
 });
 
+// POST /api/admin/process-rag-document — generieke server-side verwerking van een
+// RAG-bron op document-id (pdf/txt/plain → processPlainRagDocument; pptx/docx
+// worden ook correct gedispatcht). Alle paden persisteren ATOMISCH via
+// persistChunksAtomic (delete+insert+status in één transactie), zodat een
+// document nooit zijn fragmenten kwijtraakt door een crash/limiet halverwege —
+// dit vervangt het oude, niet-atomische client-side embed→swap-pad voor PDF's.
+// Body: { documentId, lang? }. Toegang: admin/superuser of staff van een cursus
+// die aan de map van het document gekoppeld is (identiek aan -pptx/-docx).
+app.post('/api/admin/process-rag-document', async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
+  if (!AZURE_EMBEDDINGS_READY) return res.status(503).json({ error: EMBEDDINGS_NOT_CONFIGURED_MSG });
+
+  const auth = await authUser(req);
+  if (auth.error) return res.status(auth.error.status).json(auth.error.body);
+  const { user } = auth;
+  const { data: profile } = await supabaseAdmin
+    .from('profiles').select('role, email').eq('id', user.id).maybeSingle();
+
+  const { documentId, lang = 'nl' } = req.body || {};
+  if (!documentId) return res.status(400).json({ error: 'documentId vereist' });
+
+  try {
+    const { data: doc, error: docErr } = await supabaseAdmin
+      .from('documents')
+      .select('id, title, filename, file_path, bucket, mime_type, file_type, folder_id')
+      .eq('id', documentId)
+      .maybeSingle();
+    // Transiënte query-fout niet als 404 maskeren: anders denkt de docent dat het
+    // document weg is en herimporteert die het (duplicaat + onnodige embeddings).
+    if (docErr) return res.status(500).json({ error: `Kon document niet opzoeken: ${docErr.message}` });
+    if (!doc) return res.status(404).json({ error: 'Document niet gevonden' });
+
+    // Autorisatie: admin/superuser of staff van een gekoppelde cursus.
+    const isAdmin = profile?.role === 'admin' || profile?.email === SUPERUSER_EMAIL;
+    if (!isAdmin) {
+      let allowed = false;
+      if (doc.folder_id) {
+        const { data: assignments } = await supabaseAdmin
+          .from('course_folder_assignments')
+          .select('course_id')
+          .eq('folder_id', doc.folder_id);
+        for (const a of assignments || []) {
+          if (await isCourseTeacher(user.id, a.course_id)) { allowed = true; break; }
+        }
+      }
+      if (!allowed) return res.status(403).json({ error: 'Geen rechten voor dit document' });
+    }
+
+    // Statusovergangen + extractie/chunking/embeddings + ATOMISCHE persistentie in
+    // de gedeelde kern. Dispatcht zelf op bestandstype.
+    const result = await processRagDocumentById(documentId, lang);
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[process-rag-document] Fout:', err);
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/folders/:folderId/upload — upload als base64-JSON
 app.post('/api/admin/folders/:folderId/upload', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'DB niet beschikbaar' });
