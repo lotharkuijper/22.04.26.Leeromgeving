@@ -180,7 +180,12 @@ const app = express();
 const PORT = process.env.PORT || process.env.API_PORT || 3001;
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+// 50mb i.p.v. 10mb: RAG-bronnen én de Documenten-tab uploaden bestanden als
+// base64 in de JSON-body naar de service-role upload-endpoints. base64 zwelt ~33%
+// op, dus 10mb kapte bestanden >~7,5MB af (bv. beeldrijke college-PPTX/PDF die
+// vroeger via een directe client-storage-upload wél werkten). 50mb sluit aan op de
+// gangbare Supabase per-bestand storage-limiet en voorkomt die regressie.
+app.use(express.json({ limit: '50mb' }));
 
 const SUPABASE_URL = process.env.VITE_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.VITE_PUBLIC_SUPABASE_ANON_KEY;
@@ -2537,7 +2542,13 @@ app.post('/api/admin/folders/:folderId/upload', async (req, res) => {
   if (r.error) return res.status(r.error.status).json(r.error.body);
   const { folderId } = req.params;
   if (!(await resolveDocFolderAccess(r, folderId))) return res.status(403).json({ error: 'Geen toegang tot deze map' });
-  const { filename, mimeType, data: base64Data } = req.body || {};
+  // title/description/autoProcess zijn optioneel (default: autoProcess=true) zodat
+  // de Documenten-tab ongewijzigd blijft. De RAG-beheer-tab stuurt
+  // autoProcess=false mee: de server maakt dan alleen storage + documents-rij aan
+  // (service-role, dus niet onderworpen aan client-RLS of een verlopen sessie) en
+  // de client draait daarna zelf de synchrone verwerking via de bestaande
+  // verwerk-endpoints (met voortgangsbalk + fragment-totaal).
+  const { filename, mimeType, data: base64Data, title, description, autoProcess } = req.body || {};
   if (!filename || !base64Data) return res.status(400).json({ error: 'filename en data zijn verplicht' });
   try {
     const { data: folder } = await supabaseAdmin.from('document_folders').select('folder_type').eq('id', folderId).maybeSingle();
@@ -2550,10 +2561,12 @@ app.post('/api/admin/folders/:folderId/upload', async (req, res) => {
     const { error: storageErr } = await supabaseAdmin.storage.from(bucket).upload(filePath, fileBuffer, { contentType: resolvedMime, upsert: false });
     if (storageErr) return res.status(500).json({ error: `Storage upload mislukt: ${storageErr.message}` });
     const isRag = bucket === 'rag_sources';
+    const cleanTitle = (typeof title === 'string' && title.trim()) ? title.trim() : filename;
     const { data: doc, error: dbErr } = await supabaseAdmin.from('documents').insert({
-      title: filename, filename, file_path: filePath, file_type: fileExt,
+      title: cleanTitle, filename, file_path: filePath, file_type: fileExt,
       file_size: fileBuffer.length, folder_id: folderId, bucket,
       mime_type: resolvedMime, uploaded_by: r.user.id,
+      description: (typeof description === 'string' && description) ? description : null,
       processing_status: isRag ? 'processing' : 'pending',
     }).select().single();
     if (dbErr) {
@@ -2563,7 +2576,10 @@ app.post('/api/admin/folders/:folderId/upload', async (req, res) => {
     // RAG-bestanden meteen verwerken (chunks + embeddings) zodat ze niet op
     // 'pending'/'processing' blijven hangen. Asynchroon zodat de upload-respons
     // snel terugkomt; de verwerking zet de status zelf op completed/failed.
-    if (isRag) {
+    // Sla dit over als de client expliciet autoProcess=false stuurt (die draait de
+    // verwerking zelf synchroon zodat dubbele, gelijktijdige verwerking voorkomen
+    // wordt).
+    if (isRag && autoProcess !== false) {
       processRagDocumentById(doc.id, 'nl').catch(async (err) => {
         console.error(`[folder-upload] verwerking mislukt voor doc=${doc.id}:`, err?.message || err);
         try {

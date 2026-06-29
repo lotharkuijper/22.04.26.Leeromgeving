@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, AlertTriangle, Loader2, RefreshCw, FileText, Info, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { retryFailedDocument, UploadProgress } from '../services/document-upload.service';
+import { retryFailedDocument, UploadProgress, SESSION_EXPIRED_MSG } from '../services/document-upload.service';
 import { useActiveCourse } from '../contexts/ActiveCourseContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n';
@@ -227,9 +227,19 @@ export function RAGDocumentStatusPanel() {
     if (!activeCourseId || !session?.access_token) return;
     setDeletingDocId(doc.id);
     try {
-      await supabase.from('document_chunks').delete().eq('document_id', doc.id);
-      await supabase.from('documents').delete().eq('id', doc.id);
-      await supabase.storage.from(doc.bucket || 'rag_sources').remove([doc.filename]);
+      // Verwijderen loopt via het service-role server-endpoint i.p.v. client-side
+      // deletes onder de gebruikers-JWT. De server verwijdert de documents-rij,
+      // de fragmenten (FK cascade) én het storage-object op het JUISTE file_path
+      // (de oude client-code wiste op doc.filename → verweesde bestanden in de
+      // bucket). Zo hangt verwijderen niet meer af van RLS of een verse sessie.
+      const res = await fetch(`/api/admin/documents/${doc.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(res.status === 401 ? SESSION_EXPIRED_MSG : (body.error || `HTTP ${res.status}`));
+      }
 
       fetch('/api/admin/record-doc-mutation', {
         method: 'POST',

@@ -11,6 +11,41 @@ export interface UploadProgress {
 
 export type ProgressCallback = (progress: UploadProgress) => void;
 
+// Duidelijke NL-melding bij een verlopen/ongeldige sessie (bijv. na een Supabase
+// API-key-rotatie): de server geeft dan 401 terug. Zo ziet de docent niet langer
+// een cryptische "new row violates row-level security policy"-fout, maar een
+// begrijpelijke instructie om opnieuw in te loggen.
+export const SESSION_EXPIRED_MSG =
+  'Je sessie is verlopen. Log opnieuw in en probeer het nog een keer.';
+
+// Vertaalt een mislukte server-respons naar een leesbare melding: 401 → opnieuw
+// inloggen, anders de server-boodschap (of een generieke fallback).
+function mapApiError(status: number, serverMessage?: string): string {
+  if (status === 401) return SESSION_EXPIRED_MSG;
+  return serverMessage || `Bewerking mislukt (${status})`;
+}
+
+// Haalt het Bearer-token uit de huidige sessie; ontbreekt het, dan is de sessie
+// verlopen en tonen we meteen de NL-melding i.p.v. een serverfout af te wachten.
+async function requireAccessToken(): Promise<string> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error(SESSION_EXPIRED_MSG);
+  return token;
+}
+
+// Zet een bestand om naar base64 (in blokken, zodat grote bestanden de call-stack
+// niet overschrijden) voor de JSON-upload naar het server-endpoint.
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 function isPptx(fileName: string): boolean {
   return fileName.split('.').pop()?.toLowerCase() === 'pptx';
 }
@@ -42,7 +77,7 @@ async function processPptxOnServer(documentId: string): Promise<number> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error || `PowerPoint-verwerking mislukt (${res.status})`);
+    throw new Error(mapApiError(res.status, data?.error));
   }
   return data.totalChunks ?? 0;
 }
@@ -67,7 +102,7 @@ async function processRagDocOnServer(documentId: string): Promise<number> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error || `Documentverwerking mislukt (${res.status})`);
+    throw new Error(mapApiError(res.status, data?.error));
   }
   return data.totalChunks ?? 0;
 }
@@ -89,9 +124,66 @@ async function processDocxOnServer(documentId: string): Promise<number> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error || `Word-verwerking mislukt (${res.status})`);
+    throw new Error(mapApiError(res.status, data?.error));
   }
   return data.totalChunks ?? 0;
+}
+
+// Upload + verwerk een RAG-bron volledig server-side (service-role). De server
+// maakt storage-object + documents-rij aan (autoProcess=false) en de client draait
+// daarna synchroon de juiste verwerking, zodat we hetzelfde voortgangs- en
+// fragment-totaal-gedrag houden als het oude client-pad — maar zonder client-RLS.
+async function uploadRagDocumentViaServer(
+  file: File,
+  title: string,
+  description: string,
+  folderId: string,
+  onProgress?: ProgressCallback
+): Promise<{ documentId: string }> {
+  onProgress?.({ stage: 'uploading', progress: 10, message: 'Bestand uploaden naar opslag...' });
+  const token = await requireAccessToken();
+  const base64 = await fileToBase64(file);
+
+  onProgress?.({ stage: 'uploading', progress: 25, message: 'Document record aanmaken...' });
+  const res = await fetch(`/api/admin/folders/${folderId}/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      filename: file.name,
+      mimeType: file.type,
+      data: base64,
+      title,
+      description,
+      autoProcess: false,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(mapApiError(res.status, data?.error));
+  const documentId: string | undefined = data?.document?.id;
+  if (!documentId) throw new Error('Serverantwoord bevatte geen document-id');
+
+  // Verwerk synchroon via het juiste endpoint; de server vervangt de fragmenten
+  // ATOMISCH en zet de status zelf op completed/failed (geen client-side
+  // status-update nodig — die zou weer onder RLS vallen).
+  onProgress?.({ stage: 'processing', progress: 40, message: 'Tekst extracten uit document...' });
+  try {
+    let totalChunks: number;
+    if (isPptx(file.name)) {
+      onProgress?.({ stage: 'generating', progress: 55, message: 'PowerPoint verwerken op de server (dia\'s + notities)...' });
+      totalChunks = await processPptxOnServer(documentId);
+    } else if (isDocx(file.name)) {
+      onProgress?.({ stage: 'generating', progress: 55, message: 'Word-document verwerken op de server (paginanummers)...' });
+      totalChunks = await processDocxOnServer(documentId);
+    } else {
+      onProgress?.({ stage: 'generating', progress: 55, message: 'Document verwerken op de server...' });
+      totalChunks = await processRagDocOnServer(documentId);
+    }
+    onProgress?.({ stage: 'completed', progress: 100, message: 'Document succesvol verwerkt!', totalChunks });
+    return { documentId };
+  } catch (err) {
+    onProgress?.({ stage: 'error', progress: 0, message: err instanceof Error ? err.message : 'Onbekende fout' });
+    throw err;
+  }
 }
 
 export async function uploadDocument(
@@ -104,6 +196,16 @@ export async function uploadDocument(
   skipEmbeddings: boolean = false,
   onProgress?: ProgressCallback
 ): Promise<{ documentId: string }> {
+  // RAG-bronnen (cursusmateriaal) lopen volledig via het service-role
+  // server-endpoint: zowel de storage-upload als de documents-rij gebeuren dan
+  // server-side en zijn dus NIET onderworpen aan client-RLS of een verlopen
+  // Supabase-sessie (de oorzaak van "new row violates row-level security policy").
+  // Overige buckets (datasets/algemeen) en uploads zonder map houden het bestaande
+  // client-pad.
+  if (folderId && bucketType === 'rag_sources') {
+    return uploadRagDocumentViaServer(file, title, description, folderId, onProgress);
+  }
+
   // Onthoud het aangemaakte document-id op functie-niveau zodat de buitenste catch een
   // halverwege gestrand document (bijv. embeddings die op de snelheidslimiet stuklopen)
   // niet eindeloos op 'processing' laat staan, maar netjes als 'failed' markeert.

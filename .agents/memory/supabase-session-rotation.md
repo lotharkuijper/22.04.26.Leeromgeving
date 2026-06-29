@@ -37,3 +37,21 @@ key are fine and the user's cached session is the culprit. Delete the temp user 
 
 **Why:** a cached-but-dead session otherwise leaves users stuck on a half-broken app with
 a misleading error and no obvious escape.
+
+## Mitigation pattern: route privileged writes through the server, not the browser
+
+Browser writes (table INSERT/UPDATE/DELETE + storage) run under the user's Supabase JWT,
+so a zombie/rotated session makes them fail — table writes surface the cryptic
+`new row violates row-level security policy`, deletes silently leave storage orphans.
+For teacher/admin mutations, prefer the **service-role server endpoints** (they bypass RLS
+and don't depend on a fresh client session); map any server **401 → a plain NL
+"sessie verlopen, log opnieuw in"** message instead of leaking the RLS/auth error.
+
+- A client storage upload uses a different (storage) policy than the table insert, so the
+  classic symptom is "file landed in the bucket but the documents row insert 401'd".
+- Client deletes must remove the storage object by the stored **`file_path`**, not the
+  display `filename`, or you orphan the bucket object. The server delete endpoint already
+  does this — route deletes through it rather than re-implementing client-side.
+- Tradeoff when moving uploads server-side as base64 JSON: they're capped by the
+  `express.json` body limit (base64 inflates ~33%), unlike direct-to-storage client uploads
+  which had no such cap. Size the limit for the largest real files (lecture PPTX/PDF).
