@@ -67,6 +67,18 @@ describe('normalizeUrl', () => {
   it('laat een query met enkel tracking-parameters helemaal weg', () => {
     expect(normalizeUrl('https://example.com/p?utm_source=x')).toBe('https://example.com/p');
   });
+  it('behoudt een generieke ref-parameter (kan echte inhoud zijn) maar strip ondubbelzinnige trackers', () => {
+    // Identiteit moet liever over-splitsen dan samenvoegen: een bare `ref` kan een
+    // echte inhoud-parameter zijn (`?ref=hoofdstuk2`), dus die mag NIET gestript
+    // worden — anders zou pagina `?ref=a` de chunks van `?ref=b` overschrijven.
+    expect(normalizeUrl('https://example.com/p?ref=a')).toBe('https://example.com/p?ref=a');
+    expect(normalizeUrl('https://example.com/p?ref=a'))
+      .not.toBe(normalizeUrl('https://example.com/p?ref=b'));
+    // Ondubbelzinnige trackers (Twitter/X ref_src/ref_url, Mailchimp mc_cid) verdwijnen wél.
+    expect(normalizeUrl('https://example.com/p?ref_src=twsrc&id=3')).toBe('https://example.com/p?id=3');
+    expect(normalizeUrl('https://example.com/p?ref_url=x&id=3')).toBe('https://example.com/p?id=3');
+    expect(normalizeUrl('https://example.com/p?mc_cid=abc&id=3')).toBe('https://example.com/p?id=3');
+  });
   it('behoudt een route-achtig fragment (hash-routering) maar strip gewone ankers', () => {
     expect(normalizeUrl('https://example.com/app#/hoofdstuk/1')).toBe('https://example.com/app#/hoofdstuk/1');
     expect(normalizeUrl('https://example.com/app#!/pagina')).toBe('https://example.com/app#!/pagina');

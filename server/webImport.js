@@ -55,8 +55,13 @@ export function decodeHtmlEntities(input) {
 // Tracking-/campagne-/click-id query-parameters die nooit de pagina-IDENTITEIT
 // bepalen: ze verwijzen naar dezelfde inhoud. We strippen ze uit de query zodat
 // dezelfde pagina met verschillende campagne-tags niet als losse documenten
-// wordt geïmporteerd (en elkaars chunks zou overschrijven).
-const TRACKING_PARAM_RE = /^(utm_[a-z0-9_]+|fbclid|gclid|gbraid|wbraid|msclkid|yclid|dclid|mc_cid|mc_eid|igshid|_ga|_gl|ref|ref_src|ref_url)$/i;
+// wordt geïmporteerd (en elkaars chunks zou overschrijven). Alleen ONDUBBELZINNIGE
+// trackers staan hier: een generieke `ref` is BEWUST weggelaten omdat sommige
+// sites die als echte inhoud-parameter gebruiken (bv. `?ref=hoofdstuk2`). De
+// pagina-identiteit moet liever over-splitsen (hooguit een onschuldig duplicaat)
+// dan samenvoegen — anders zou `?ref=a` de chunks van `?ref=b` overschrijven.
+// `ref_src`/`ref_url` blijven wél: dat zijn ondubbelzinnige (Twitter/X) trackers.
+const TRACKING_PARAM_RE = /^(utm_[a-z0-9_]+|fbclid|gclid|gbraid|wbraid|msclkid|yclid|dclid|mc_cid|mc_eid|igshid|_ga|_gl|ref_src|ref_url)$/i;
 
 // Een fragment dat een client-side route aanduidt (hash-routering), bv.
 // `#/hoofdstuk` of `#!/pagina`. Zulke fragmenten onderscheiden aparte pagina's
