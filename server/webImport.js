@@ -117,29 +117,56 @@ export function normalizeUrl(raw, base) {
   return u.toString();
 }
 
-// Geeft `true` als een IP-literal (IPv4, IPv6 of IPv4-mapped IPv6) naar het
-// interne/private netwerk wijst (loopback, RFC1918, link-local, unique-local,
-// multicast/reserved). Pure helper; gebruikt voor zowel URL-literals als voor
-// IP's die uit DNS-resolutie komen (zie `hostResolvesToBlocked`).
+// Geeft `true` als een IP-literal (IPv4, IPv6 of IPv4-mapped IPv6 in dotted- én
+// hex-vorm) NIET globaal-routeerbaar is, d.w.z. naar een intern/privé/special-use
+// bereik wijst (loopback, RFC1918, CGNAT, link-local, site-local, unique-local,
+// multicast/reserved, 6to4, NAT64, docu/test-net/benchmark-ranges). Pure helper;
+// gebruikt voor zowel URL-literals als voor IP's uit DNS-resolutie (zie
+// `hostResolvesToBlocked`). Voor SSRF geldt "veilig" = globaal-unicast: alles wat
+// dat NIET aantoonbaar is, blokkeren we (fail-closed, conservatief).
 export function isBlockedIp(rawIp) {
   let host = String(rawIp || '').toLowerCase().trim();
   if (!host) return true;
   if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
-  // IPv6 loopback / unspecified / unique-local (fc00::/7) / link-local (fe80::/10).
-  if (host === '::1' || host === '::') return true;
-  if (/^f[cd][0-9a-f]{2}:/i.test(host)) return true;
-  if (/^fe[89ab][0-9a-f]:/i.test(host)) return true;
-  // IPv4-mapped IPv6 (::ffff:a.b.c.d) → val terug op de IPv4-controle.
-  const mapped = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
-  const ipv4 = mapped ? mapped[1] : host;
+  // IPv6 special-use ranges.
+  if (host === '::1' || host === '::') return true;            // loopback / unspecified
+  if (/^f[cd][0-9a-f]{2}:/i.test(host)) return true;          // unique-local fc00::/7
+  if (/^fe[89a-f][0-9a-f]:/i.test(host)) return true;         // link-local + site-local (fe80–feff)
+  if (/^ff[0-9a-f]{2}:/i.test(host)) return true;             // multicast ff00::/8
+  if (/^2001:0?db8:/i.test(host)) return true;                // documentatie 2001:db8::/32
+  if (/^2002:/i.test(host)) return true;                      // 6to4 2002::/16 (embedt IPv4)
+  if (/^64:ff9b:/i.test(host)) return true;                   // NAT64: heel 64:ff9b:-prefix (conservatief, ⊇ /96)
+  // IPv4-mapped IPv6 → val terug op de IPv4-controle. LET OP: `new URL`
+  // canonicaliseert ::ffff:127.0.0.1 NAAR de hex-vorm ::ffff:7f00:1, dus we
+  // moeten BEIDE tekstvormen aankunnen — anders glipt een hex-literal langs álle
+  // checks (IP-literals slaan DNS-resolutie over). Hex-paar → 4 IPv4-octetten.
+  let ipv4 = null;
+  const mappedDotted = host.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (mappedDotted) {
+    ipv4 = mappedDotted[1];
+  } else {
+    const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (mappedHex) {
+      const hi = parseInt(mappedHex[1], 16);
+      const lo = parseInt(mappedHex[2], 16);
+      ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    }
+  }
+  if (!ipv4) ipv4 = host;
   const m = ipv4.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (m) {
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    if (a === 0 || a === 127 || a === 10) return true;           // 0.x, loopback, 10.x
-    if (a === 169 && b === 254) return true;                      // link-local
-    if (a === 172 && b >= 16 && b <= 31) return true;             // 172.16–31.x
-    if (a === 192 && b === 168) return true;                      // 192.168.x
-    if (a >= 224) return true;                                    // multicast/reserved
+    const [a, b, c] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    if (a === 0 || a === 127 || a === 10) return true;          // 0.x, loopback, 10.x (RFC1918)
+    if (a === 100 && b >= 64 && b <= 127) return true;          // CGNAT 100.64.0.0/10
+    if (a === 169 && b === 254) return true;                    // link-local 169.254.x
+    if (a === 172 && b >= 16 && b <= 31) return true;           // 172.16–31.x (RFC1918)
+    if (a === 192 && b === 168) return true;                    // 192.168.x (RFC1918)
+    if (a === 192 && b === 0 && c === 0) return true;           // IETF-protocol 192.0.0.0/24
+    if (a === 192 && b === 0 && c === 2) return true;           // TEST-NET-1 192.0.2.0/24
+    if (a === 198 && (b === 18 || b === 19)) return true;       // benchmark 198.18.0.0/15
+    if (a === 198 && b === 51 && c === 100) return true;        // TEST-NET-2 198.51.100.0/24
+    if (a === 203 && b === 0 && c === 113) return true;         // TEST-NET-3 203.0.113.0/24
+    if (a >= 224) return true;                                  // multicast/reserved/broadcast (224.x+)
   }
   return false;
 }
@@ -189,6 +216,50 @@ export async function hostResolvesToBlocked(hostname, lookup) {
   } catch {
     return true;
   }
+}
+
+// Filtert DNS-resolutie-resultaten op VEILIGE (publieke) adressen: gooit elk IP
+// weg dat in een geblokkeerd/privé-bereik valt (zie `isBlockedIp`). Accepteert
+// zowel `node:dns`-lookup-objecten (`{address, family}`) als kale IP-strings en
+// behoudt de oorspronkelijke vorm, zodat de uitkomst direct aan een socket-
+// connector kan worden teruggegeven. Pure helper.
+export function filterSafeAddresses(addresses) {
+  const list = Array.isArray(addresses) ? addresses : (addresses == null ? [] : [addresses]);
+  return list.filter((a) => {
+    const ip = typeof a === 'string' ? a : a?.address;
+    return typeof ip === 'string' && ip.length > 0 && !isBlockedIp(ip);
+  });
+}
+
+// Bouwt een connect-time `lookup` (compatibel met `net.connect`/undici's
+// connector) die de verbinding PINT op een geverifieerd publiek IP. Dit sluit de
+// klassieke DNS-rebinding-TOCTOU: zonder pinning resolvet de pre-check
+// (`hostResolvesToBlocked`) de host één keer, waarna `fetch()` zélf opnieuw
+// resolvet en verbindt — een aanvaller kan tussendoor naar een privé-adres
+// omklappen. Door dezelfde, gevalideerde resolutie aan de socket te geven is het
+// IP dat we toetsen exact het IP waarmee verbonden wordt. `resolveAll(hostname,
+// options)` is injecteerbaar (default `node:dns`) en moet de adressen als
+// `{address, family}` teruggeven. Bij nul veilige adressen → de callback krijgt
+// een fout (verbinding geweigerd, fail-safe). NB: IP-literals slaan in Node de
+// `lookup` over; die worden al door `isBlockedHost` geweigerd.
+export function createPinnedLookup(resolveAll) {
+  return function pinnedLookup(hostname, options, callback) {
+    const opts = options || {};
+    Promise.resolve()
+      .then(() => resolveAll(hostname, opts))
+      .then((records) => {
+        const safe = filterSafeAddresses(records);
+        if (safe.length === 0) {
+          const err = new Error('SSRF geblokkeerd: host resolvet naar een intern/privé adres');
+          err.code = 'ESSRFBLOCKED';
+          callback(err);
+          return;
+        }
+        if (opts.all) callback(null, safe);
+        else callback(null, safe[0].address, safe[0].family);
+      })
+      .catch((err) => callback(err));
+  };
 }
 
 // Bepaalt het "directory"-pad-prefix van een basis-URL (lowercase) zodat we

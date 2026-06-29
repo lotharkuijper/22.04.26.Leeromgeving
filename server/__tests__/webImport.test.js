@@ -11,6 +11,8 @@ import {
   isBlockedHost,
   isBlockedIp,
   hostResolvesToBlocked,
+  filterSafeAddresses,
+  createPinnedLookup,
   fetchPage,
 } from '../webImport.js';
 
@@ -131,6 +133,9 @@ describe('isBlockedHost', () => {
     expect(isBlockedHost('http://[::1]/')).toBe(true);
     expect(isBlockedHost('http://[fc00::1]/')).toBe(true);
     expect(isBlockedHost('http://[fe80::1]/')).toBe(true);
+    // `new URL` zet ::ffff:127.0.0.1 om naar de hex-vorm; die moet óók blokkeren.
+    expect(isBlockedHost('http://[::ffff:127.0.0.1]/')).toBe(true);
+    expect(isBlockedHost('http://[::ffff:7f00:1]/')).toBe(true);
     expect(isBlockedHost('niet-een-url')).toBe(true);
   });
   it('staat publieke hosts toe', () => {
@@ -359,6 +364,35 @@ describe('isBlockedIp / hostResolvesToBlocked', () => {
     expect(isBlockedIp('93.184.216.34')).toBe(false);
     expect(isBlockedIp('2606:2800:220:1::1')).toBe(false);
   });
+  it('blokkeert ook niet-globale special-use ranges (CGNAT/test-net/benchmark/NAT64/multicast)', () => {
+    // IPv4 special-use.
+    expect(isBlockedIp('100.64.0.1')).toBe(true);     // CGNAT 100.64/10
+    expect(isBlockedIp('100.127.255.255')).toBe(true);
+    expect(isBlockedIp('192.0.0.1')).toBe(true);      // IETF-protocol 192.0.0/24
+    expect(isBlockedIp('192.0.2.5')).toBe(true);      // TEST-NET-1
+    expect(isBlockedIp('198.18.0.1')).toBe(true);     // benchmark 198.18/15
+    expect(isBlockedIp('198.19.255.1')).toBe(true);
+    expect(isBlockedIp('198.51.100.7')).toBe(true);   // TEST-NET-2
+    expect(isBlockedIp('203.0.113.7')).toBe(true);    // TEST-NET-3
+    expect(isBlockedIp('255.255.255.255')).toBe(true);// broadcast
+    expect(isBlockedIp('::ffff:100.64.0.1')).toBe(true); // IPv4-mapped CGNAT (dotted)
+    // Hex-vorm IPv4-mapped IPv6 — exact wat `new URL` ervan maakt; mag NIET langs glippen.
+    expect(isBlockedIp('::ffff:7f00:1')).toBe(true);  // 127.0.0.1
+    expect(isBlockedIp('::ffff:a00:1')).toBe(true);   // 10.0.0.1
+    expect(isBlockedIp('::ffff:6440:1')).toBe(true);  // 100.64.0.1 (CGNAT)
+    expect(isBlockedIp('::ffff:5db8:d822')).toBe(false); // 93.184.216.34 (publiek)
+    // IPv6 special-use.
+    expect(isBlockedIp('ff02::1')).toBe(true);        // multicast
+    expect(isBlockedIp('2001:db8::1')).toBe(true);    // documentatie
+    expect(isBlockedIp('2002:7f00:1::')).toBe(true);  // 6to4
+    expect(isBlockedIp('fec0::1')).toBe(true);        // site-local (deprecated)
+    expect(isBlockedIp('64:ff9b::a00:1')).toBe(true); // NAT64
+    // Aangrenzende publieke adressen blijven toegestaan (geen over-blokkade).
+    expect(isBlockedIp('100.63.255.255')).toBe(false); // net vóór CGNAT
+    expect(isBlockedIp('100.128.0.1')).toBe(false);    // net ná CGNAT
+    expect(isBlockedIp('198.20.0.1')).toBe(false);     // net ná benchmark
+    expect(isBlockedIp('192.0.3.1')).toBe(false);      // net ná TEST-NET-1
+  });
   it('slaat DNS over zonder lookup en faalt veilig bij fouten', async () => {
     expect(await hostResolvesToBlocked('example.com', null)).toBe(false);
     expect(await hostResolvesToBlocked('example.com', async () => { throw new Error('x'); })).toBe(true);
@@ -464,5 +498,68 @@ describe('discoverPages', () => {
     expect(urls).toContain('https://example.com/book/');
     expect(urls).not.toContain('https://example.com/book/extern.html');
     expect(warnings.some((w) => w.includes('extern.html'))).toBe(true);
+  });
+});
+
+describe('filterSafeAddresses', () => {
+  it('verwijdert privé/geblokkeerde IPs en behoudt publieke (strings)', () => {
+    expect(filterSafeAddresses(['10.0.0.1', '93.184.216.34', '127.0.0.1']))
+      .toEqual(['93.184.216.34']);
+  });
+  it('behoudt de {address,family}-vorm en de family-waarde', () => {
+    const recs = [{ address: '10.0.0.1', family: 4 }, { address: '93.184.216.34', family: 4 }];
+    expect(filterSafeAddresses(recs)).toEqual([{ address: '93.184.216.34', family: 4 }]);
+  });
+  it('geeft lege array bij niets of enkel geblokkeerde adressen', () => {
+    expect(filterSafeAddresses([])).toEqual([]);
+    expect(filterSafeAddresses(null)).toEqual([]);
+    expect(filterSafeAddresses(['10.0.0.1', '169.254.169.254'])).toEqual([]);
+  });
+});
+
+describe('createPinnedLookup (DNS-rebinding pinning)', () => {
+  function run(lookup, hostname, options) {
+    return new Promise((resolve) => {
+      lookup(hostname, options || {}, (err, address, family) => resolve({ err, address, family }));
+    });
+  }
+  it('pint op een geverifieerd publiek adres (single-result)', async () => {
+    const lookup = createPinnedLookup(async () => [{ address: '93.184.216.34', family: 4 }]);
+    const { err, address, family } = await run(lookup, 'example.com', {});
+    expect(err).toBeFalsy();
+    expect(address).toBe('93.184.216.34');
+    expect(family).toBe(4);
+  });
+  it('geeft alleen de veilige adressen terug bij options.all', async () => {
+    const lookup = createPinnedLookup(async () => [
+      { address: '10.0.0.1', family: 4 },
+      { address: '93.184.216.34', family: 4 },
+      { address: '2606:2800:220:1::1', family: 6 },
+    ]);
+    const { err, address } = await run(lookup, 'example.com', { all: true });
+    expect(err).toBeFalsy();
+    expect(address).toEqual([
+      { address: '93.184.216.34', family: 4 },
+      { address: '2606:2800:220:1::1', family: 6 },
+    ]);
+  });
+  it('weigert (callback-fout) als de host enkel naar privé-adressen resolvet', async () => {
+    const lookup = createPinnedLookup(async () => [{ address: '127.0.0.1', family: 4 }]);
+    const { err } = await run(lookup, 'rebind.example.com', { all: true });
+    expect(err).toBeTruthy();
+    expect(err.code).toBe('ESSRFBLOCKED');
+  });
+  it('weigert een AAAA die als hex-vorm IPv4-mapped naar privé wijst', async () => {
+    // ::ffff:7f00:1 == 127.0.0.1 — de DNS-objectpad moet dit óók blokkeren.
+    const lookup = createPinnedLookup(async () => [{ address: '::ffff:7f00:1', family: 6 }]);
+    const { err } = await run(lookup, 'rebind6.example.com', { all: true });
+    expect(err).toBeTruthy();
+    expect(err.code).toBe('ESSRFBLOCKED');
+  });
+  it('propageert een resolutiefout naar de callback', async () => {
+    const lookup = createPinnedLookup(async () => { throw new Error('ENOTFOUND'); });
+    const { err } = await run(lookup, 'nope.example.com', {});
+    expect(err).toBeTruthy();
+    expect(err.message).toMatch(/ENOTFOUND/);
   });
 });

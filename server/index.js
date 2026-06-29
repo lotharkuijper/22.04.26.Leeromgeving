@@ -65,10 +65,12 @@ import {
   normalizeUrl as normalizeWebUrl,
   sameWebEnvironment as sameWebEnv,
   isBlockedHost as isBlockedWebHost,
+  createPinnedLookup as webCreatePinnedLookup,
   WEB_IMPORT_LIMITS,
 } from './webImport.js';
 import { sanitizeText, sanitizeMetadata } from './sanitizeText.js';
 import { promises as dnsPromises } from 'node:dns';
+import { Agent as UndiciAgent } from 'undici';
 import { createHash } from 'node:crypto';
 import { isUnsupportedSamplingParamError, isEmptyOrTruncatedCompletion, postChatCompletionWithRetry } from './openaiSampling.js';
 import { computeChatConfig } from './chatConfig.js';
@@ -136,6 +138,25 @@ import { applyRelationshipDeltaImpl } from './threadClose.js';
 async function resolveHostAddresses(hostname) {
   const records = await dnsPromises.lookup(hostname, { all: true });
   return records.map((rec) => rec.address);
+}
+
+// SSRF-pinning voor de web-import: een undici-dispatcher die élke uitgaande
+// fetch-verbinding pint op een geverifieerd publiek IP. Sluit de DNS-rebinding-
+// TOCTOU tussen de pre-check (`resolveHostAddresses`) en de echte socket-connect:
+// het IP dat we valideren is exact het IP waarmee `fetch()` verbindt. IP-literals
+// slaan DNS over (net.connect roept dan geen `lookup` aan), maar die worden al op
+// naamniveau door `isBlockedHost` geweigerd, dus de laag blijft sluitend.
+const webImportPinnedLookup = webCreatePinnedLookup(async (hostname, opts) => {
+  const lookupOpts = { all: true, verbatim: opts?.verbatim !== false };
+  if (opts?.family) lookupOpts.family = opts.family;
+  if (opts?.hints != null) lookupOpts.hints = opts.hints;
+  return dnsPromises.lookup(hostname, lookupOpts);
+});
+const webImportDispatcher = new UndiciAgent({ connect: { lookup: webImportPinnedLookup } });
+// Wrapper rond de globale fetch die de pinning-dispatcher meegeeft; injecteren we
+// in `discoverPages`/`fetchPage` i.p.v. de kale fetch.
+function safeWebFetch(url, options = {}) {
+  return fetch(url, { ...options, dispatcher: webImportDispatcher });
 }
 
 let pgPool = null;
@@ -2754,7 +2775,7 @@ app.post('/api/admin/import-web/discover', async (req, res) => {
   }
 
   try {
-    const { pages, method, warnings } = await discoverWebPages(start, fetch, { lookup: resolveHostAddresses });
+    const { pages, method, warnings } = await discoverWebPages(start, safeWebFetch, { lookup: resolveHostAddresses });
     return res.json({ pages, method, warnings, baseUrl: start });
   } catch (err) {
     console.error('[import-web/discover] fout:', err);
@@ -2880,7 +2901,7 @@ app.post('/api/admin/import-web/import', async (req, res) => {
     // 'completed' + total_chunks + content_hash gezet NÁ een geslaagde chunk-insert,
     // zodat geldt: completed + total_chunks>0 ⟺ er bestaan chunks.
     const processPage = async (target) => {
-      const resp = await fetchWebPage(target.url, fetch, { scope, lookup: resolveHostAddresses });
+      const resp = await fetchWebPage(target.url, safeWebFetch, { scope, lookup: resolveHostAddresses });
       if (!resp.ok) {
         return { url: target.url, status: 'error', counter: 'errors', message: resp.error || `HTTP ${resp.status || 'netwerkfout'}` };
       }
