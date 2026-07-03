@@ -508,12 +508,28 @@ app.post('/api/chat', async (req, res) => {
     max_tokens,
     skipSystemPrompt = false,
     ragStrictMode = false,
-    systemPromptOverride,
+    promptMode,
     sources,
     lang = 'nl',
     learningLevel,
     courseId,
   } = req.body;
+
+  // Task #412: system-prompt hardening. De client stuurt geen vrije
+  // system-prompt-tekst meer mee; alleen een bekende `promptMode` die de server
+  // zélf naar de vertrouwde (globale of cursus-)prompt resolvet. Ruwe
+  // client-tekst wordt genegeerd; een onbekende promptMode geeft 400.
+  let resolvedPromptOverride;
+  if (promptMode !== undefined && promptMode !== null && promptMode !== '') {
+    resolvedPromptOverride = await resolveChatPromptMode(promptMode, {
+      user: auth.user,
+      profile: auth.profile,
+      courseId,
+    });
+    if (resolvedPromptOverride == null) {
+      return res.status(400).json({ error: `Onbekende promptMode: ${String(promptMode)}` });
+    }
+  }
 
   // Task #296: parametrisch leerniveau-blok (leeg bij ontbrekend/ongeldig niveau).
   const levelBlock = buildLevelInstructionBlock(learningLevel, lang);
@@ -533,8 +549,8 @@ app.post('/api/chat', async (req, res) => {
 
   let finalMessages;
   if (skipSystemPrompt) {
-    if (systemPromptOverride) {
-      finalMessages = [{ role: 'system', content: `${systemPromptOverride}${levelBlock}${buildLanguageInstruction(lang)}` }, ...userMessages];
+    if (resolvedPromptOverride) {
+      finalMessages = [{ role: 'system', content: `${resolvedPromptOverride}${levelBlock}${buildLanguageInstruction(lang)}` }, ...userMessages];
     } else {
       const langOnly = `${levelBlock}${buildLanguageInstruction(lang)}`.trim();
       finalMessages = langOnly ? [{ role: 'system', content: langOnly }, ...userMessages] : userMessages;
@@ -983,6 +999,9 @@ app.post('/api/embeddings', async (req, res) => {
 
 app.get('/api/rag-settings', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Admin client niet beschikbaar' });
+  // Task #412: lees-endpoint vereist een ingelogde gebruiker (voorheen open).
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
   const { courseId } = req.query;
   try {
     const settings = await loadRagSettings(courseId || null);
@@ -1308,14 +1327,113 @@ app.post('/api/admin/test-rag-similarity', async (req, res) => {
   }
 });
 
+// Task #412: GitHub-proxy dichtgezet. Voorheen open voor anonieme
+// internetgebruikers én willekeurige api.github.com-paden (SSRF + gratis
+// gebruik van onze GITHUB_TOKEN). Nu: ingelogde gebruiker vereist + strikte
+// allowlist (alleen-lezen ShareStats-itembank-endpoints op toegestane repos).
+const GITHUB_DEFAULT_REPOS = [{ owner: 'sharestats', repo: 'itembank' }];
+let _githubAllowedReposCache = { at: 0, repos: null };
+function parseGithubOwnerRepo(url) {
+  if (typeof url !== 'string') return null;
+  const m = url.match(/github\.com[/:]([^/]+)\/([^/#?]+?)(?:\.git)?(?:[/#?].*)?$/i);
+  if (!m) return null;
+  return { owner: m[1].toLowerCase(), repo: m[2].toLowerCase() };
+}
+async function getGithubAllowedRepos() {
+  const now = Date.now();
+  if (_githubAllowedReposCache.repos && now - _githubAllowedReposCache.at < 60000) {
+    return _githubAllowedReposCache.repos;
+  }
+  const set = new Map();
+  for (const r of GITHUB_DEFAULT_REPOS) set.set(`${r.owner}/${r.repo}`, r);
+  try {
+    if (supabaseAdmin) {
+      const { data } = await supabaseAdmin
+        .from('chatbot_prompts')
+        .select('content')
+        .like('name', '__quiz_itembank_config%');
+      for (const row of data || []) {
+        const cfg = parseItembankConfig(row.content);
+        const parsed = cfg && parseGithubOwnerRepo(cfg.repositoryUrl);
+        if (parsed) set.set(`${parsed.owner}/${parsed.repo}`, parsed);
+      }
+    }
+  } catch (err) {
+    console.warn('[github-proxy] Kon toegestane repos niet laden:', err.message);
+  }
+  const repos = Array.from(set.values());
+  _githubAllowedReposCache = { at: now, repos };
+  return repos;
+}
+
 app.get('/api/github/*path', async (req, res) => {
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
   const token = process.env.GITHUB_TOKEN;
-  // In Express 5 levert de named wildcard `*path` een array van segmenten op.
-  // Voor backwards-compat met Express 4 (string) ondersteunen we beide vormen.
+
+  // In Express 5 levert `*path` een array van (gedecodeerde) segmenten op; in
+  // Express 4 een string. Normaliseer naar één pad en strip een trailing slash
+  // (fetchGitHubDirectory('') stuurt `.../contents/`).
   const rawPath = req.params.path;
-  const path = Array.isArray(rawPath) ? rawPath.join('/') : (rawPath || '');
-  const query = req.url.split('?')[1] ? '?' + req.url.split('?')[1] : '';
-  const url = `https://api.github.com/${path}${query}`;
+  const joined = Array.isArray(rawPath) ? rawPath.join('/') : String(rawPath || '');
+  const path = joined.replace(/\/+$/, '');
+  const segments = path.split('/');
+
+  // Weiger lege, dot- en traversal-segmenten. Decodeer elk segment zelf zodat
+  // ook geëncodeerde varianten (%2e%2e, %2f) worden gevangen, ongeacht of
+  // Express al gedecodeerd heeft.
+  for (const seg of segments) {
+    let dec;
+    try { dec = decodeURIComponent(seg); } catch { return res.status(400).json({ error: 'Ongeldig pad' }); }
+    if (dec === '' || dec === '.' || dec === '..' || dec.includes('/') || dec.includes('\\')) {
+      return res.status(400).json({ error: 'Ongeldig pad' });
+    }
+  }
+
+  // Alleen 3 alleen-lezen vormen toestaan:
+  //   repos/{owner}/{repo}
+  //   repos/{owner}/{repo}/contents[/{...}]
+  //   repos/{owner}/{repo}/git/trees/{branch}
+  const shape = path.match(/^repos\/([^/]+)\/([^/]+)(?:\/(contents(?:\/.+)?|git\/trees\/[^/]+))?$/);
+  if (!shape) {
+    return res.status(400).json({ error: 'Alleen-lezen ShareStats-endpoints toegestaan' });
+  }
+  const owner = shape[1].toLowerCase();
+  const repo = shape[2].toLowerCase();
+  const allowed = await getGithubAllowedRepos();
+  if (!allowed.some((r) => r.owner === owner && r.repo === repo)) {
+    return res.status(403).json({ error: 'Repository niet toegestaan' });
+  }
+
+  // Alleen `ref` en `recursive` uit de query overnemen, streng gevalideerd —
+  // de rauwe query-string wordt bewust niet doorgestuurd.
+  const outParams = new URLSearchParams();
+  const ref = req.query.ref;
+  if (ref !== undefined) {
+    if (typeof ref !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(ref) || ref.includes('..')) {
+      return res.status(400).json({ error: 'Ongeldige ref-parameter' });
+    }
+    outParams.set('ref', ref);
+  }
+  const recursive = req.query.recursive;
+  if (recursive !== undefined) {
+    if (recursive === '1' || recursive === 'true') outParams.set('recursive', '1');
+    else return res.status(400).json({ error: 'Ongeldige recursive-parameter' });
+  }
+
+  // Bouw de doel-URL via new URL() en verifieer dat het pad binnen de repo
+  // blijft (extra verdediging tegen path-normalisatie-trucs).
+  let target;
+  try {
+    target = new URL(`https://api.github.com/${path}`);
+  } catch {
+    return res.status(400).json({ error: 'Ongeldig pad' });
+  }
+  const prefix = `/repos/${shape[1]}/${shape[2]}`;
+  if (target.pathname !== prefix && !target.pathname.startsWith(prefix + '/')) {
+    return res.status(400).json({ error: 'Ongeldig pad' });
+  }
+  target.search = outParams.toString();
 
   const headers = {
     'Accept': 'application/vnd.github+json',
@@ -1326,7 +1444,7 @@ app.get('/api/github/*path', async (req, res) => {
   }
 
   try {
-    const response = await fetch(url, { headers });
+    const response = await fetch(target.toString(), { headers });
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err) {
@@ -6871,6 +6989,9 @@ async function loadGlobalExplainPrompt() {
 }
 
 app.get('/api/prompt/explain', async (req, res) => {
+  // Task #412: lees-endpoint vereist een ingelogde gebruiker (voorheen open).
+  const auth = await requireAuthUser(req, res);
+  if (!auth) return;
   if (!supabaseAdmin || !promptsHasSection) {
     return res.json({ content: DEFAULT_EXPLAIN_PROMPT, source: 'default' });
   }
@@ -6896,6 +7017,57 @@ app.get('/api/prompt/explain', async (req, res) => {
     return res.json({ content: DEFAULT_EXPLAIN_PROMPT, source: 'default' });
   }
 });
+
+// Task #412: vertaalt een client-`promptMode` naar de vertrouwde system-prompt
+// die de server zelf beheert. De client mag geen vrije prompt-tekst meer sturen.
+// - 'explain' → cursus-override (bij toegang) anders de globale uitleg-prompt.
+// - quiz-modi → de globale beheerde quiz-prompt (default + actieve DB-override).
+// Retourneert null bij een onbekende modus zodat de caller 400 kan geven.
+async function resolveChatPromptMode(mode, { user, profile, courseId } = {}) {
+  if (typeof mode !== 'string' || !mode) return null;
+
+  if (mode === 'explain') {
+    try {
+      if (courseId && supabaseAdmin && (await userHasCourseAccess(user, profile, courseId))) {
+        const { data: override } = await supabaseAdmin
+          .from('chatbot_prompts')
+          .select('content')
+          .eq('name', explainPromptKey(courseId))
+          .maybeSingle();
+        if (override?.content && override.content.trim()) return override.content;
+      }
+    } catch (err) {
+      console.warn('[promptMode] explain cursus-override mislukt:', err.message);
+    }
+    try {
+      const global = await loadGlobalExplainPrompt();
+      return global?.content || DEFAULT_EXPLAIN_PROMPT;
+    } catch {
+      return DEFAULT_EXPLAIN_PROMPT;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(QUIZ_PROMPT_DEFAULTS, mode)) {
+    let content = QUIZ_PROMPT_DEFAULTS[mode];
+    if (supabaseAdmin && promptsHasSection) {
+      try {
+        const { data: row } = await supabaseAdmin
+          .from('chatbot_prompts')
+          .select('content, is_active')
+          .eq('name', mode)
+          .maybeSingle();
+        if (row && row.is_active !== false && typeof row.content === 'string' && row.content.trim().length > 0) {
+          content = row.content;
+        }
+      } catch (err) {
+        console.warn(`[promptMode] quiz-prompt "${mode}" override mislukt:`, err.message);
+      }
+    }
+    return content;
+  }
+
+  return null;
+}
 
 // ── Beheer: per-cursus uitleg-prompt (Task #28) ─────────────────────────────
 // GET geeft de cursus-override (indien aanwezig) plus de globale prompt als
