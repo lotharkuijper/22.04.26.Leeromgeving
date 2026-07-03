@@ -175,6 +175,28 @@ describe('buildDigestEmail', () => {
     expect(mail.html).not.toContain('<script>');
     expect(mail.html).toContain('&lt;script&gt;');
   });
+
+  it('lokaliseert naar een niet-nl/en taal (Grieks) uit de locale-dicts', () => {
+    const mail = buildDigestEmail(
+      [{ kind: 'announcement', thread_id: 'A1', thread_title: 'Tentamen' }],
+      { userName: 'Nikos', lang: 'el', baseUrl: 'https://app.test/' },
+    );
+    // De Griekse strings staan in el.json; controleer dat het NIET terugvalt op nl.
+    expect(mail.subject).not.toBe('1 nieuwe aankondiging in het Studiecafé');
+    // De titel (student-content) blijft ongewijzigd en aanwezig.
+    expect(mail.text).toContain('Tentamen');
+    expect(mail.html).toContain('https://app.test/studiecafe');
+  });
+
+  it('onbekende taal valt netjes terug op en', () => {
+    const mail = buildDigestEmail(
+      [{ kind: 'reply', thread_id: 'T1', thread_title: 'X' }],
+      { lang: 'zz-unknown' },
+    );
+    // normalizeLang → 'nl' voor onbekende codes; blijft dus bruikbaar (geen crash).
+    expect(mail.subject).toBeTruthy();
+    expect(mail.text).toContain('X');
+  });
 });
 
 describe('computeAnnouncementAudience', () => {

@@ -14042,7 +14042,7 @@ async function runStudiecafeDigestOnce() {
       }
       if (!email) continue;
 
-      const lang = profile && profile.preferred_lang === 'nl' ? 'nl' : profile && profile.preferred_lang === 'en' ? 'en' : 'nl';
+      const lang = normalizeLang(profile && profile.preferred_lang);
       const userName = (profile && profile.full_name && String(profile.full_name).split(' ')[0]) || '';
 
       // 5. Digest bouwen + versturen.

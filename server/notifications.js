@@ -13,6 +13,8 @@
 // (Resend) staat onderaan en faalt zacht als er geen sleutel is geconfigureerd.
 // ───────────────────────────────────────────────────────────────────────────
 
+import { getDigestStrings } from './notificationI18n.js';
+
 export const NOTIFICATION_KINDS = ['reply', 'announcement'];
 
 export const DEFAULT_NOTIFICATION_PREFS = Object.freeze({
@@ -125,46 +127,16 @@ export function summarizeUserNotifications(rows) {
   return { replies: [...replyMap.values()], announcements: [...announceMap.values()] };
 }
 
-const T = {
-  nl: {
-    subjectReplies: (n) => `${n} nieuwe ${n === 1 ? 'reactie' : 'reacties'} in het Studiecafé`,
-    subjectAnnounce: (n) => `${n} nieuwe ${n === 1 ? 'aankondiging' : 'aankondigingen'} in het Studiecafé`,
-    subjectBoth: 'Nieuwe activiteit in het Studiecafé',
-    greeting: (name) => `Hoi${name ? ' ' + name : ''},`,
-    repliesHeading: 'Nieuwe reacties op je berichten',
-    announceHeading: 'Nieuwe aankondigingen',
-    replyLine: (count, title) =>
-      `${count} nieuwe ${count === 1 ? 'reactie' : 'reacties'} op "${title || 'je bericht'}"`,
-    announceLine: (title) => `${title || 'Nieuwe aankondiging'}`,
-    cta: 'Open het Studiecafé',
-    footer:
-      'Je ontvangt deze e-mail omdat je meldingen voor het Studiecafé aan hebt staan. Je kunt ze uitzetten via de meldingsinstellingen in het Studiecafé.',
-    untitled: 'een bericht',
-  },
-  en: {
-    subjectReplies: (n) => `${n} new ${n === 1 ? 'reply' : 'replies'} in the Study Café`,
-    subjectAnnounce: (n) => `${n} new ${n === 1 ? 'announcement' : 'announcements'} in the Study Café`,
-    subjectBoth: 'New activity in the Study Café',
-    greeting: (name) => `Hi${name ? ' ' + name : ''},`,
-    repliesHeading: 'New replies to your posts',
-    announceHeading: 'New announcements',
-    replyLine: (count, title) =>
-      `${count} new ${count === 1 ? 'reply' : 'replies'} on "${title || 'your post'}"`,
-    announceLine: (title) => `${title || 'New announcement'}`,
-    cta: 'Open the Study Café',
-    footer:
-      'You receive this email because Study Café notifications are turned on. You can turn them off in the notification settings inside the Study Café.',
-    untitled: 'a post',
-  },
-};
-
 // Bouw de digest-e-mail voor één gebruiker uit zijn (toegestane) meldingsrijen.
-// Geeft { subject, html, text } of null als er niets te melden valt. lang ∈
-// {nl,en} (overige talen vallen terug op en).
-export function buildDigestEmail(rows, { userName = '', lang = 'nl', baseUrl = '' } = {}) {
+// Geeft { subject, html, text } of null als er niets te melden valt. De teksten
+// worden per taal geresolved via getDigestStrings(lang) uit de frontend-locale-
+// dictionaries (fallback doeltaal → en → nl), zodat álle 20 talen gelokaliseerde
+// e-mails krijgen. De caller kan een vooraf-geresolvede `strings` meegeven om een
+// dubbele lookup te vermijden.
+export function buildDigestEmail(rows, { userName = '', lang = 'nl', baseUrl = '', strings = null } = {}) {
   const { replies, announcements } = summarizeUserNotifications(rows);
   if (!replies.length && !announcements.length) return null;
-  const L = lang === 'nl' ? T.nl : T.en;
+  const L = strings || getDigestStrings(lang);
 
   const replyCount = replies.reduce((s, r) => s + (r.count || 0), 0);
   let subject;

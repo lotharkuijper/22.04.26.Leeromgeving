@@ -35,6 +35,22 @@ predicate in the conflict target). After a digest sends (sent_at set), the row
 leaves the index so the next reply starts fresh. Opted-out rows are marked sent
 (not deleted) so they don't reprocess forever.
 
+## Digest emails are localized in all 20 languages, not just nl/en
+The digest worker reads `profiles.preferred_lang` and renders the email in that
+language. Do NOT coerce the lang to nl/en — pass it through `normalizeLang`.
+Digest strings live as `email.digest.*` keys in the frontend locale JSONs
+(`src/i18n/locales/<code>.json`); the server loads them via
+`server/notificationI18n.js` (`getDigestStrings(lang)`) with per-key fallback
+target → en → nl → key. `buildDigestEmail` stays pure/testable (accepts `lang`
+or a pre-resolved `strings`), delegating string lookup to that loader.
+**Why:** students can pick any of 20 UI languages but emails used to fall back
+to Dutch for everything except en. Reusing the locale files means the existing
+`i18n-gen` workflow auto-fills translations — no second server-side dictionary.
+**How to apply:** after adding/changing an `email.digest.*` key in nl/en, re-run
+`scripts/i18n-generate.mjs` (only fills missing keys) or the other 18 locales
+stay empty and fall back to en. Pluralization is one/other via `.one`/`.other`
+key suffixes with a `{count}` placeholder.
+
 ## Email transport is fail-soft (Resend)
 `getEmailConfig()` reads the key from the Replit Resend **connector proxy**
 (`/api/v2/connection?include_secrets=true&connector_names=resend` with
