@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} document(en) in primaire folder",
   "quiz.itemBankAtLeast": "Ten minste {count} ItemBank-vraag/vragen{split} — exacte telling beperkt door cap",
   "quiz.itemBankViaMappings": "{count} ItemBank-vraag/vragen{split} via koppelingen",
-  "quiz.llmAlwaysAvailable": "LLM-creatief is altijd beschikbaar — Groq genereert toepassings- en transfervragen zonder externe bron",
+  "quiz.llmAlwaysAvailable": "LLM-creatief is altijd beschikbaar — genereert toepassings- en transfervragen zonder externe bron",
   "quiz.numQuestionsLabel": "Aantal vragen: {n}",
   "quiz.lastMixCounts": "Vorige quiz bevatte: {rag} cursus · {itembank} ItemBank · {llm} creatief",
   "quiz.contextStatsSome": "{used} van {total} gevonden passages waren meegestuurd (de rest is overgeslagen om de prompt onder de limiet te houden).",

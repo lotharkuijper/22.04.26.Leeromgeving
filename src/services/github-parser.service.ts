@@ -24,11 +24,23 @@ export function getItembankRepo(): { owner: string; repo: string } {
   return { owner: REPO_OWNER, repo: REPO_NAME };
 }
 
+// Task #412: de GitHub-proxy vereist nu een ingelogde gebruiker. Elke
+// proxy-aanroep stuurt daarom het Supabase-access-token als Bearer-header mee.
+export async function githubProxyFetch(apiPath: string): Promise<Response> {
+  const headers: Record<string, string> = {};
+  try {
+    const { supabase } = await import('../lib/supabase');
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+  } catch {}
+  return fetch(`/api/github/${apiPath}`, { headers });
+}
+
 export async function fetchGitHubDirectory(path: string = ''): Promise<GitHubFileInfo[]> {
   const apiPath = `repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}`;
 
   try {
-    const response = await fetch(`/api/github/${apiPath}`);
+    const response = await githubProxyFetch(apiPath);
 
     if (!response.ok) {
       throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
@@ -154,7 +166,7 @@ interface GitHubRepoMetadata {
 }
 
 async function fetchRepoMetadata(): Promise<GitHubRepoMetadata> {
-  const response = await fetch(`/api/github/repos/${REPO_OWNER}/${REPO_NAME}`);
+  const response = await githubProxyFetch(`repos/${REPO_OWNER}/${REPO_NAME}`);
   if (!response.ok) {
     throw new Error(`Kon repo-metadata niet ophalen: ${response.status} ${response.statusText}`);
   }
@@ -169,8 +181,8 @@ interface GitTreeEntry {
 }
 
 async function fetchRecursiveTree(branch: string): Promise<{ entries: GitTreeEntry[]; truncated: boolean }> {
-  const url = `/api/github/repos/${REPO_OWNER}/${REPO_NAME}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
-  const response = await fetch(url);
+  const apiPath = `repos/${REPO_OWNER}/${REPO_NAME}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
+  const response = await githubProxyFetch(apiPath);
   if (!response.ok) {
     throw new Error(`Kon repo-tree niet ophalen: ${response.status} ${response.statusText}`);
   }

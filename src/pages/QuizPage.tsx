@@ -7,7 +7,6 @@ import { supabase } from '../lib/supabase';
 import {
   evaluateOpenAnswer,
   evaluateCasusAnswer,
-  fetchQuizPrompts,
   llmErrorToDutch,
   type QuizQuestion,
   type QuestionType,
@@ -258,9 +257,19 @@ export function QuizPage() {
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
-    fetch(url).then(r => r.ok ? r.json() : null).then(data => {
-      if (data) setRagSettings(data);
-    }).catch(() => {});
+    (async () => {
+      // Task #412: rag-settings-lees-endpoint vereist nu auth; stuur Bearer mee.
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+      try {
+        const r = await fetch(url, { headers });
+        if (r.ok) {
+          const data = await r.json();
+          if (data) setRagSettings(data);
+        }
+      } catch {}
+    })();
   }, [activeCourse]);
 
   const loadTopics = useCallback(async () => {
@@ -482,14 +491,11 @@ export function QuizPage() {
     setEvaluating(true);
     setEvalError(null);
     try {
-      // Geef de beheerde "quiz_evaluate_open"-prompt mee als systemPersona
-      // zodat docenten het beoordelingsgedrag (toon, rubriek-strengte, ...) via
-      // de admin-UI kunnen bijsturen zonder code-wijziging.
-      const quizPrompts = await fetchQuizPrompts();
-      const evaluatorPrompt = quizPrompts.quiz_evaluate_open || undefined;
+      // Task #412: de beoordelings-prompt (quiz_evaluate_open) wordt server-side
+      // bepaald; de client stuurt geen vrije prompt-tekst meer mee.
       const evaluation: AnswerEvaluation = q.type === 'open'
-        ? await evaluateOpenAnswer(q as OpenQuestion, text, evaluatorPrompt)
-        : await evaluateCasusAnswer(q as CasusQuestion, text, evaluatorPrompt);
+        ? await evaluateOpenAnswer(q as OpenQuestion, text)
+        : await evaluateCasusAnswer(q as CasusQuestion, text);
 
       setAnswers(prev => {
         const next = [...prev];

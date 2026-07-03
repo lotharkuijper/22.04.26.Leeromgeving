@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} document(s) dans le dossier principal",
   "quiz.itemBankAtLeast": "Au moins {count} question(s) ItemBank{split} — comptage exact limité par le plafond",
   "quiz.itemBankViaMappings": "{count} question(s) ItemBank{split} via des associations",
-  "quiz.llmAlwaysAvailable": "La créativité du LLM est toujours disponible — Groq génère des questions d’application et de transfert sans source externe",
+  "quiz.llmAlwaysAvailable": "LLM-créatif est toujours disponible — génère des questions d’application et de transfert sans source externe",
   "quiz.numQuestionsLabel": "Nombre de questions : {n}",
   "quiz.lastMixCounts": "Le quiz précédent contenait : {rag} cours · {itembank} ItemBank · {llm} créatives",
   "quiz.contextStatsSome": "{used} des {total} passages trouvés ont été envoyés (le reste a été ignoré pour maintenir le prompt sous la limite).",

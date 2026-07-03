@@ -187,7 +187,6 @@ export function ExplainPage() {
   const conceptT = useContentTranslation(conceptItems);
   const conceptName = (c: Concept) => conceptT.values[`name:${c.id}`] || c.name;
   const [ragSettings, setRagSettings] = useState<RagSettings>(RAG_DEFAULTS);
-  const [explainSystemPrompt, setExplainSystemPrompt] = useState<string | null>(null);
   const [history, setHistory] = useState<ExplanationHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [activeExplanationId, setActiveExplanationId] = useState<string | null>(null);
@@ -199,17 +198,19 @@ export function ExplainPage() {
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
-    fetch(url).then(r => r.ok ? r.json() : null).then(data => {
-      if (data) setRagSettings(data);
-    }).catch(() => {});
-  }, [activeCourse]);
-
-  useEffect(() => {
-    const url = activeCourse ? `/api/prompt/explain?courseId=${activeCourse}` : '/api/prompt/explain';
-    fetch(url)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.content) setExplainSystemPrompt(data.content); })
-      .catch(() => {});
+    (async () => {
+      // Task #412: rag-settings-lees-endpoint vereist nu auth; stuur Bearer mee.
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+      try {
+        const r = await fetch(url, { headers });
+        if (r.ok) {
+          const data = await r.json();
+          if (data) setRagSettings(data);
+        }
+      } catch {}
+    })();
   }, [activeCourse]);
 
   useEffect(() => {
@@ -515,7 +516,7 @@ export function ExplainPage() {
           context,
           displaySources,
           ragSettings.explain.rag_strict_mode,
-          explainSystemPrompt ?? undefined,
+          activeCourse ?? undefined,
           learningLevel
         );
       } catch (llmErr) {

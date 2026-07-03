@@ -223,7 +223,7 @@ export async function evaluateExplanation(
   ragContext?: string,
   retrievedSources?: Array<{ title: string; similarity: number }>,
   ragStrictMode?: boolean,
-  systemPrompt?: string,
+  courseId?: string,
   learningLevel?: number
 ): Promise<LLMResponse> {
   let evaluationPrompt: string;
@@ -254,8 +254,12 @@ Verwijsregels (volg deze STRIKT):
 
   const sourcesBlock = buildSourcesBlock(retrievedSources ?? []);
 
-  if (systemPrompt) {
-    evaluationPrompt = `Begrip: "${concept}"
+  // Task #412: de uitleg-system-prompt wordt server-side bepaald via
+  // promptMode:'explain' (cursus-override of globaal, met DEFAULT_EXPLAIN_PROMPT
+  // als bodem). De client stuurt geen vrije prompt-tekst meer mee; dit
+  // user-bericht bevat daarom alleen de te beoordelen inhoud — de
+  // feedback-instructies zitten in de vertrouwde server-prompt.
+  evaluationPrompt = `Begrip: "${concept}"
 
 Officiële definitie:
 ${definition}
@@ -263,49 +267,16 @@ ${definition}
 Kernpunten die beoordeeld worden:
 ${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
 
-    if (ragContext) {
-      evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
-      if (ragStrictMode) evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
-    } else if (ragStrictMode) {
-      evaluationPrompt += `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten gevonden voor dit begrip. Geef dit duidelijk aan in je feedback.`;
-    }
-
-    evaluationPrompt += `\n\nUitleg van de student:\n${explanation}`;
-    evaluationPrompt += sourcesBlock;
-    evaluationPrompt += `\n\nAanspraakvorm (volg STRIKT in jouw feedback): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT formuleringen als "de student", "deze student" of "de student heeft" — schrijf alsof je de feedback één-op-één tegen de student geeft.`;
-  } else {
-    evaluationPrompt = `Evalueer de volgende uitleg van een student voor het begrip "${concept}".
-
-Officiële definitie:
-${definition}
-
-Kernpunten die genoemd zouden moeten worden:
-${keyPoints.map((point, i) => `${i + 1}. ${point}`).join('\n')}`;
-
-    if (ragContext) {
-      evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
-    }
-    if (ragStrictMode) {
-      if (ragContext) {
-        evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
-      } else {
-        evaluationPrompt += `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten gevonden voor dit begrip. Geef dit duidelijk aan in je feedback.`;
-      }
-    }
-
-    evaluationPrompt += `\n\nUitleg van de student:\n${explanation}
-
-Aanspraakvorm (volg STRIKT in jouw feedback): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT formuleringen als "de student", "deze student" of "de student heeft" — schrijf alsof je de feedback één-op-één tegen de student geeft.
-
-Geef gestructureerde feedback met:
-1. Wat je goed hebt gedaan (specifieke punten in jouw uitleg)
-2. Wat ontbreekt of onduidelijk is in jouw uitleg
-3. Eventuele misconcepties bij jou die gecorrigeerd moeten worden
-4. Concrete suggesties voor verbetering`;
-
-    evaluationPrompt += sourcesBlock;
-    evaluationPrompt += `\n\nWees constructief en moedigend, maar ook specifiek en nuttig.`;
+  if (ragContext) {
+    evaluationPrompt += `\n\nRelevante informatie uit cursusmateriaal:\n${ragContext}`;
+    if (ragStrictMode) evaluationPrompt += RAG_STRICT_INSTRUCTION_LLM;
+  } else if (ragStrictMode) {
+    evaluationPrompt += `\n\n${RAG_STRICT_INSTRUCTION_LLM}\n\nEr zijn geen relevante cursusteksten gevonden voor dit begrip. Geef dit duidelijk aan in je feedback.`;
   }
+
+  evaluationPrompt += `\n\nUitleg van de student:\n${explanation}`;
+  evaluationPrompt += sourcesBlock;
+  evaluationPrompt += `\n\nAanspraakvorm (volg STRIKT in jouw feedback): spreek de student direct aan met "je" / "jij" / "jouw". Gebruik NOOIT formuleringen als "de student", "deze student" of "de student heeft" — schrijf alsof je de feedback één-op-één tegen de student geeft.`;
 
   const data = await callChatAPI({
     model: 'gpt-4o-mini',
@@ -316,7 +287,8 @@ Geef gestructureerde feedback met:
     // voor de 4-delige gestructureerde feedback (lege/afgekapte respons).
     max_tokens: 4000,
     skipSystemPrompt: true,
-    ...(systemPrompt ? { systemPromptOverride: systemPrompt } : {}),
+    promptMode: 'explain',
+    ...(courseId ? { courseId } : {}),
     learningLevel,
   });
 
@@ -528,7 +500,7 @@ export async function generateQuiz(
   numQuestions: number = 5,
   ragContext?: string,
   ragStrictMode?: boolean,
-  systemPromptOverride?: string,
+  promptName?: string,
 ): Promise<QuizQuestion[]> {
   const lang = _getLang();
   const en = lang !== 'nl';
@@ -661,8 +633,8 @@ ${en
       temperature: 0.7,
       max_tokens: maxTokens,
       skipSystemPrompt: true,
-      ...(systemPromptOverride && systemPromptOverride.trim().length > 0
-        ? { systemPromptOverride }
+      ...(promptName && promptName.trim().length > 0
+        ? { promptMode: promptName }
         : {}),
     });
 
@@ -697,9 +669,9 @@ async function evaluateFreeTextAnswer(args: {
   modelAnswer: string;
   rubric: string;
   studentAnswer: string;
-  systemPromptOverride?: string;
+  promptMode?: string;
 }): Promise<AnswerEvaluation> {
-  const { systemPersona, questionBlock, modelAnswer, rubric, studentAnswer, systemPromptOverride } = args;
+  const { systemPersona, questionBlock, modelAnswer, rubric, studentAnswer, promptMode } = args;
   const prompt = `${systemPersona}
 
 ${questionBlock}
@@ -733,9 +705,7 @@ Geef je antwoord UITSLUITEND als één JSON-object met deze structuur, zonder ex
     temperature: 0.3,
     max_tokens: 1200,
     skipSystemPrompt: true,
-    ...(systemPromptOverride && systemPromptOverride.trim().length > 0
-      ? { systemPromptOverride }
-      : {}),
+    ...(promptMode ? { promptMode } : {}),
   });
 
   const content = data.choices[0]?.message?.content || '';
@@ -837,7 +807,6 @@ function evaluateNumericAnswer(
 export async function evaluateOpenAnswer(
   question: OpenQuestion,
   studentAnswer: string,
-  systemPromptOverride?: string,
 ): Promise<AnswerEvaluation> {
   // Numerieke ItemBank-vragen (extype: num): lokale tolerantie-check is
   // eerlijker dan een LLM-vergelijking en vermeldt expliciet dat extol is
@@ -861,7 +830,7 @@ export async function evaluateOpenAnswer(
     modelAnswer: question.modelAnswer,
     rubric: question.rubric,
     studentAnswer,
-    systemPromptOverride,
+    promptMode: 'quiz_evaluate_open',
   });
 
   // Vermeld in de feedback welke beoordelingsmethode is gebruikt zodat
@@ -883,7 +852,6 @@ export async function evaluateOpenAnswer(
 export async function evaluateCasusAnswer(
   question: CasusQuestion,
   studentAnswer: string,
-  systemPromptOverride?: string,
 ): Promise<AnswerEvaluation> {
   return evaluateFreeTextAnswer({
     systemPersona: `Je bent een ervaren docent aan de VU Amsterdam en beoordeelt jouw antwoord op een casusvraag. Houd zowel de inhoudelijke juistheid als het correct toepassen op de geschetste casus mee in je oordeel.`,
@@ -891,7 +859,7 @@ export async function evaluateCasusAnswer(
     modelAnswer: question.modelAnswer,
     rubric: question.rubric,
     studentAnswer,
-    systemPromptOverride,
+    promptMode: 'quiz_evaluate_open',
   });
 }
 

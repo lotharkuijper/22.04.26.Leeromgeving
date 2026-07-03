@@ -1,5 +1,5 @@
 // src/services/sharestats.ts
-import { getItembankRepo } from './github-parser.service';
+import { getItembankRepo, githubProxyFetch } from './github-parser.service';
 
 export interface ShareStatsTopic {
   name: string;
@@ -22,7 +22,7 @@ function repoBase(): string {
 }
 
 async function githubFetch(path: string): Promise<any> {
-  const res = await fetch(`/api/github/${path}`);
+  const res = await githubProxyFetch(path);
   if (!res.ok) {
     throw new Error(`GitHub API error: ${res.status}`);
   }

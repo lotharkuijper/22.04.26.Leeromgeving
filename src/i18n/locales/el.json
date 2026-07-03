@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} έγγραφο/-α στον κύριο φάκελο",
   "quiz.itemBankAtLeast": "Τουλάχιστον {count} ερώτηση/-εις ItemBank{split} — η ακριβής καταμέτρηση περιορίζεται από το όριο",
   "quiz.itemBankViaMappings": "{count} ερώτηση/-εις ItemBank{split} μέσω συνδέσεων",
-  "quiz.llmAlwaysAvailable": "Το δημιουργικό LLM είναι πάντα διαθέσιμο — το Groq δημιουργεί ερωτήσεις εφαρμογής και μεταφοράς χωρίς εξωτερική πηγή",
+  "quiz.llmAlwaysAvailable": "Το LLM-creatief είναι πάντα διαθέσιμο — δημιουργεί ερωτήσεις εφαρμογής και μεταφοράς χωρίς εξωτερική πηγή",
   "quiz.numQuestionsLabel": "Αριθμός ερωτήσεων: {n}",
   "quiz.lastMixCounts": "Το προηγούμενο κουίζ περιείχε: {rag} μαθήματος · {itembank} ItemBank · {llm} δημιουργικές",
   "quiz.contextStatsSome": "{used} από τα {total} αποσπάσματα που βρέθηκαν στάλθηκαν μαζί (τα υπόλοιπα παραλείφθηκαν για να μείνει το prompt κάτω από το όριο).",

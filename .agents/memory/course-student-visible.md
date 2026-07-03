@@ -34,9 +34,21 @@ so they still see their hidden course.
 AppRoutes redirects to `/choose-course`; the flag resets on `setActiveCourse`. Teachers/admins
 never hit PGRST116 for their own hidden course, so no false redirect for them.
 
-## Known gap (defense-in-depth, not yet done)
-RLS on course-scoped **content** tables (documents, concepts, quiz data, …) is
-membership/folder based and does **not** consult `student_visible`. A still-enrolled student
-issuing raw PostgREST queries could read a hidden course's content. All UI + all server API
-paths (via `userHasCourseAccess`) are blocked, which meets the acceptance criteria; tightening
-content-table RLS to check `student_visible` is a follow-up hardening task.
+## Content-table RLS: mirror the courses SELECT policy
+The correct hardening for a course-scoped **content** table is to make its non-staff SELECT
+branch mirror the `courses` SELECT policy exactly: student sees content only when
+`is_active AND student_visible`, the course teacher sees own-course content in any state,
+admin sees all. `documents` + `document_chunks` now do this via a SECURITY DEFINER helper
+`course_content_is_public(course_id)` (= `is_active AND student_visible`, `SET search_path`),
+combined with `is_admin() OR is_course_teacher(auth.uid(), folder_course_id(folder_id))`.
+`match_document_chunks` is SECURITY INVOKER so this RLS applies to the student RPC too.
+
+**Why:** content visibility must follow *course* visibility, not `course_members` — students
+get content access by the course being active+visible (no enrollment row needed), identical to
+how they see the course itself. Gating content on membership would both over-block (visible
+courses have no members rows) and under-block (archived courses).
+
+**Still a gap:** other course-scoped content tables (concepts, quiz data, …) remain
+membership/folder based and do **not** consult `student_visible`; raw PostgREST reads there can
+still leak a hidden/archived course's content. UI + server paths (`userHasCourseAccess`) block
+it, but tightening each table's RLS the same way is outstanding.

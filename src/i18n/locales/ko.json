@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "기본 폴더의 문서 {count}개",
   "quiz.itemBankAtLeast": "최소 {count}개의 ItemBank 문제{split} — 정확한 개수는 한도 때문에 제한됨",
   "quiz.itemBankViaMappings": "연결을 통한 ItemBank 문제 {count}개{split}",
-  "quiz.llmAlwaysAvailable": "LLM-크리에이티브는 항상 이용 가능 — Groq가 외부 소스 없이 적용 및 전이 문제를 생성함",
+  "quiz.llmAlwaysAvailable": "LLM-creatief는 항상 사용할 수 있어 — 외부 자료 없이 적용 및 전이 질문을 생성해",
   "quiz.numQuestionsLabel": "문제 수: {n}",
   "quiz.lastMixCounts": "이전 퀴즈 포함 내용: 강의 {rag} · ItemBank {itembank} · 크리에이티브 {llm}",
   "quiz.contextStatsSome": "찾은 구절 {total}개 중 {used}개가 함께 전송되었어(나머지는 프롬프트를 한도 내로 유지하기 위해 건너뜀).",

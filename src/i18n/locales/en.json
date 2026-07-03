@@ -632,7 +632,7 @@
   "quiz.ragDocsInFolder": "{count} document(s) in primary folder",
   "quiz.itemBankAtLeast": "At least {count} ItemBank question(s){split} — exact count capped",
   "quiz.itemBankViaMappings": "{count} ItemBank question(s){split} via mappings",
-  "quiz.llmAlwaysAvailable": "LLM-creative is always available — Groq generates application and transfer questions without an external source",
+  "quiz.llmAlwaysAvailable": "LLM-creative is always available — generates application and transfer questions without an external source",
   "quiz.numQuestionsLabel": "Number of questions: {n}",
   "quiz.lastMixCounts": "Previous quiz contained: {rag} course · {itembank} ItemBank · {llm} creative",
   "quiz.contextStatsSome": "{used} of {total} found passages were sent (the rest was skipped to keep the prompt within the limit).",

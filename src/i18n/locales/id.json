@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} dokumen di folder utama",
   "quiz.itemBankAtLeast": "Setidaknya {count} pertanyaan ItemBank{split} — jumlah tepat dibatasi oleh batas maksimum",
   "quiz.itemBankViaMappings": "{count} pertanyaan ItemBank{split} melalui tautan",
-  "quiz.llmAlwaysAvailable": "LLM-kreatif selalu tersedia — Groq menghasilkan pertanyaan aplikasi dan transfer tanpa sumber eksternal",
+  "quiz.llmAlwaysAvailable": "LLM-kreatif selalu tersedia — menghasilkan pertanyaan penerapan dan transfer tanpa sumber eksternal",
   "quiz.numQuestionsLabel": "Jumlah pertanyaan: {n}",
   "quiz.lastMixCounts": "Kuis sebelumnya berisi: {rag} kursus · {itembank} ItemBank · {llm} kreatif",
   "quiz.contextStatsSome": "{used} dari {total} bagian yang ditemukan telah dikirimkan (sisanya dilewati agar prompt tetap di bawah batas).",

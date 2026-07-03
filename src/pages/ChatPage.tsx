@@ -535,9 +535,19 @@ export function ChatPage() {
 
   useEffect(() => {
     const url = activeCourse ? `/api/rag-settings?courseId=${activeCourse}` : '/api/rag-settings';
-    fetch(url).then(r => r.ok ? r.json() : null).then(data => {
-      if (data) setRagSettings(data);
-    }).catch(() => {});
+    (async () => {
+      // Task #412: rag-settings-lees-endpoint vereist nu auth; stuur Bearer mee.
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+      try {
+        const r = await fetch(url, { headers });
+        if (r.ok) {
+          const data = await r.json();
+          if (data) setRagSettings(data);
+        }
+      } catch {}
+    })();
   }, [activeCourse]);
 
   useEffect(() => {

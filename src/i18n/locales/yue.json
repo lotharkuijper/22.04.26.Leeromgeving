@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "主要資料夾內有 {count} 份文件",
   "quiz.itemBankAtLeast": "最少 {count} 條 ItemBank 題目{split} — 因上限限制，確實數量受限",
   "quiz.itemBankViaMappings": "{count} 條 ItemBank 題目{split} 經連結取得",
-  "quiz.llmAlwaysAvailable": "LLM 創意功能一直可用 — Groq 會生成應用同遷移題，無需外部來源",
+  "quiz.llmAlwaysAvailable": "LLM-creatief 隨時可用 — 無需外部來源都可以生成應用同遷移題目",
   "quiz.numQuestionsLabel": "題目數量：{n}",
   "quiz.lastMixCounts": "上次測驗包含：{rag} 課程 · {itembank} ItemBank · {llm} 創意",
   "quiz.contextStatsSome": "已一併傳送搵到嘅 {total} 段內容中嘅 {used} 段（其餘已略過，以保持提示低於限制）。",

@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} document(e) în folderul principal",
   "quiz.itemBankAtLeast": "Cel puțin {count} întrebare/întrebări ItemBank{split} — numărătoarea exactă este limitată de plafon",
   "quiz.itemBankViaMappings": "{count} întrebare/întrebări ItemBank{split} prin asocieri",
-  "quiz.llmAlwaysAvailable": "LLM-creativ este mereu disponibil — Groq generează întrebări de aplicare și transfer fără sursă externă",
+  "quiz.llmAlwaysAvailable": "LLM-creativ este întotdeauna disponibil — generează întrebări de aplicare și transfer fără sursă externă",
   "quiz.numQuestionsLabel": "Număr de întrebări: {n}",
   "quiz.lastMixCounts": "Quizul anterior conținea: {rag} curs · {itembank} ItemBank · {llm} creativ",
   "quiz.contextStatsSome": "{used} din {total} pasaje găsite au fost trimise (restul a fost omis pentru a menține promptul sub limită).",

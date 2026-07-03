@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "主要文件夹中有 {count} 个文档",
   "quiz.itemBankAtLeast": "至少 {count} 道 ItemBank 题{split} — 由于上限限制，无法精确计数",
   "quiz.itemBankViaMappings": "通过关联获得 {count} 道 ItemBank 题{split}",
-  "quiz.llmAlwaysAvailable": "LLM 创意始终可用 — Groq 会生成无需外部来源的应用题和迁移题",
+  "quiz.llmAlwaysAvailable": "LLM 创意模式始终可用 — 无需外部来源即可生成应用题和迁移题",
   "quiz.numQuestionsLabel": "问题数量：{n}",
   "quiz.lastMixCounts": "上一份测验包含：{rag} 课程 · {itembank} ItemBank · {llm} 创意",
   "quiz.contextStatsSome": "已发送找到的 {total} 段内容中的 {used} 段（其余已跳过，以使提示保持在限制以内）。",

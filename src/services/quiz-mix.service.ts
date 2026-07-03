@@ -15,7 +15,6 @@
 import { supabase } from '../lib/supabase';
 import {
   generateQuiz,
-  fetchQuizPrompts,
   type QuestionType,
   type QuizQuestion,
   type MCQQuestion,
@@ -234,14 +233,14 @@ export async function generateMixedQuiz(args: {
   const mix = args.mix || (await fetchSourceMix(args.courseId));
   const counts = distributeMix(args.numQuestions, mix, args.questionType);
 
-  // Beheerde quiz-prompts ophalen — bepaalt welke persona we doorgeven aan
-  // generateQuiz per bron. Strict bij RAG met context + strict-mode, anders
+  // Task #412: geef de beheerde quiz-prompt-NAAM per bron door aan generateQuiz;
+  // de server resolvet die naam server-side naar de vertrouwde prompt (default +
+  // actieve DB-override). Strict bij RAG met context + strict-mode, anders
   // blended bij RAG-bron, en creative bij de LLM-bron.
-  const prompts = await fetchQuizPrompts();
   const ragPersona = args.ragContext && args.ragStrictMode
-    ? prompts.quiz_generate_strict
-    : prompts.quiz_generate_blended;
-  const llmPersona = prompts.quiz_generate_creative;
+    ? 'quiz_generate_strict'
+    : 'quiz_generate_blended';
+  const llmPersona = 'quiz_generate_creative';
 
   const out: QuizQuestion[] = [];
 

@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} مستند(ات) في المجلد الأساسي",
   "quiz.itemBankAtLeast": "ما لا يقل عن {count} سؤال/أسئلة من ItemBank{split} — العدّ الدقيق محدود بالحد الأقصى",
   "quiz.itemBankViaMappings": "{count} سؤال/أسئلة من ItemBank{split} عبر الروابط",
-  "quiz.llmAlwaysAvailable": "LLM-creatief متاح دائمًا — ينشئ Groq أسئلة تطبيق ونقل دون مصدر خارجي",
+  "quiz.llmAlwaysAvailable": "LLM-creatief متاح دائمًا — يولّد أسئلة تطبيق ونقل دون مصدر خارجي",
   "quiz.numQuestionsLabel": "عدد الأسئلة: {n}",
   "quiz.lastMixCounts": "احتوى الاختبار السابق على: {rag} من المقرر · {itembank} من ItemBank · {llm} إبداعي",
   "quiz.contextStatsSome": "تم إرسال {used} من أصل {total} مقاطع تم العثور عليها (تم تخطي الباقي لإبقاء الموجّه ضمن الحد).",

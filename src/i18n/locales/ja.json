@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "主要フォルダー内のドキュメント数：{count}",
   "quiz.itemBankAtLeast": "少なくとも{count}件のItemBank問題{split} — 上限により正確な数は制限されています",
   "quiz.itemBankViaMappings": "リンク経由のItemBank問題：{count}件{split}",
-  "quiz.llmAlwaysAvailable": "LLMクリエイティブは常に利用可能 — Groqが外部ソースなしで応用・転移問題を生成します",
+  "quiz.llmAlwaysAvailable": "LLM-creatief は常に利用可能 — 外部ソースなしで応用・転移問題を生成",
   "quiz.numQuestionsLabel": "問題数：{n}",
   "quiz.lastMixCounts": "前回のクイズの内訳：{rag} コース · {itembank} ItemBank · {llm} クリエイティブ",
   "quiz.contextStatsSome": "見つかったパッセージ{total}件のうち{used}件が送信されました（残りはプロンプトを上限内に収めるためスキップされました）。",

@@ -784,7 +784,10 @@ export function AdminPage() {
   const loadRagSettingsAdmin = async () => {
     try {
       const url = ragSelectedCourseId ? `/api/rag-settings?courseId=${ragSelectedCourseId}` : '/api/rag-settings';
-      const res = await fetch(url);
+      // Task #412: rag-settings-lees-endpoint vereist nu auth; stuur Bearer mee.
+      const res = await fetch(url, {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
       if (res.ok) {
         const data = await res.json();
         setRagSettingsState(data);

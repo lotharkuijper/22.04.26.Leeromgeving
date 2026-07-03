@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "Birincil klasörde {count} belge",
   "quiz.itemBankAtLeast": "En az {count} ItemBank sorusu{split} — kesin sayı üst sınır nedeniyle sınırlı",
   "quiz.itemBankViaMappings": "{count} ItemBank sorusu{split} eşleştirmeler aracılığıyla",
-  "quiz.llmAlwaysAvailable": "LLM-yaratıcı her zaman kullanılabilir — Groq harici kaynak olmadan uygulama ve transfer soruları üretir",
+  "quiz.llmAlwaysAvailable": "LLM-yaratıcı her zaman kullanılabilir — harici kaynak olmadan uygulama ve transfer soruları oluşturur",
   "quiz.numQuestionsLabel": "Soru sayısı: {n}",
   "quiz.lastMixCounts": "Önceki quiz şunları içeriyordu: {rag} ders · {itembank} ItemBank · {llm} yaratıcı",
   "quiz.contextStatsSome": "Bulunan {total} pasajdan {used} tanesi gönderildi (geri kalanı istemi sınırın altında tutmak için atlandı).",

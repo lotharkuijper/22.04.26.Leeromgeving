@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "प्राथमिक फ़ोल्डर में {count} दस्तावेज़",
   "quiz.itemBankAtLeast": "कम से कम {count} ItemBank प्रश्न{split} — सटीक गिनती कैप के कारण सीमित है",
   "quiz.itemBankViaMappings": "लिंकिंग के ज़रिए {count} ItemBank प्रश्न{split}",
-  "quiz.llmAlwaysAvailable": "LLM-creatief हमेशा उपलब्ध है — Groq बाहरी स्रोत के बिना अनुप्रयोग और ट्रांसफर प्रश्न बनाता है",
+  "quiz.llmAlwaysAvailable": "LLM-creatief हमेशा उपलब्ध है — बाहरी स्रोत के बिना अनुप्रयोग और ट्रांसफर प्रश्न बनाता है",
   "quiz.numQuestionsLabel": "प्रश्नों की संख्या: {n}",
   "quiz.lastMixCounts": "पिछले क्विज़ में थे: {rag} कोर्स · {itembank} ItemBank · {llm} क्रिएटिव",
   "quiz.contextStatsSome": "मिले हुए {total} अंशों में से {used} भेजे गए थे (बाकी को प्रॉम्प्ट सीमा के भीतर रखने के लिए छोड़ दिया गया)।",

@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} документ(ів) в основній папці",
   "quiz.itemBankAtLeast": "Щонайменше {count} запитання/запитань ItemBank{split} — точний підрахунок обмежено лімітом",
   "quiz.itemBankViaMappings": "{count} запитання/запитань ItemBank{split} через зв’язки",
-  "quiz.llmAlwaysAvailable": "LLM-креатив завжди доступний — Groq генерує запитання на застосування й перенесення без зовнішнього джерела",
+  "quiz.llmAlwaysAvailable": "LLM-creatief завжди доступний — генерує запитання на застосування та перенесення без зовнішнього джерела",
   "quiz.numQuestionsLabel": "Кількість запитань: {n}",
   "quiz.lastMixCounts": "Попередня вікторина містила: {rag} курс · {itembank} ItemBank · {llm} креативні",
   "quiz.contextStatsSome": "{used} із {total} знайдених фрагментів було надіслано (решту пропущено, щоб утримати промпт у межах ліміту).",

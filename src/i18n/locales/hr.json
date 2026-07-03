@@ -653,7 +653,7 @@
   "quiz.ragDocsInFolder": "{count} dokument(a) u primarnoj mapi",
   "quiz.itemBankAtLeast": "Najmanje {count} ItemBank pitanje/pitanja{split} — točan broj ograničen je gornjom granicom",
   "quiz.itemBankViaMappings": "{count} ItemBank pitanje/pitanja{split} putem poveznica",
-  "quiz.llmAlwaysAvailable": "LLM-kreativno je uvijek dostupno — Groq generira pitanja za primjenu i transfer bez vanjskog izvora",
+  "quiz.llmAlwaysAvailable": "LLM-creatief je uvijek dostupan — generira pitanja za primjenu i transfer bez vanjskog izvora",
   "quiz.numQuestionsLabel": "Broj pitanja: {n}",
   "quiz.lastMixCounts": "Prethodni kviz sadržavao je: {rag} kolegij · {itembank} ItemBank · {llm} kreativno",
   "quiz.contextStatsSome": "{used} od {total} pronađenih odlomaka poslano je dalje (ostatak je preskočen kako bi prompt ostao ispod ograničenja).",
