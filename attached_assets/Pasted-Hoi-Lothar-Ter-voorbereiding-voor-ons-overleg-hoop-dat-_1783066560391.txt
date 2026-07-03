@@ -1,0 +1,20 @@
+Hoi Lothar,
+
+Ter voorbereiding voor ons overleg, hoop dat je hier tijd voor hebt.
+
+Er zijn drie punten die geadresseerd moeten worden, gefikst, in een Replit-sessie.
+Je kunt het blok hieronder letterlijk aan je Replit-agent geven.
+Voor de Replit-agent:
+
+> Drie security-fixes, in deze volgorde:
+>
+> 1. Verwijder het endpoint GET /api/github/*path (server/index.js rond regel 1154). Het proxyt nu zonder enige authenticatie élk pad naar de GitHub-API mét het GITHUB_TOKEN — iedereen op internet kan zo privérepo's lezen. Als de app deze functie ergens echt gebruikt: vervang door een geauthenticeerd endpoint met een vaste whitelist van toegestane paden. Verwijder anders ook de GITHUB_TOKEN-variabele uit de Replit Secrets.
+> 2. Voeg de bestaande authUser()-check toe aan POST /api/chat (regel ~372) — hetzelfde patroon dat de andere endpoints (en /api/embeddings) al gebruiken. Nu kan heel internet op onze Azure-kosten chat-aanroepen doen. Verwijder daarbij ook de systemPromptOverride-parameter uit de request-body, of sta die alleen toe voor admins. (POST /api/embeddings heeft deze check al — die kan zo blijven.)
+> 3. Vervang de twee te ruime RLS-policies op documents en document_chunks (uit migratie 20260324120601: USING (true)) door een check op cursuslidmaatschap via course_members, zoals de andere tabellen al doen. Nu kan elke ingelogde gebruiker het materiaal van álle cursussen lezen.
+>
+> Klein meenemen als het past: auth-check op GET /api/rag-settings en GET /api/prompt/explain; groq-sdk uit package.json (wordt nergens meer gebruikt); de verouderde "Groq genereert…"-schermtekst in src/i18n/translations.ts. Daarna alles committen en naar GitHub pushen.
+
+Twee dingen buiten de agent om:
+
+- Roteer na fix 1 je GitHub-token (github.com → Settings → Developer settings): het oude kan al door derden gezien/gebruikt zijn.
+- Check in je Supabase-dashboard (Edge Functions → secrets) of er een GOOGLE_APPLICATION_CREDENTIALS_JSON ingevuld staat bij de oude ingest-txt-functie; zo ja, verwijderen.
