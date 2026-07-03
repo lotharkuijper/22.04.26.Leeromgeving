@@ -23,6 +23,7 @@ export const LANG_ENGLISH_NAMES = {
   ja: 'Japanese',
   ko: 'Korean',
   hr: 'Croatian',
+  el: 'Greek',
 };
 
 export const SUPPORTED_LANG_CODES = Object.keys(LANG_ENGLISH_NAMES);

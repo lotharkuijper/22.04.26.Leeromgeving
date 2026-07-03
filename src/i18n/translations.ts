@@ -40,6 +40,7 @@ const lazyLoaders: Partial<Record<Lang, () => Promise<Dict>>> = {
   ja: () => import('./locales/ja.json').then((m) => m.default as Dict),
   ko: () => import('./locales/ko.json').then((m) => m.default as Dict),
   hr: () => import('./locales/hr.json').then((m) => m.default as Dict),
+  el: () => import('./locales/el.json').then((m) => m.default as Dict),
 };
 
 // Laadt het woordenboek voor een taal. Eager talen komen direct terug; lazy

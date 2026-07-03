@@ -33,6 +33,7 @@ export const SUPPORTED_LANGUAGES: LanguageMeta[] = [
   { code: 'ja', native: '日本語', english: 'Japanese', dir: 'ltr' },
   { code: 'ko', native: '한국어', english: 'Korean', dir: 'ltr' },
   { code: 'hr', native: 'Hrvatski', english: 'Croatian', dir: 'ltr' },
+  { code: 'el', native: 'Ελληνικά', english: 'Greek', dir: 'ltr' },
 ];
 
 export type Lang = (typeof SUPPORTED_LANGUAGES)[number]['code'];

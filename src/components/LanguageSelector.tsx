@@ -8,7 +8,7 @@ interface LanguageSelectorProps {
   onSelect?: () => void;
 }
 
-// Doorzoekbare taalkiezer (19 talen). Toont de eigen naam in eigen schrift,
+// Doorzoekbare taalkiezer (20 talen). Toont de eigen naam in eigen schrift,
 // met de Engelse naam als ondertitel. Geen vlag-emoji (projectregel); lucide
 // 'Languages'-icoon als visuele cue.
 export function LanguageSelector({ variant = 'desktop', onSelect }: LanguageSelectorProps) {

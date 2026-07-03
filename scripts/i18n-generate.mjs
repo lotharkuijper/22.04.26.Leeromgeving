@@ -45,6 +45,7 @@ const TARGET_LANGS = [
   { code: 'ja', english: 'Japanese', native: '日本語' },
   { code: 'ko', english: 'Korean', native: '한국어' },
   { code: 'hr', english: 'Croatian', native: 'Hrvatski' },
+  { code: 'el', english: 'Greek', native: 'Ελληνικά' },
 ];
 
 const BATCH = parseInt(process.env.BATCH || '20', 10);

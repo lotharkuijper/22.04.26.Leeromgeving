@@ -26,6 +26,7 @@ export const TRANSLATION_LANGUAGES: TranslationLanguage[] = [
   { code: 'ja', native: '日本語' },
   { code: 'ko', native: '한국어' },
   { code: 'hr', native: 'Hrvatski' },
+  { code: 'el', native: 'Ελληνικά' },
 ];
 
 export const TRANSLATION_LANGUAGE_CODES = TRANSLATION_LANGUAGES.map((l) => l.code);
